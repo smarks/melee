@@ -22,7 +22,6 @@ from hexarena.dice import Dice
 from hexarena.hex import Hex
 
 from engine.facing import front_hexes
-from engine.movement import movement_budget, reachable_moves
 from engine.options import Option, spec
 from engine.rules_data import WeaponKind
 from engine.state import GameState, IllegalAction
@@ -130,16 +129,10 @@ def api_options(request, gid):
     options = []
     for option in state.legal_options(figure):
         option_spec = spec(option)
-        budget = movement_budget(figure.movement_allowance, option_spec.movement_cap)
-        reach = []
-        if budget > 0 and figure.position is not None:
-            blocked = set(state.occupied(exclude=figure))
-            stop_hexes = state._enemy_front_hexes(figure)
-            result = reachable_moves(
-                state.arena, figure.position, budget,
-                blocked=blocked, stop_hexes=stop_hexes,
-            )
-            reach = [label_of(h.col, h.row) for h in result.reachable_hexes()]
+        reach = [
+            label_of(h.col, h.row)
+            for h in state.reach_for(figure, option).reachable_hexes()
+        ]
         options.append({
             "option": option.value,
             "is_attack": option_spec.is_attack,
@@ -221,14 +214,7 @@ def _dispatch(game: dict, body: dict):
         dest = body.get("dest")
         path = []
         if dest:
-            option_spec = spec(option)
-            budget = movement_budget(figure.movement_allowance, option_spec.movement_cap)
-            blocked = set(state.occupied(exclude=figure))
-            stop_hexes = state._enemy_front_hexes(figure)
-            reach = reachable_moves(
-                state.arena, figure.position, budget,
-                blocked=blocked, stop_hexes=stop_hexes,
-            )
+            reach = state.reach_for(figure, option)
             path = reach.path_to(_hex_from_label(dest))
             if path is None:
                 raise IllegalAction("destination not reachable under that option")

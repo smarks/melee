@@ -7,15 +7,16 @@ from the shared :mod:`hexarena` library.
 from __future__ import annotations
 
 from .arena import Arena
-from .combat import AttackResult, resolve_attack
+from .combat import AttackResult
 from .figure import Figure, Posture, Race, create_human
 from .options import Option
+from .ruleset import Ruleset
 from .state import GameState, IllegalAction
 
 __all__ = [
     "Arena",
     "AttackResult",
-    "resolve_attack",
+    "Ruleset",
     "Figure",
     "Posture",
     "Race",

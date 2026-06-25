@@ -21,13 +21,16 @@ from dataclasses import dataclass, field
 from hexarena.dice import Dice
 from hexarena.hex import Hex
 
+from hexarena.pathfinding import Reach
+
 from .arena import Arena
-from .combat import AttackResult, attack_dice_count, order_dx, resolve_attack
+from .combat import AttackResult
 from .facing import attack_zone, front_hexes, is_engaged
 from .figure import Figure, Posture
-from .movement import movement_budget, reachable_moves
+from .movement import reachable_moves
 from .options import Option, OptionSpec, options_for, spec
-from .rules_data import KNOCKDOWN_HITS, WOUND_HITS_THRESHOLD, WeaponKind
+from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
+from .rules_data import WOUND_HITS_THRESHOLD, WeaponKind
 
 
 class IllegalAction(Exception):
@@ -44,10 +47,20 @@ class PendingAttack:
 
 
 class GameState:
-    def __init__(self, arena: Arena, figures: list[Figure], *, dice: Dice | None = None):
+    def __init__(
+        self,
+        arena: Arena,
+        figures: list[Figure],
+        *,
+        dice: Dice | None = None,
+        ruleset: Ruleset | None = None,
+    ):
         self.arena = arena
         self.figures = figures
         self.dice = dice or Dice()
+        # The swappable mechanics. Default: classic Melee. Pass a Ruleset
+        # subclass to swap in different combat/injury/movement mechanics.
+        self.rules = ruleset or Ruleset()
         self.turn_number = 1
         self.log: list[str] = []
         self._pending: list[PendingAttack] = []
@@ -125,19 +138,27 @@ class GameState:
             return [Option.STAND_UP]
         return options_for(engaged=self.engaged(figure))
 
-    def reachable(self, figure: Figure, option: Option) -> list[Hex]:
-        """Hexes ``figure`` may finish on this turn under ``option``."""
-        option_spec = spec(option)
-        budget = movement_budget(figure.movement_allowance, option_spec.movement_cap)
-        if budget == 0:
-            return []
+    def reach_for(self, figure: Figure, option: Option) -> Reach:
+        """The reachability (with paths) of ``figure`` under ``option``.
+
+        The movement budget comes from the ruleset, so a custom movement economy
+        is honoured everywhere -- engine, board highlighting, and path-finding.
+        """
+        budget = self.rules.movement_budget(
+            figure.movement_allowance, spec(option).movement_cap
+        )
+        if budget == 0 or figure.position is None:
+            return Reach(cost={})
         blocked = set(self.occupied(exclude=figure))
         stop_hexes = self._enemy_front_hexes(figure)
-        reach = reachable_moves(
+        return reachable_moves(
             self.arena, figure.position, budget,
             blocked=blocked, stop_hexes=stop_hexes,
         )
-        return reach.reachable_hexes()
+
+    def reachable(self, figure: Figure, option: Option) -> list[Hex]:
+        """Hexes ``figure`` may finish on this turn under ``option``."""
+        return self.reach_for(figure, option).reachable_hexes()
 
     def _enemy_front_hexes(self, figure: Figure) -> set[Hex]:
         fronts: set[Hex] = set()
@@ -162,7 +183,9 @@ class GameState:
             raise IllegalAction(f"{option.value} not legal for {figure.name} now")
         path = path or []
         option_spec = spec(option)
-        budget = movement_budget(figure.movement_allowance, option_spec.movement_cap)
+        budget = self.rules.movement_budget(
+            figure.movement_allowance, option_spec.movement_cap
+        )
         if len(path) > budget:
             raise IllegalAction(
                 f"{figure.name} may move at most {budget} hex(es) on "
@@ -218,7 +241,7 @@ class GameState:
             )
         zone = attack_zone(self.arena.layout, attacker, target)
         if is_missile:
-            range_penalty = _missile_range_penalty(
+            range_penalty = self.rules.missile_range_penalty(
                 self.arena.distance(attacker.position, target.position)
             )
             # zone is carried so a ready shield still stops frontal missiles,
@@ -251,7 +274,7 @@ class GameState:
         the dice stream clean for deterministic resolution.
         """
         def ordering_key(pending: PendingAttack) -> int:
-            return -order_dx(
+            return -self.rules.order_dx(
                 pending.attacker, zone=pending.zone,
                 ignore_facing=pending.ignore_facing,
             )
@@ -262,10 +285,10 @@ class GameState:
             # killed or knocked down before its turn to strike -> no attack
             if not attacker.can_act() or attacker.posture == Posture.PRONE:
                 continue
-            result = resolve_attack(
+            result = self.rules.resolve_attack(
                 self.dice, attacker, pending.target,
                 zone=pending.zone,
-                dice_count=attack_dice_count(pending.target),
+                dice_count=self.rules.attack_dice_count(pending.target),
                 ignore_facing=pending.ignore_facing,
                 range_penalty=pending.range_penalty,
             )
@@ -292,23 +315,25 @@ class GameState:
                 f"(rolled {result.rolled} vs {result.needed})."
             )
             return
-        target.damage_taken += result.damage
-        target.hits_this_turn += result.damage
+        self.rules.apply_damage(target, result.damage)
         if result.damage > 0:
             attacker.dealt_st_damage_this_turn = True
         self.log.append(
             f"{attacker.name} hits {target.name} for {result.damage} "
             f"(rolled {result.rolled} vs {result.needed})."
         )
-        if target.current_st <= -1:
+        status = self.rules.status_after_hit(target)
+        if status == DEAD:
             target.dead = True
             self.log.append(f"{target.name} is slain!")
-        elif target.current_st <= 0:
+        elif status == UNCONSCIOUS:
             target.unconscious = True
             self.log.append(f"{target.name} falls unconscious.")
-        elif target.hits_this_turn >= KNOCKDOWN_HITS:
+        elif status == KNOCKDOWN:
             target.posture = Posture.PRONE
-            self.log.append(f"{target.name} is knocked down ({target.hits_this_turn} hits).")
+            self.log.append(
+                f"{target.name} is knocked down ({target.hits_this_turn} hits)."
+            )
 
     # ---- force retreat (Section: Forcing Retreat) ----
     def can_force_retreat(self, attacker: Figure, target: Figure) -> bool:
@@ -354,18 +379,3 @@ class GameState:
         self._pending.clear()
         self.first_side = None
         self.turn_number += 1
-
-
-def _missile_range_penalty(hex_distance: int) -> int:
-    """DX penalty for missile range (p.16), provisional pending megahex tiling.
-
-    The rule is stated in megahexes (MH): no penalty within 2 MH, -1 at 3-4 MH,
-    -2 at 5-6 MH. A megahex spans ~3 hexes, so we approximate MH from hex
-    distance. This is refined to the true megahex grouping in the missile pass.
-    """
-    megahexes = hex_distance // 3
-    if megahexes <= 2:
-        return 0
-    if megahexes <= 4:
-        return -1
-    return -((megahexes - 1) // 2)
