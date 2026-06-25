@@ -120,3 +120,30 @@ def test_tarmar_profile_serializes_fatigue_and_body(client: Client) -> None:
 def test_unknown_profile_falls_back_to_classic(client: Client) -> None:
     data = client.get("/api/game/new?profile=Nonsense").json()
     assert data["profile"] == "Classic Melee"
+
+
+def test_vs_computer_sets_controllers_and_plays_a_turn(client: Client) -> None:
+    data = client.get("/api/game/new?seed=3&computer=blue").json()
+    gid = data["gid"]
+    assert data["state"]["controllers"] == {"red": "human", "blue": "computer"}
+
+    out = _post(client, gid, {"type": "roll_initiative"})
+    assert "error" not in out
+    # If red (the human) won initiative it must choose; if blue won, the
+    # computer has already chosen and moved, so we're past initiative.
+    if out["state"]["phase"] == "initiative":
+        out = _post(client, gid, {"type": "choose_first", "side": "red"})
+        assert "error" not in out
+
+    guard = 0
+    while out["state"]["phase"] == "move" and guard < 6:
+        out = _post(client, gid, {"type": "end_side_move"})
+        assert "error" not in out
+        guard += 1
+    assert out["state"]["phase"] == "combat"   # the computer's move turn auto-ran
+
+    out = _post(client, gid, {"type": "resolve_combat"})
+    assert "error" not in out
+    out = _post(client, gid, {"type": "end_turn"})
+    assert "error" not in out
+    assert out["state"]["phase"] == "initiative"

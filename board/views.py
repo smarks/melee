@@ -21,6 +21,7 @@ from django.views.decorators.csrf import csrf_exempt
 from hexarena.dice import Dice
 from hexarena.hex import Hex
 
+from engine import ai
 from engine.facing import front_hexes
 from engine.options import Option, spec
 from engine.profile import PROFILES
@@ -62,7 +63,49 @@ def _meta(game: dict) -> dict:
         "moving_side": moving,
         "winner": game["winner"],
         "victory": _victory(state),
+        "controllers": game.get("controllers", {}),
     }
+
+
+def _advance_computer(game: dict) -> None:
+    """Drive every computer-controlled side as far as it can, then yield.
+
+    Called after each human action (and at new-game): it auto-chooses move
+    order, plays the computer's movement turns, and queues the computer's
+    attacks when combat opens, stopping as soon as the human must act.
+    """
+    state: GameState = game["state"]
+    controllers = game.get("controllers", {})
+    if "computer" not in controllers.values():
+        return
+    for _ in range(64):  # bounded; a turn needs only a few transitions
+        phase = game["phase"]
+        if phase == "initiative":
+            winner = game["winner"]
+            if winner is None or controllers.get(winner) != "computer":
+                return                       # human rolls / picks move order
+            state.choose_first(winner)       # the computer elects to move first
+            game["order"] = state.move_order()
+            game["moving"] = 0
+            game["phase"] = "move"
+            game["combat_prepared"] = False
+        elif phase == "move":
+            side = game["order"][game["moving"]]
+            if controllers.get(side) != "computer":
+                return                       # the human's movement turn
+            ai.take_movement(state, side)
+            game["moving"] += 1
+            if game["moving"] >= len(game["order"]):
+                game["phase"] = "combat"
+        elif phase == "combat":
+            if not game.get("combat_prepared"):
+                for side, controller in controllers.items():
+                    if controller == "computer":
+                        ai.queue_attacks(state, side)
+                game["combat_prepared"] = True
+            return                           # human resolves + ends the turn
+        else:
+            return
 
 
 def _victory(state: GameState) -> str | None:
@@ -96,6 +139,9 @@ def api_new_game(request):
     arena, figures = scenario.skirmish_for(profile.name)
     dice = Dice(seed=int(seed)) if seed else Dice()
     state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset)
+    computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
+    controllers = {side: ("computer" if side in computer_sides else "human")
+                   for side in state.sides}
     gid = secrets.token_hex(4)
     GAMES[gid] = {
         "state": state,
@@ -105,7 +151,10 @@ def api_new_game(request):
         "moving": 0,
         "winner": None,
         "profile": profile.name,
+        "controllers": controllers,
+        "combat_prepared": False,
     }
+    _advance_computer(GAMES[gid])
     payload = _payload(GAMES[gid])
     payload["gid"] = gid
     payload["profile"] = profile.name
@@ -178,6 +227,7 @@ def api_action(request, gid):
 
     try:
         result = _dispatch(game, body)
+        _advance_computer(game)
     except IllegalAction as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
@@ -266,6 +316,7 @@ def _dispatch(game: dict, body: dict):
         game["order"] = state.sides
         game["moving"] = 0
         game["winner"] = None
+        game["combat_prepared"] = False
         return None
 
     raise IllegalAction(f"unknown action {action!r}")
