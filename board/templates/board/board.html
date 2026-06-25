@@ -80,6 +80,12 @@
           <option value="Tarmar">Tarmar (d20)</option>
         </select>
       </label>
+      <label>Opponent
+        <select id="opponent">
+          <option value="">Hot-seat (2 players)</option>
+          <option value="blue">vs Computer (you are red)</option>
+        </select>
+      </label>
       <button onclick="newGame()">New game</button>
     </div>
   </aside>
@@ -98,7 +104,8 @@ const api = (path, opts) => fetch(path, opts).then(r => r.json());
 
 async function newGame() {
   const profile = encodeURIComponent($("profile") ? $("profile").value : "Classic Melee");
-  const data = await api(`/api/game/new?profile=${profile}`);
+  const computer = encodeURIComponent($("opponent") ? $("opponent").value : "");
+  const data = await api(`/api/game/new?profile=${profile}&computer=${computer}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   resetSelection(); render();
 }
