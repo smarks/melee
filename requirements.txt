@@ -3,6 +3,7 @@ gunicorn>=22.0
 pytest>=8.0
 pytest-django>=4.8
 
-# Shared hex-grid library (coords, dice, pathfinding, layout). Local sibling
-# project; install editable:  pip install -e ../hexarena
--e ../hexarena
+# Shared hex-grid library (coords, dice, pathfinding, layout). Installed from
+# GitHub so CI resolves it with no auth. For local development you can override
+# with an editable checkout:  pip install -e ../hexarena
+hexarena @ git+https://github.com/smarks/hexarena.git@main
