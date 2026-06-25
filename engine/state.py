@@ -28,6 +28,7 @@ from .combat import AttackResult
 from .facing import attack_zone, front_hexes, is_engaged
 from .figure import Figure, Posture
 from .movement import reachable_moves
+from .narrative import narrate_attack, narrate_fumble, narrate_status
 from .options import Option, OptionSpec, options_for, spec
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
 from .rules_data import WOUND_HITS_THRESHOLD, WeaponKind
@@ -299,41 +300,31 @@ class GameState:
 
     def _apply(self, attacker: Figure, target: Figure, result: AttackResult) -> None:
         attacker.attacked_this_turn = True
-        if result.dropped_weapon:
-            self.log.append(f"{attacker.name} drops {result.weapon.name}!")
-            if attacker.ready_weapon in attacker.weapons:
-                attacker.weapons.remove(attacker.ready_weapon)
-            attacker.ready_weapon = None
-        elif result.broke_weapon:
-            self.log.append(f"{attacker.name}'s {result.weapon.name} breaks!")
-            if attacker.ready_weapon in attacker.weapons:
-                attacker.weapons.remove(attacker.ready_weapon)
-            attacker.ready_weapon = None
-        if not result.hit:
+        # A fumble's own story (dropped/shattered weapon) replaces the swing line.
+        if result.dropped_weapon or result.broke_weapon:
             self.log.append(
-                f"{attacker.name} misses {target.name} "
-                f"(rolled {result.rolled} vs {result.needed})."
+                narrate_fumble(attacker, result.weapon, broke=result.broke_weapon)
             )
+            if attacker.ready_weapon in attacker.weapons:
+                attacker.weapons.remove(attacker.ready_weapon)
+            attacker.ready_weapon = None
+        else:
+            self.log.append(narrate_attack(attacker, target, result))
+        if not result.hit:
             return
         self.rules.apply_damage(target, result.damage)
         if result.damage > 0:
             attacker.dealt_st_damage_this_turn = True
-        self.log.append(
-            f"{attacker.name} hits {target.name} for {result.damage} "
-            f"(rolled {result.rolled} vs {result.needed})."
-        )
         status = self.rules.status_after_hit(target)
         if status == DEAD:
             target.dead = True
-            self.log.append(f"{target.name} is slain!")
         elif status == UNCONSCIOUS:
             target.unconscious = True
-            self.log.append(f"{target.name} falls unconscious.")
         elif status == KNOCKDOWN:
             target.posture = Posture.PRONE
-            self.log.append(
-                f"{target.name} is knocked down ({target.hits_this_turn} hits)."
-            )
+        aftermath = narrate_status(target, status)
+        if aftermath:
+            self.log.append(aftermath)
 
     # ---- force retreat (Section: Forcing Retreat) ----
     def can_force_retreat(self, attacker: Figure, target: Figure) -> bool:
