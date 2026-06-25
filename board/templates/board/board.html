@@ -45,6 +45,8 @@
   polygon.hex.entrance { fill: #262338; }
   polygon.hex.reach { fill: var(--reach); cursor: pointer; }
   polygon.hex.reach:hover { fill: var(--reach2); }
+  polygon.hex.chosen { fill: #c9a227; stroke: #fff; stroke-width: 2.5; cursor: pointer; }
+  polygon.hex.chosen:hover { fill: #e0b842; }
   .fig { cursor: pointer; }
   .fig .body { stroke: #100f15; stroke-width: 2; }
   .fig.sel .body { stroke: #fff; stroke-width: 3; }
@@ -153,7 +155,8 @@ function drawArena() {
     const h = LAYOUT.hexes[label];
     const poly = document.createElementNS(SVG, "polygon");
     poly.setAttribute("points", h.points.map(p => p.join(",")).join(" "));
-    poly.setAttribute("class", "hex" + (reach.has(label) ? " reach" : ""));
+    poly.setAttribute("class", "hex" + (reach.has(label) ? " reach" : "")
+      + (label === pendingDest ? " chosen" : ""));
     if (reach.has(label)) poly.addEventListener("click", () => onReachClick(label));
     svg.appendChild(poly);
   }
