@@ -7,3 +7,8 @@ pytest-django>=4.8
 # GitHub so CI resolves it with no auth. For local development you can override
 # with an editable checkout:  pip install -e ../hexarena
 hexarena @ git+https://github.com/smarks/hexarena.git@main
+
+# Shared Tarmar d20 combat core (matrix, modifiers, crit, Hybrid armour) — the
+# single source of truth for the "Tarmar rules" profile, also used by
+# tarmar-studio. Local dev:  pip install -e ../tarmar-rules
+tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@main

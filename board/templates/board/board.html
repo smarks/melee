@@ -73,12 +73,20 @@
     <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
     <div class="pad roster" id="roster"></div>
     <div id="log"></div>
-    <div class="pad"><button onclick="newGame()">New game</button></div>
+    <div class="pad">
+      <label>Rules
+        <select id="profile">
+          <option value="Classic Melee">Classic Melee</option>
+          <option value="Tarmar">Tarmar (d20)</option>
+        </select>
+      </label>
+      <button onclick="newGame()">New game</button>
+    </div>
   </aside>
 </div>
 <script>
 const SVG = "http://www.w3.org/2000/svg";
-let GID = null, S = null, LAYOUT = null;
+let GID = null, S = null, LAYOUT = null, PROFILE = null;
 let sel = null;          // selected figure uid
 let optInfo = null;      // options payload for selected figure
 let chosenOption = null; // option string chosen for movement
@@ -89,8 +97,9 @@ const $ = id => document.getElementById(id);
 const api = (path, opts) => fetch(path, opts).then(r => r.json());
 
 async function newGame() {
-  const data = await api("/api/game/new");
-  GID = data.gid; LAYOUT = data.layout; S = data.state;
+  const profile = encodeURIComponent($("profile") ? $("profile").value : "Classic Melee");
+  const data = await api(`/api/game/new?profile=${profile}`);
+  GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   resetSelection(); render();
 }
 async function refresh() {
@@ -325,8 +334,10 @@ function drawSelInfo() {
   if (!f) { box.innerHTML = `<span class="muted">No figure selected.</span>`; return; }
   box.innerHTML =
     `<div><b>${f.name}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
-    `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx} · ${f.armor}` +
-    `${f.shield ? " · "+f.shield : ""}</div>` +
+    (f.model === "tarmar"
+      ? `<div class="muted">Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · adjDX ${f.dx} · ${f.armor}${f.shield ? " · "+f.shield : ""}</div>`
+        + `<div class="muted">weapon skill: ${f.skill}</div>`
+      : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx} · ${f.armor}${f.shield ? " · "+f.shield : ""}</div>`) +
     `<div class="muted">weapon: ${f.weapon || "—"} · ${f.posture}` +
     `${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>` +
     optionButtons(f);

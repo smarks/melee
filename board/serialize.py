@@ -9,6 +9,7 @@ from __future__ import annotations
 from engine.facing import front_hexes
 from engine.figure import Figure
 from engine.state import GameState
+from engine.tarmar import TarmarFigure
 
 from .geometry import label_of
 
@@ -18,7 +19,7 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
     if figure.position is not None:
         faced = state.arena.layout.neighbor(figure.position, figure.facing)
         front_label = label_of(faced.col, faced.row)
-    return {
+    data = {
         "uid": figure.uid,
         "side": figure.side,
         "name": figure.name,
@@ -38,7 +39,19 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "engaged": state.engaged(figure) if figure.can_act() else False,
         "can_act": figure.can_act(),
         "armor": figure.armor.name,
+        "model": "melee",
     }
+    if isinstance(figure, TarmarFigure):
+        # Tarmar fighters track two pools instead of a single ST; surface both
+        # so the front end can render a Tarmar sheet (Fatigue, then Body).
+        data["model"] = "tarmar"
+        data["fatigue"] = figure.current_fatigue
+        data["max_fatigue"] = figure.fatigue
+        data["body"] = figure.current_body
+        data["max_body"] = figure.body
+        weapon = figure.ready_weapon
+        data["skill"] = figure.weapon_skill.get(weapon.name, 0) if weapon else 0
+    return data
 
 
 def dump_game(state: GameState, *, meta: dict | None = None) -> dict:

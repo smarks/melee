@@ -23,6 +23,7 @@ from hexarena.hex import Hex
 
 from engine.facing import front_hexes
 from engine.options import Option, spec
+from engine.profile import PROFILES
 from engine.rules_data import WeaponKind
 from engine.state import GameState, IllegalAction
 
@@ -91,9 +92,10 @@ def index(request):
 
 def api_new_game(request):
     seed = request.GET.get("seed")
-    arena, figures = scenario.default_skirmish()
+    profile = PROFILES.get(request.GET.get("profile", ""), PROFILES["Classic Melee"])
+    arena, figures = scenario.skirmish_for(profile.name)
     dice = Dice(seed=int(seed)) if seed else Dice()
-    state = GameState(arena, figures, dice=dice)
+    state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset)
     gid = secrets.token_hex(4)
     GAMES[gid] = {
         "state": state,
@@ -102,9 +104,11 @@ def api_new_game(request):
         "order": state.sides,
         "moving": 0,
         "winner": None,
+        "profile": profile.name,
     }
     payload = _payload(GAMES[gid])
     payload["gid"] = gid
+    payload["profile"] = profile.name
     return JsonResponse(payload)
 
 

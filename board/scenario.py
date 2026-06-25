@@ -22,6 +22,7 @@ from engine.rules_data import (
     SMALL_SHIELD,
     SPEAR,
 )
+from engine.tarmar import create_tarmar_fighter
 
 
 def _archetypes(side: str) -> dict[str, Figure]:
@@ -42,20 +43,35 @@ def _archetypes(side: str) -> dict[str, Figure]:
     }
 
 
+def _tarmar_archetypes(side: str) -> dict[str, Figure]:
+    """Tarmar-shaped versions of the archetypes: six attributes + starting
+    weapon skill (fighters begin with skills; they don't gain them mid-match)."""
+    return {
+        "Knight": create_tarmar_fighter(
+            "Knight", strength=13, dexterity=11, constitution=12, side=side,
+            armor=PLATE, shield=LARGE_SHIELD, weapons=[BROADSWORD, DAGGER],
+            ready_weapon=BROADSWORD, weapon_skill={"Broadsword": 3, "Dagger": 1}),
+        "Swordsman": create_tarmar_fighter(
+            "Swordsman", strength=12, dexterity=12, constitution=11, side=side,
+            armor=CHAINMAIL, shield=SMALL_SHIELD, weapons=[SHORTSWORD, DAGGER],
+            ready_weapon=SHORTSWORD, weapon_skill={"Shortsword": 3, "Dagger": 1}),
+        "Spearman": create_tarmar_fighter(
+            "Spearman", strength=13, dexterity=11, constitution=11, side=side,
+            armor=LEATHER, weapons=[SPEAR, DAGGER], ready_weapon=SPEAR,
+            weapon_skill={"Spear": 2, "Dagger": 1}),
+        "Archer": create_tarmar_fighter(
+            "Archer", strength=12, dexterity=14, constitution=10, side=side,
+            armor=NO_ARMOR, weapons=[LONGBOW, SHORTSWORD, DAGGER],
+            ready_weapon=LONGBOW, weapon_skill={"Longbow": 3, "Shortsword": 1}),
+    }
+
+
 ARCHETYPE_NAMES = ["Knight", "Swordsman", "Spearman", "Archer"]
 
 
-def default_skirmish() -> tuple[Arena, list[Figure]]:
-    """A 2-vs-2 skirmish: each side enters from opposite ends of the arena."""
-    arena = Arena(cols=9, rows=15)
+def _place(arena: Arena, red_team: list[Figure], blue_team: list[Figure]) -> list[Figure]:
+    """Seat the two teams at opposite entrances, facing each other."""
     figures: list[Figure] = []
-
-    red = _archetypes("red")
-    blue = _archetypes("blue")
-
-    red_team = [red["Swordsman"], red["Archer"]]
-    blue_team = [blue["Knight"], blue["Spearman"]]
-
     for figure, hex_position in zip(red_team, arena.north_entrances):
         figure.position = hex_position
         figure.facing = 3   # facing "south", down the arena
@@ -64,5 +80,29 @@ def default_skirmish() -> tuple[Arena, list[Figure]]:
         figure.position = hex_position
         figure.facing = 0   # facing "north"
         figures.append(figure)
+    return figures
 
+
+def default_skirmish() -> tuple[Arena, list[Figure]]:
+    """A 2-vs-2 skirmish under classic Melee figures."""
+    arena = Arena(cols=9, rows=15)
+    red, blue = _archetypes("red"), _archetypes("blue")
+    figures = _place(arena, [red["Swordsman"], red["Archer"]],
+                     [blue["Knight"], blue["Spearman"]])
     return arena, figures
+
+
+def tarmar_skirmish() -> tuple[Arena, list[Figure]]:
+    """The same 2-vs-2, built as Tarmar fighters for the Tarmar rules profile."""
+    arena = Arena(cols=9, rows=15)
+    red, blue = _tarmar_archetypes("red"), _tarmar_archetypes("blue")
+    figures = _place(arena, [red["Swordsman"], red["Archer"]],
+                     [blue["Knight"], blue["Spearman"]])
+    return arena, figures
+
+
+def skirmish_for(profile_name: str) -> tuple[Arena, list[Figure]]:
+    """Build the starting skirmish for the named rules profile."""
+    if profile_name == "Tarmar":
+        return tarmar_skirmish()
+    return default_skirmish()

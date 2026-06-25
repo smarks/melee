@@ -95,3 +95,28 @@ def test_illegal_move_is_rejected(client: Client) -> None:
         "type": "move", "uid": blue["uid"], "option": "move", "facing": 0,
     })
     assert "error" in out
+
+
+def test_default_profile_is_classic_melee(client: Client) -> None:
+    data = _new(client)
+    assert data["profile"] == "Classic Melee"
+    figure = data["state"]["figures"][0]
+    assert figure["model"] == "melee"
+    assert "fatigue" not in figure
+
+
+def test_tarmar_profile_serializes_fatigue_and_body(client: Client) -> None:
+    data = client.get("/api/game/new?seed=1&profile=Tarmar").json()
+    assert data["profile"] == "Tarmar"
+    assert len(data["state"]["figures"]) == 4
+    for figure in data["state"]["figures"]:
+        assert figure["model"] == "tarmar"
+        assert figure["fatigue"] == figure["max_fatigue"]   # full at start
+        assert figure["body"] == figure["max_body"]
+        assert figure["max_body"] < figure["max_fatigue"]   # Body is 2/3 of Fatigue
+        assert "skill" in figure
+
+
+def test_unknown_profile_falls_back_to_classic(client: Client) -> None:
+    data = client.get("/api/game/new?profile=Nonsense").json()
+    assert data["profile"] == "Classic Melee"
