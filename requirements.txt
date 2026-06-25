@@ -1,0 +1,8 @@
+Django>=4.2,<5.3
+gunicorn>=22.0
+pytest>=8.0
+pytest-django>=4.8
+
+# Shared hex-grid library (coords, dice, pathfinding, layout). Local sibling
+# project; install editable:  pip install -e ../hexarena
+-e ../hexarena
