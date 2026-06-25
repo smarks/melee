@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Melee — The Fantasy Trip</title>
+<style>
+  :root {
+    --bg: #16151a; --panel: #211f29; --ink: #e9e6f0; --muted: #9a93ad;
+    --line: #4a4458; --hex: #2c2937; --hex-stroke: #4a4458;
+    --red: #d0524f; --blue: #4f86d0; --reach: #3a6f4a; --reach2: #5fae74;
+    --target: #d8b54a; --accent: #8a78d0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, sans-serif; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: baseline; gap: 16px; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .wrap { display: flex; gap: 0; height: calc(100vh - 49px); }
+  .arena { flex: 1; overflow: auto; display: grid; place-items: center; padding: 16px; }
+  aside { width: 320px; border-left: 1px solid var(--line); background: var(--panel);
+          display: flex; flex-direction: column; }
+  .pad { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .banner { font-weight: 600; }
+  .muted { color: var(--muted); }
+  button { background: #2f2b3b; color: var(--ink); border: 1px solid var(--line);
+           border-radius: 7px; padding: 7px 11px; font-size: 13px; cursor: pointer;
+           margin: 3px 4px 3px 0; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1a1622; font-weight: 600; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+          border: 1px solid var(--line); }
+  .chip.red { color: var(--red); border-color: var(--red); }
+  .chip.blue { color: var(--blue); border-color: var(--blue); }
+  #log { flex: 1; overflow: auto; padding: 10px 16px; font-size: 12.5px; }
+  #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
+  .roster .row { display: flex; justify-content: space-between; padding: 4px 0;
+                 border-bottom: 1px solid #2a2733; cursor: pointer; }
+  .roster .row:hover { color: #fff; }
+  .roster .row.dead { opacity: .4; text-decoration: line-through; }
+  polygon.hex { fill: var(--hex); stroke: var(--hex-stroke); stroke-width: 1.2; }
+  polygon.hex.entrance { fill: #262338; }
+  polygon.hex.reach { fill: var(--reach); cursor: pointer; }
+  polygon.hex.reach:hover { fill: var(--reach2); }
+  .fig { cursor: pointer; }
+  .fig .body { stroke: #100f15; stroke-width: 2; }
+  .fig.sel .body { stroke: #fff; stroke-width: 3; }
+  .fig.target .body { stroke: var(--target); stroke-width: 3.5; }
+  .fig.prone .body { opacity: .65; }
+  .fig.dodge .body { stroke-dasharray: 3 3; stroke: var(--target); }
+  .fig text { fill: #100f15; font-weight: 700; font-size: 13px; text-anchor: middle;
+              dominant-baseline: central; pointer-events: none; }
+  .hint { color: var(--accent); font-size: 12.5px; min-height: 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Melee</h1>
+  <span class="sub">The Fantasy Trip — man-to-man combat · hot-seat</span>
+  <span class="sub" id="turnInfo"></span>
+</header>
+<div class="wrap">
+  <div class="arena"><svg id="svg"></svg></div>
+  <aside>
+    <div class="pad">
+      <div class="banner" id="phaseBanner">Loading…</div>
+      <div class="hint" id="hint"></div>
+    </div>
+    <div class="pad" id="controls"></div>
+    <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
+    <div class="pad roster" id="roster"></div>
+    <div id="log"></div>
+    <div class="pad"><button onclick="newGame()">New game</button></div>
+  </aside>
+</div>
+<script>
+const SVG = "http://www.w3.org/2000/svg";
+let GID = null, S = null, LAYOUT = null;
+let sel = null;          // selected figure uid
+let optInfo = null;      // options payload for selected figure
+let chosenOption = null; // option string chosen for movement
+let pendingDest = null;  // hex label
+let pendingFacing = null;// facing index
+
+const $ = id => document.getElementById(id);
+const api = (path, opts) => fetch(path, opts).then(r => r.json());
+
+async function newGame() {
+  const data = await api("/api/game/new");
+  GID = data.gid; LAYOUT = data.layout; S = data.state;
+  resetSelection(); render();
+}
+async function refresh() {
+  const data = await api(`/api/game/${GID}`);
+  LAYOUT = data.layout; S = data.state; render();
+}
+async function act(body) {
+  const data = await api(`/api/game/${GID}/action`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  });
+  if (data.error) { flash(data.error); return null; }
+  S = data.state; LAYOUT = data.layout;
+  return data;
+}
+function flash(msg) { $("hint").textContent = msg; }
+function resetSelection() { sel = null; optInfo = null; chosenOption = null; pendingDest = null; pendingFacing = null; }
+
+function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
+
+// ---- rendering --------------------------------------------------------------
+function render() {
+  if (!S) return;
+  drawArena();
+  drawControls();
+  drawSelInfo();
+  drawRoster();
+  drawLog();
+  const v = S.victory;
+  $("turnInfo").textContent = `Turn ${S.turn} · ${S.phase}` + (v ? ` · ${v.toUpperCase()} WINS` : "");
+}
+
+function drawArena() {
+  const svg = $("svg");
+  svg.setAttribute("viewBox", `0 0 ${LAYOUT.width} ${LAYOUT.height}`);
+  svg.setAttribute("width", LAYOUT.width);
+  svg.setAttribute("height", LAYOUT.height);
+  svg.innerHTML = "";
+
+  const reach = new Set((chosenOption && optInfo)
+    ? (optInfo.options.find(o => o.option === chosenOption)?.reach || []) : []);
+
+  for (const label in LAYOUT.hexes) {
+    const h = LAYOUT.hexes[label];
+    const poly = document.createElementNS(SVG, "polygon");
+    poly.setAttribute("points", h.points.map(p => p.join(",")).join(" "));
+    poly.setAttribute("class", "hex" + (reach.has(label) ? " reach" : ""));
+    if (reach.has(label)) poly.addEventListener("click", () => onReachClick(label));
+    svg.appendChild(poly);
+  }
+
+  for (const f of S.figures) {
+    if (!f.label) continue;
+    const h = LAYOUT.hexes[f.label];
+    const g = document.createElementNS(SVG, "g");
+    let cls = "fig " + (f.side === "red" ? "red" : "blue");
+    if (f.uid === sel) cls += " sel";
+    if (isTarget(f.uid)) cls += " target";
+    if (f.posture === "prone") cls += " prone";
+    if (f.dodging) cls += " dodge";
+    g.setAttribute("class", cls);
+
+    // facing wedge toward the front hex
+    if (f.front_label && LAYOUT.hexes[f.front_label]) {
+      const fh = LAYOUT.hexes[f.front_label];
+      const dx = fh.cx - h.cx, dy = fh.cy - h.cy;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const r = LAYOUT.size * 0.62;
+      const tip = document.createElementNS(SVG, "polygon");
+      const px = h.cx + ux * (r + 8), py = h.cy + uy * (r + 8);
+      const ox = -uy, oy = ux;
+      tip.setAttribute("points",
+        `${px},${py} ${h.cx + ux*r + ox*7},${h.cy + uy*r + oy*7} ${h.cx + ux*r - ox*7},${h.cy + uy*r - oy*7}`);
+      tip.setAttribute("fill", f.side === "red" ? "var(--red)" : "var(--blue)");
+      g.appendChild(tip);
+    }
+
+    const body = document.createElementNS(SVG, "circle");
+    body.setAttribute("class", "body");
+    body.setAttribute("cx", h.cx); body.setAttribute("cy", h.cy);
+    body.setAttribute("r", LAYOUT.size * 0.6);
+    body.setAttribute("fill", f.dead ? "#555"
+      : (f.side === "red" ? "var(--red)" : "var(--blue)"));
+    g.appendChild(body);
+
+    const txt = document.createElementNS(SVG, "text");
+    txt.setAttribute("x", h.cx); txt.setAttribute("y", h.cy);
+    txt.textContent = f.dead ? "✗" : f.st;
+    g.appendChild(txt);
+
+    g.addEventListener("click", () => onFigureClick(f));
+    svg.appendChild(g);
+  }
+}
+
+function isTarget(uid) {
+  if (S.phase !== "combat" || !sel) return false;
+  const attacker = figByUid(sel);
+  const me = figByUid(uid);
+  return attacker && me && attacker.side !== me.side && validTargets().includes(uid);
+}
+function validTargets() {
+  if (!optInfo) return [];
+  const f = figByUid(sel);
+  if (!f) return [];
+  const w = f.weapon;
+  // attacker must have chosen an attack option (reflected in optInfo at move time)
+  return optInfo._targets || [];
+}
+
+// ---- controls ---------------------------------------------------------------
+function drawControls() {
+  const c = $("controls"); c.innerHTML = "";
+  const phase = S.phase;
+  $("phaseBanner").textContent = bannerFor(phase);
+
+  if (S.victory) {
+    addBtn(c, "End turn → new round", () => act({type:"end_turn"}).then(after), true);
+    return;
+  }
+  if (phase === "initiative") {
+    if (!S.winner) {
+      addBtn(c, "Roll initiative", async () => {
+        const d = await act({type:"roll_initiative"});
+        if (d) { render(); }
+      }, true);
+    } else {
+      const span = document.createElement("div");
+      span.innerHTML = `<span class="muted">${S.winner} won initiative — choose who moves first:</span>`;
+      c.appendChild(span);
+      for (const side of S.sides) {
+        addBtn(c, `${side} first`, () => act({type:"choose_first", side}).then(after));
+      }
+    }
+  } else if (phase === "move") {
+    const span = document.createElement("div");
+    span.innerHTML = `<span class="chip ${S.moving_side}">${S.moving_side}</span> is moving. Select a figure, choose an option, set destination &amp; facing.`;
+    c.appendChild(span);
+    if (chosenOption) drawMoveActions(c);
+    addBtn(c, `End ${S.moving_side} movement`, () => {
+      resetSelection(); act({type:"end_side_move"}).then(after);
+    });
+  } else if (phase === "combat") {
+    const span = document.createElement("div");
+    span.innerHTML = `<span class="muted">Declare attacks (figures that chose an attack option), then resolve.</span>`;
+    c.appendChild(span);
+    addBtn(c, "Resolve combat", async () => {
+      const d = await act({type:"resolve_combat"});
+      if (d && d.result) flash(d.result.map(r =>
+        r.hit ? `hit for ${r.damage} (rolled ${r.rolled}≤${r.needed})`
+              : `miss (rolled ${r.rolled}>${r.needed})`).join("; ") || "no attacks");
+      resetSelection(); render();
+    }, true);
+    drawRetreatControls(c);
+    addBtn(c, "End turn", () => { resetSelection(); act({type:"end_turn"}).then(after); });
+  }
+}
+
+function drawMoveActions(c) {
+  const f = figByUid(sel);
+  const wrap = document.createElement("div");
+  wrap.style.marginTop = "8px";
+  wrap.innerHTML = `<div class="muted">Option: <b>${chosenOption}</b>` +
+    (pendingDest ? ` · dest ${pendingDest}` : "") +
+    ` · facing ${pendingFacing}</div>`;
+  c.appendChild(wrap);
+  addBtn(c, "⟲ rotate", () => { pendingFacing = (pendingFacing + 5) % 6; render(); });
+  addBtn(c, "⟳ rotate", () => { pendingFacing = (pendingFacing + 1) % 6; render(); });
+  addBtn(c, "Confirm move", async () => {
+    await act({type:"move", uid: sel, option: chosenOption,
+               dest: pendingDest, facing: pendingFacing});
+    resetSelection(); after();
+  }, true);
+  addBtn(c, "Cancel", () => { chosenOption = null; pendingDest = null; render(); });
+}
+
+function drawRetreatControls(c) {
+  // offer force-retreat for any of the moving player's figures that qualify
+  for (const f of S.figures) {
+    // qualification is checked server-side; expose a generic button per adjacent enemy pair
+  }
+}
+
+function after() { render(); }
+
+function bannerFor(phase) {
+  if (S.victory) return `${S.victory.toUpperCase()} wins the field!`;
+  return ({initiative:"Initiative", move:"Movement", combat:"Combat"})[phase] || phase;
+}
+
+// ---- interaction ------------------------------------------------------------
+async function onFigureClick(f) {
+  $("hint").textContent = "";
+  if (S.phase === "move") {
+    if (f.side !== S.moving_side) { flash(`${f.name} is not on the moving side.`); return; }
+    sel = f.uid; chosenOption = null; pendingDest = null; pendingFacing = f.facing;
+    optInfo = await api(`/api/game/${GID}/options?uid=${f.uid}`);
+    render();
+  } else if (S.phase === "combat") {
+    const cur = sel ? figByUid(sel) : null;
+    if (cur && f.side !== cur.side && validTargets().includes(f.uid)) {
+      await act({type:"queue_attack", uid: sel, target: f.uid});
+      flash(`${cur.name} → ${f.name} declared.`);
+      render();
+      return;
+    }
+    // select an attacker (must have chosen an attack option this turn)
+    sel = f.uid; pendingFacing = f.facing;
+    optInfo = await api(`/api/game/${GID}/options?uid=${f.uid}`);
+    optInfo._targets = (f.weapon && missileReady(f))
+      ? optInfo.missile_targets : optInfo.melee_targets;
+    render();
+  } else {
+    sel = f.uid; render();
+  }
+}
+function missileReady(f) {
+  return optInfo && optInfo.missile_targets && optInfo.missile_targets.length >= 0
+    && f.weapon && ["Longbow","Small bow","Horse bow","Sling","Thrown rock",
+                    "Light crossbow","Heavy crossbow"].includes(f.weapon);
+}
+
+function onReachClick(label) {
+  pendingDest = label; render();
+}
+
+// ---- side panels ------------------------------------------------------------
+function drawSelInfo() {
+  const box = $("selInfo");
+  const f = sel ? figByUid(sel) : null;
+  if (!f) { box.innerHTML = `<span class="muted">No figure selected.</span>`; return; }
+  box.innerHTML =
+    `<div><b>${f.name}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
+    `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx} · ${f.armor}` +
+    `${f.shield ? " · "+f.shield : ""}</div>` +
+    `<div class="muted">weapon: ${f.weapon || "—"} · ${f.posture}` +
+    `${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>` +
+    optionButtons(f);
+}
+function optionButtons(f) {
+  if (S.phase !== "move" || f.uid !== sel || f.side !== S.moving_side || !optInfo) return "";
+  let html = `<div style="margin-top:8px" class="muted">Options:</div><div>`;
+  for (const o of optInfo.options) {
+    html += `<button onclick="pickOption('${o.option}')">${o.option}` +
+            `${o.is_attack ? " ⚔" : ""}</button>`;
+  }
+  return html + `</div>`;
+}
+function pickOption(opt) {
+  chosenOption = opt;
+  pendingDest = null;
+  const f = figByUid(sel);
+  pendingFacing = (pendingFacing == null) ? f.facing : pendingFacing;
+  render();
+}
+
+function drawRoster() {
+  const r = $("roster"); r.innerHTML = `<div class="muted">Roster</div>`;
+  for (const f of S.figures) {
+    const row = document.createElement("div");
+    row.className = "row" + (f.dead || f.collapsed ? " dead" : "");
+    row.innerHTML = `<span class="chip ${f.side}">${f.side}</span> ${f.name}` +
+      `<span class="muted">ST ${f.st}${f.posture!=="standing"?" · "+f.posture:""}</span>`;
+    row.addEventListener("click", () => onFigureClick(f));
+    r.appendChild(row);
+  }
+}
+
+function drawLog() {
+  const l = $("log"); l.innerHTML = "";
+  for (const line of S.log.slice().reverse()) {
+    const d = document.createElement("div"); d.textContent = line; l.appendChild(d);
+  }
+}
+
+function addBtn(parent, text, fn, primary) {
+  const b = document.createElement("button");
+  b.textContent = text; if (primary) b.className = "primary";
+  b.addEventListener("click", fn); parent.appendChild(b); return b;
+}
+
+newGame();
+</script>
+</body>
+</html>
