@@ -173,3 +173,35 @@ def test_auto_end_turn_when_no_attacks_remain() -> None:
     red.attacked_this_turn = True
     _auto_end_if_idle(game)
     assert game["phase"] == "initiative"
+
+
+def test_catalog_endpoint_lists_legal_choices(client: Client) -> None:
+    data = client.get("/api/catalog?profile=Tarmar").json()
+    assert data["stat_rules"]["model"] == "tarmar"
+    assert data["stat_rules"]["budget"] == 65
+    assert any(w["name"] == "Broadsword" and w["str_req"] == 12 for w in data["weapons"])
+    assert any(a["name"] == "Plate" for a in data["armors"])
+
+
+def test_new_custom_game_builds_edited_fighters(client: Client) -> None:
+    roster = {"profile": "Classic Melee", "computer": "blue", "fighters": [
+        {"name": "Hero", "side": "red", "strength": 13, "dexterity": 11,
+         "weapon": "Broadsword", "armor": "Leather", "shield": "None"},
+        {"name": "Foe", "side": "blue", "strength": 12, "dexterity": 12,
+         "weapon": "Shortsword", "armor": "Chainmail", "shield": "Small shield"},
+    ]}
+    out = client.post("/api/game/new_custom", data=json.dumps(roster),
+                      content_type="application/json").json()
+    assert "gid" in out
+    assert {f["name"] for f in out["state"]["figures"]} == {"Hero", "Foe"}
+    assert out["state"]["controllers"]["blue"] == "computer"
+
+
+def test_new_custom_game_rejects_an_illegal_fighter(client: Client) -> None:
+    roster = {"profile": "Classic Melee", "fighters": [
+        {"name": "Bad", "side": "red", "strength": 20, "dexterity": 12,
+         "weapon": "Broadsword", "armor": "None", "shield": "None"},  # 32 != 24
+    ]}
+    resp = client.post("/api/game/new_custom", data=json.dumps(roster),
+                       content_type="application/json")
+    assert resp.status_code == 400 and "error" in resp.json()

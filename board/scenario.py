@@ -7,6 +7,7 @@ enter from the starred entrance hexes at opposite ends of the arena (Section V).
 """
 from __future__ import annotations
 
+from engine import chargen
 from engine.arena import Arena
 from engine.figure import Figure, create_human
 from engine.rules_data import (
@@ -106,3 +107,20 @@ def skirmish_for(profile_name: str) -> tuple[Arena, list[Figure]]:
     if profile_name == "Tarmar":
         return tarmar_skirmish()
     return default_skirmish()
+
+
+def build_custom_skirmish(
+    profile_name: str, fighter_specs: list[dict]
+) -> tuple[Arena, list[Figure]]:
+    """Build a skirmish from validated, player-edited fighter specs.
+
+    Each spec is validated and built by :mod:`engine.chargen` (raising
+    ``ValueError`` on an illegal fighter). Figures are seated by side at the
+    opposite entrances, exactly like the preset skirmishes.
+    """
+    arena = Arena(cols=9, rows=15)
+    built = [chargen.build(profile_name, spec) for spec in fighter_specs]
+    red = [figure for figure in built if figure.side == "red"]
+    blue = [figure for figure in built if figure.side == "blue"]
+    figures = _place(arena, red, blue)
+    return arena, figures

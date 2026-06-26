@@ -21,7 +21,7 @@ from django.views.decorators.csrf import csrf_exempt
 from hexarena.dice import Dice
 from hexarena.hex import Hex
 
-from engine import ai
+from engine import ai, chargen
 from engine.facing import front_hexes
 from engine.options import Option, spec
 from engine.profile import PROFILES
@@ -182,13 +182,10 @@ def index(request):
     return render(request, "board/board.html")
 
 
-def api_new_game(request):
-    seed = request.GET.get("seed")
-    profile = PROFILES.get(request.GET.get("profile", ""), PROFILES["Classic Melee"])
-    arena, figures = scenario.skirmish_for(profile.name)
+def _start_game(arena, figures, profile, computer_sides, seed) -> dict:
+    """Register a new game and return its initial payload (shared entry point)."""
     dice = Dice(seed=int(seed)) if seed else Dice()
     state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset)
-    computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
     gid = secrets.token_hex(4)
@@ -207,7 +204,44 @@ def api_new_game(request):
     payload = _payload(GAMES[gid])
     payload["gid"] = gid
     payload["profile"] = profile.name
-    return JsonResponse(payload)
+    return payload
+
+
+def api_new_game(request):
+    profile = PROFILES.get(request.GET.get("profile", ""), PROFILES["Classic Melee"])
+    arena, figures = scenario.skirmish_for(profile.name)
+    computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
+    return JsonResponse(
+        _start_game(arena, figures, profile, computer_sides, request.GET.get("seed")))
+
+
+def api_catalog(request):
+    """Legal equipment + stat constraints for the fighter editor."""
+    profile = PROFILES.get(request.GET.get("profile", ""), PROFILES["Classic Melee"])
+    data = chargen.catalog()
+    data["stat_rules"] = chargen.stat_rules(profile.name)
+    data["profile"] = profile.name
+    return JsonResponse(data)
+
+
+@csrf_exempt
+def api_new_custom(request):
+    """Start a game from player-edited, validated fighter specs."""
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    try:
+        body = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "bad JSON"}, status=400)
+    profile = PROFILES.get(body.get("profile", ""), PROFILES["Classic Melee"])
+    computer_sides = {s for s in (body.get("computer") or "").split(",") if s}
+    try:
+        arena, figures = scenario.build_custom_skirmish(
+            profile.name, body.get("fighters", []))
+    except (ValueError, KeyError) as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse(
+        _start_game(arena, figures, profile, computer_sides, body.get("seed")))
 
 
 def api_state(request, gid):
