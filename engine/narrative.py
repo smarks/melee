@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from .combat import AttackResult
 from .figure import Figure
+from .options import Option
 from .rules_data import WeaponKind
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS
 
@@ -75,3 +76,57 @@ def narrate_status(target: Figure, status: str | None) -> str | None:
     if status == KNOCKDOWN:
         return _cap(f"{_name(target)} is knocked sprawling.")
     return None
+
+
+# ---- non-combat operations -------------------------------------------------
+_MOVE_VERB = {
+    Option.MOVE: "advances",
+    Option.CHARGE_ATTACK: "charges in",
+    Option.DODGE: "darts, dodging",
+    Option.MISSILE_ATTACK: "takes aim",
+    Option.STAND_UP: "rises to their feet",
+    Option.SHIFT_ATTACK: "shifts in to attack",
+    Option.SHIFT_DEFEND: "raises a guard",
+    Option.ONE_LAST_SHOT: "looses a parting shot",
+    Option.DISENGAGE: "breaks away",
+}
+
+
+def narrate_move(figure: Figure, option: Option, moved: bool) -> str | None:
+    """A line for a figure's movement-phase action (None if not worth narrating).
+
+    Weapon changes are narrated by :func:`narrate_ready` instead.
+    """
+    if option in (Option.READY_WEAPON, Option.CHANGE_WEAPONS):
+        return None
+    verb = _MOVE_VERB.get(option)
+    if verb is None:
+        return None
+    if option == Option.MOVE and not moved:
+        verb = "holds position"
+    return _cap(f"{_name(figure)} {verb}.")
+
+
+def narrate_ready(figure: Figure, weapon) -> str:
+    """A figure drawing a different carried weapon."""
+    return _cap(f"{_name(figure)} readies {_article(weapon.name)}.")
+
+
+def narrate_initiative(rolls: dict, winner: str) -> str:
+    """Who won the initiative roll."""
+    detail = ", ".join(f"{side} {value}" for side, value in rolls.items())
+    return f"Initiative ({detail}): {winner} wins."
+
+
+def narrate_move_order(side: str) -> str:
+    return f"{side.capitalize()} will move first."
+
+
+def narrate_retreat(attacker: Figure, target: Figure, advanced: bool) -> str:
+    """A forced retreat (and whether the attacker followed up)."""
+    line = f"{_name(attacker)} drives {_name(target)} back"
+    return _cap(line + (", advancing into the gap." if advanced else "."))
+
+
+def narrate_turn(number: int) -> str:
+    return f"— Turn {number} —"
