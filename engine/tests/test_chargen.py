@@ -76,3 +76,24 @@ def test_build_melee_and_tarmar_fighters():
 def test_build_rejects_an_illegal_fighter():
     with pytest.raises(ValueError):
         chargen.build("Classic Melee", _melee(strength=20, dexterity=12))  # 32 != 24
+
+
+def test_a_fighter_carries_two_weapons_plus_a_dagger():
+    fighter = chargen.build("Classic Melee", _melee(weapon="Broadsword", weapon2="Mace"))
+    names = [w.name for w in fighter.weapons]
+    assert names[0] == "Broadsword"          # the ready weapon stays first
+    assert fighter.ready_weapon.name == "Broadsword"
+    assert "Mace" in names and "Dagger" in names
+
+
+def test_second_weapon_is_strength_checked_in_melee():
+    problems = chargen.validate("Classic Melee", _melee(
+        strength=8, dexterity=16, weapon="Hammer", weapon2="Mace"))  # Mace needs ST 11
+    assert any("Mace needs ST" in p for p in problems)
+
+
+def test_second_weapon_gets_its_own_tarmar_skill():
+    fighter = chargen.build("Tarmar", _tarmar(
+        weapon="Broadsword", weapon2="Mace", skill=3, skill2=2))
+    assert fighter.weapon_skill["Broadsword"] == 3
+    assert fighter.weapon_skill["Mace"] == 2

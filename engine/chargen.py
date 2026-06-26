@@ -82,8 +82,12 @@ def validate(profile_name: str, spec: dict) -> list[str]:
         errors.append("name is required")
 
     weapon_name = spec.get("weapon")
+    second_name = spec.get("weapon2")
+    has_second = bool(second_name) and second_name != "None"
     if weapon_name not in WEAPONS:
         errors.append(f"unknown weapon {weapon_name!r}")
+    if has_second and second_name not in WEAPONS:
+        errors.append(f"unknown weapon {second_name!r}")
     if (spec.get("armor") or "None") not in ARMORS:
         errors.append(f"unknown armour {spec.get('armor')!r}")
     if (spec.get("shield") or "None") not in SHIELDS:
@@ -102,9 +106,10 @@ def validate(profile_name: str, spec: dict) -> list[str]:
         if total > TARMAR_BUDGET:
             errors.append(
                 f"attributes total {total}, over the {TARMAR_BUDGET}-point budget")
-        skill = spec.get("skill", 0)
-        if not isinstance(skill, int) or not (0 <= skill <= TARMAR_SKILL_MAX):
-            errors.append(f"weapon skill must be 0-{TARMAR_SKILL_MAX}")
+        for key, label in (("skill", "weapon skill"), ("skill2", "second weapon skill")):
+            value = spec.get(key, 0)
+            if not isinstance(value, int) or not (0 <= value <= TARMAR_SKILL_MAX):
+                errors.append(f"{label} must be 0-{TARMAR_SKILL_MAX}")
     else:
         strength, dexterity = spec.get("strength"), spec.get("dexterity")
         if not isinstance(strength, int) or not isinstance(dexterity, int):
@@ -115,9 +120,11 @@ def validate(profile_name: str, spec: dict) -> list[str]:
             if strength + dexterity != MELEE_TOTAL:
                 errors.append(
                     f"ST + DX must total {MELEE_TOTAL} (got {strength + dexterity})")
-            if weapon and strength < weapon.min_strength:
-                errors.append(
-                    f"{weapon.name} needs ST {weapon.min_strength} (have {strength})")
+            for carried_name in (weapon_name, second_name if has_second else None):
+                carried = WEAPONS.get(carried_name)
+                if carried and strength < carried.min_strength:
+                    errors.append(
+                        f"{carried.name} needs ST {carried.min_strength} (have {strength})")
     return errors
 
 
@@ -128,17 +135,27 @@ def build(profile_name: str, spec: dict) -> Figure:
         raise ValueError("; ".join(problems))
 
     weapon = WEAPONS[spec["weapon"]]
+    second_name = spec.get("weapon2")
+    second = WEAPONS.get(second_name) if second_name and second_name != "None" else None
     armor = ARMORS[spec.get("armor") or "None"]
     shield = SHIELDS[spec.get("shield") or "None"]
-    weapons = [weapon] + ([DAGGER] if weapon is not DAGGER else [])
+    # Up to two carried weapons plus a dagger (Section III).
+    weapons = [weapon]
+    if second is not None and second is not weapon:
+        weapons.append(second)
+    if DAGGER not in weapons:
+        weapons.append(DAGGER)
     gear = dict(armor=armor, shield=shield, weapons=weapons, ready_weapon=weapon)
 
     if profile_name == "Tarmar":
+        skills = {weapon.name: spec.get("skill", 0)}
+        if second is not None:
+            skills[second.name] = spec.get("skill2", 0)
         return create_tarmar_fighter(
             spec["name"], side=spec["side"],
             strength=spec["strength"], dexterity=spec["dexterity"],
             intelligence=spec["intelligence"], wisdom=spec["wisdom"],
             constitution=spec["constitution"], charisma=spec["charisma"],
-            weapon_skill={weapon.name: spec.get("skill", 0)}, **gear)
+            weapon_skill=skills, **gear)
     return create_human(spec["name"], spec["strength"], spec["dexterity"],
                         spec["side"], **gear)
