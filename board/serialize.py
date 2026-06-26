@@ -32,6 +32,7 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "dx": figure.base_adj_dx,
         "posture": figure.posture.value,
         "weapon": figure.ready_weapon.name if figure.ready_weapon else None,
+        "weapons": [w.name for w in figure.weapons],
         "shield": figure.shield.name if figure.shield_ready else None,
         "dodging": figure.dodging,
         "dead": figure.is_dead,

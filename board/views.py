@@ -356,7 +356,7 @@ def _dispatch(game: dict, body: dict):
             path = reach.path_to(_hex_from_label(dest))
             if path is None:
                 raise IllegalAction("destination not reachable under that option")
-        state.move(figure, option, path=path, facing=facing)
+        state.move(figure, option, path=path, facing=facing, ready=body.get("ready"))
         return None
 
     if action == "end_side_move":
