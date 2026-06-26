@@ -64,6 +64,7 @@ def _meta(game: dict) -> dict:
         "winner": game["winner"],
         "victory": _victory(state),
         "controllers": game.get("controllers", {}),
+        "queued": len(state._pending),
     }
 
 

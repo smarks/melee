@@ -61,7 +61,7 @@
 <body>
 <header>
   <h1>Melee</h1>
-  <span class="sub">The Fantasy Trip — man-to-man combat · hot-seat</span>
+  <span class="sub">The Fantasy Trip — man-to-man combat</span>
   <span class="sub" id="turnInfo"></span>
 </header>
 <div class="wrap">
@@ -129,6 +129,17 @@ function resetSelection() { sel = null; optInfo = null; chosenOption = null; pen
 
 function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 
+// human-readable labels + which options require a destination hex
+const PHASE_LABEL = {initiative: "Initiative", move: "Movement", combat: "Combat"};
+const OPTION_LABEL = {
+  move: "Move", charge_attack: "Charge & Attack", dodge: "Dodge",
+  ready_weapon: "Ready Weapon", missile_attack: "Missile Attack", stand_up: "Stand Up",
+  shift_attack: "Shift & Attack", shift_defend: "Shift & Defend",
+  one_last_shot: "One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
+};
+const NEEDS_DEST = new Set(["move", "charge_attack", "dodge", "disengage"]);
+const optLabel = o => OPTION_LABEL[o] || o;
+
 // ---- rendering --------------------------------------------------------------
 function render() {
   if (!S) return;
@@ -137,8 +148,8 @@ function render() {
   drawSelInfo();
   drawRoster();
   drawLog();
-  const v = S.victory;
-  $("turnInfo").textContent = `Turn ${S.turn} · ${S.phase}` + (v ? ` · ${v.toUpperCase()} WINS` : "");
+  const vsComputer = S.controllers && Object.values(S.controllers).includes("computer");
+  $("turnInfo").textContent = (PROFILE || "") + (vsComputer ? " · vs Computer" : " · hot-seat");
 }
 
 function drawArena() {
@@ -247,58 +258,50 @@ function drawControls() {
     }
   } else if (phase === "move") {
     const span = document.createElement("div");
-    span.innerHTML = `<span class="chip ${S.moving_side}">${S.moving_side}</span> is moving. Select a figure, choose an option, set destination &amp; facing.`;
+    span.innerHTML = `<span class="chip ${S.moving_side}">${S.moving_side}</span> to move — `
+      + `pick a figure, choose an action, set its destination &amp; facing, then Confirm.`;
     c.appendChild(span);
     if (chosenOption) drawMoveActions(c);
-    addBtn(c, `End ${S.moving_side} movement`, () => {
+    addBtn(c, `End ${S.moving_side}'s movement`, () => {
       resetSelection(); act({type:"end_side_move"}).then(after);
     });
   } else if (phase === "combat") {
+    const queued = S.queued || 0;
     const span = document.createElement("div");
-    span.innerHTML = `<span class="muted">Declare attacks (figures that chose an attack option), then resolve.</span>`;
+    span.innerHTML = `Declare attacks: click an enemy in a figure's front hex. `
+      + `<b>${queued}</b> declared.`;
     c.appendChild(span);
-    addBtn(c, "Resolve combat", async () => {
-      const d = await act({type:"resolve_combat"});
-      if (d && d.result) flash(d.result.map(r =>
-        r.hit ? `hit for ${r.damage} (rolled ${r.rolled}≤${r.needed})`
-              : `miss (rolled ${r.rolled}>${r.needed})`).join("; ") || "no attacks");
-      resetSelection(); render();
-    }, true);
-    drawRetreatControls(c);
+    addBtn(c, queued ? `Resolve combat (${queued})` : "Resolve combat",
+      () => { act({type:"resolve_combat"}).then(() => { resetSelection(); render(); }); },
+      true, queued === 0);
     addBtn(c, "End turn", () => { resetSelection(); act({type:"end_turn"}).then(after); });
   }
 }
 
 function drawMoveActions(c) {
-  const f = figByUid(sel);
+  const needsDest = NEEDS_DEST.has(chosenOption) && !pendingDest;
   const wrap = document.createElement("div");
   wrap.style.marginTop = "8px";
-  wrap.innerHTML = `<div class="muted">Option: <b>${chosenOption}</b>` +
-    (pendingDest ? ` · dest ${pendingDest}` : "") +
-    ` · facing ${pendingFacing}</div>`;
+  wrap.innerHTML =
+    `<div class="muted">Action: <b>${optLabel(chosenOption)}</b> · `
+    + `dest ${pendingDest || "—"} · facing ${pendingFacing}</div>`
+    + (needsDest ? `<div class="hint">Click a green hex to set the destination.</div>` : "");
   c.appendChild(wrap);
-  addBtn(c, "⟲ rotate", () => { pendingFacing = (pendingFacing + 5) % 6; render(); });
-  addBtn(c, "⟳ rotate", () => { pendingFacing = (pendingFacing + 1) % 6; render(); });
+  addBtn(c, "⟲ turn", () => { pendingFacing = (pendingFacing + 5) % 6; render(); });
+  addBtn(c, "⟳ turn", () => { pendingFacing = (pendingFacing + 1) % 6; render(); });
   addBtn(c, "Confirm move", async () => {
     await act({type:"move", uid: sel, option: chosenOption,
                dest: pendingDest, facing: pendingFacing});
     resetSelection(); after();
-  }, true);
+  }, true, needsDest);
   addBtn(c, "Cancel", () => { chosenOption = null; pendingDest = null; render(); });
-}
-
-function drawRetreatControls(c) {
-  // offer force-retreat for any of the moving player's figures that qualify
-  for (const f of S.figures) {
-    // qualification is checked server-side; expose a generic button per adjacent enemy pair
-  }
 }
 
 function after() { render(); }
 
 function bannerFor(phase) {
-  if (S.victory) return `${S.victory.toUpperCase()} wins the field!`;
-  return ({initiative:"Initiative", move:"Movement", combat:"Combat"})[phase] || phase;
+  if (S.victory) return `🏆 ${S.victory.toUpperCase()} wins the field!`;
+  return `Turn ${S.turn} · ${PHASE_LABEL[phase] || phase}`;
 }
 
 // ---- interaction ------------------------------------------------------------
@@ -354,10 +357,11 @@ function drawSelInfo() {
 }
 function optionButtons(f) {
   if (S.phase !== "move" || f.uid !== sel || f.side !== S.moving_side || !optInfo) return "";
-  let html = `<div style="margin-top:8px" class="muted">Options:</div><div>`;
+  let html = `<div style="margin-top:8px" class="muted">Choose an action:</div><div>`;
   for (const o of optInfo.options) {
-    html += `<button onclick="pickOption('${o.option}')">${o.option}` +
-            `${o.is_attack ? " ⚔" : ""}</button>`;
+    const cls = (o.option === chosenOption) ? "primary" : "";
+    html += `<button class="${cls}" onclick="pickOption('${o.option}')">` +
+            `${optLabel(o.option)}${o.is_attack ? " ⚔" : ""}</button>`;
   }
   return html + `</div>`;
 }
@@ -388,10 +392,11 @@ function drawLog() {
   }
 }
 
-function addBtn(parent, text, fn, primary) {
+function addBtn(parent, text, fn, primary, disabled) {
   const b = document.createElement("button");
   b.textContent = text; if (primary) b.className = "primary";
-  b.addEventListener("click", fn); parent.appendChild(b); return b;
+  if (disabled) b.disabled = true; else b.addEventListener("click", fn);
+  parent.appendChild(b); return b;
 }
 
 newGame();
