@@ -109,6 +109,54 @@ def _advance_computer(game: dict) -> None:
             return
 
 
+def _do_end_turn(game: dict) -> None:
+    """End the turn and reset the board phase machine back to initiative."""
+    state: GameState = game["state"]
+    state.end_turn()
+    game["phase"] = "initiative"
+    game["order"] = state.sides
+    game["moving"] = 0
+    game["winner"] = None
+    game["combat_prepared"] = False
+
+
+def _human_has_attack_left(game: dict) -> bool:
+    """True if any human figure still has an attack it could declare."""
+    state: GameState = game["state"]
+    controllers = game.get("controllers", {})
+    layout = state.arena.layout
+    for figure in state.figures:
+        if controllers.get(figure.side, "human") != "human":
+            continue
+        option = figure.current_option
+        weapon = figure.ready_weapon
+        if not (figure.can_act() and not figure.attacked_this_turn
+                and option is not None and spec(option).is_attack and weapon):
+            continue
+        enemies = [e for e in state.enemies_of(figure) if e.position is not None]
+        if weapon.kind == WeaponKind.MISSILE:
+            if enemies:
+                return True
+        else:
+            fronts = set(front_hexes(layout, figure))
+            if any(e.position in fronts for e in enemies):
+                return True
+    return False
+
+
+def _auto_end_if_idle(game: dict) -> None:
+    """End the turn automatically when nothing is left for the human to do.
+
+    In the combat phase, if no attacks are queued and no human figure can still
+    declare one, there's nothing to resolve — so skip the redundant End-turn.
+    """
+    if game["phase"] != "combat":
+        return
+    if game["state"]._pending or _human_has_attack_left(game):
+        return
+    _do_end_turn(game)
+
+
 def _victory(state: GameState) -> str | None:
     """A side wins when every enemy is down (Combat to the Death)."""
     standing = {}
@@ -229,6 +277,7 @@ def api_action(request, gid):
     try:
         result = _dispatch(game, body)
         _advance_computer(game)
+        _auto_end_if_idle(game)
     except IllegalAction as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
@@ -312,12 +361,7 @@ def _dispatch(game: dict, body: dict):
         return None
 
     if action == "end_turn":
-        state.end_turn()
-        game["phase"] = "initiative"
-        game["order"] = state.sides
-        game["moving"] = 0
-        game["winner"] = None
-        game["combat_prepared"] = False
+        _do_end_turn(game)
         return None
 
     raise IllegalAction(f"unknown action {action!r}")

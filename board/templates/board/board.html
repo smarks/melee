@@ -6,8 +6,8 @@
 <title>Melee — The Fantasy Trip</title>
 <style>
   :root {
-    --bg: #16151a; --panel: #211f29; --ink: #e9e6f0; --muted: #9a93ad;
-    --line: #4a4458; --hex: #2c2937; --hex-stroke: #4a4458;
+    --bg: #34313f; --panel: #3f3c4c; --ink: #f1eff6; --muted: #c0b9cf;
+    --line: #5a546b; --hex: #4d4960; --hex-stroke: #6a6480;
     --red: #d0524f; --blue: #4f86d0; --reach: #3a6f4a; --reach2: #5fae74;
     --target: #d8b54a; --accent: #8a78d0;
   }
@@ -84,8 +84,8 @@
       </label>
       <label>Opponent
         <select id="opponent">
-          <option value="">Hot-seat (2 players)</option>
           <option value="blue">vs Computer (you are red)</option>
+          <option value="">Hot-seat (2 players)</option>
         </select>
       </label>
       <button onclick="newGame()">New game</button>
@@ -139,6 +139,17 @@ const OPTION_LABEL = {
 };
 const NEEDS_DEST = new Set(["move", "charge_attack", "dodge", "disengage"]);
 const optLabel = o => OPTION_LABEL[o] || o;
+
+// health pool: Fatigue for Tarmar figures, ST for classic Melee
+const hpCur = f => f.model === "tarmar" ? f.fatigue : f.st;
+const hpMax = f => f.model === "tarmar" ? f.max_fatigue : f.max_st;
+function svgRect(x, y, w, h, fill) {
+  const r = document.createElementNS(SVG, "rect");
+  r.setAttribute("x", x); r.setAttribute("y", y);
+  r.setAttribute("width", Math.max(0, w)); r.setAttribute("height", h);
+  r.setAttribute("rx", 1.5); r.setAttribute("fill", fill);
+  return r;
+}
 
 // ---- rendering --------------------------------------------------------------
 function render() {
@@ -209,8 +220,17 @@ function drawArena() {
 
     const txt = document.createElementNS(SVG, "text");
     txt.setAttribute("x", h.cx); txt.setAttribute("y", h.cy);
-    txt.textContent = f.dead ? "✗" : f.st;
+    txt.textContent = f.dead ? "✗" : hpCur(f);
     g.appendChild(txt);
+
+    if (!f.dead) {                                   // health bar beneath the token
+      const bw = LAYOUT.size * 1.1, bh = 5;
+      const bx = h.cx - bw / 2, by = h.cy + LAYOUT.size * 0.62;
+      const frac = Math.max(0, Math.min(1, hpCur(f) / (hpMax(f) || 1)));
+      g.appendChild(svgRect(bx, by, bw, bh, "#0009"));
+      g.appendChild(svgRect(bx, by, bw * frac, bh,
+        frac > 0.5 ? "#5fae74" : frac > 0.25 ? "#d8b54a" : "#d0524f"));
+    }
 
     g.addEventListener("click", () => onFigureClick(f));
     svg.appendChild(g);
@@ -378,8 +398,10 @@ function drawRoster() {
   for (const f of S.figures) {
     const row = document.createElement("div");
     row.className = "row" + (f.dead || f.collapsed ? " dead" : "");
+    const state = f.dead ? "dead" : f.collapsed ? "down"
+      : `${hpCur(f)}/${hpMax(f)}` + (f.posture !== "standing" ? " · " + f.posture : "");
     row.innerHTML = `<span class="chip ${f.side}">${f.side}</span> ${f.name}` +
-      `<span class="muted">ST ${f.st}${f.posture!=="standing"?" · "+f.posture:""}</span>`;
+      `<span class="muted">${state}</span>`;
     row.addEventListener("click", () => onFigureClick(f));
     r.appendChild(row);
   }

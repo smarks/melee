@@ -71,15 +71,10 @@ def test_initiative_move_and_combat_flow(client: Client) -> None:
     assert moved_fig["label"] == dest
     assert moved_fig["facing"] == 2
 
-    # advance through both sides' movement into combat
+    # Both sides end movement with no attacks declared, so the combat phase has
+    # nothing to do and the turn auto-ends straight back to initiative.
     _post(client, gid, {"type": "end_side_move"})
-    combat = _post(client, gid, {"type": "end_side_move"})
-    assert combat["state"]["phase"] == "combat"
-
-    resolved = _post(client, gid, {"type": "resolve_combat"})
-    assert "result" in resolved  # no attacks declared -> empty list, still present
-
-    ended = _post(client, gid, {"type": "end_turn"})
+    ended = _post(client, gid, {"type": "end_side_move"})
     assert ended["state"]["phase"] == "initiative"
     assert ended["state"]["turn"] == 2
 
@@ -135,15 +130,46 @@ def test_vs_computer_sets_controllers_and_plays_a_turn(client: Client) -> None:
         out = _post(client, gid, {"type": "choose_first", "side": "red"})
         assert "error" not in out
 
+    # End movement turns. Turn 1 has no one in contact, so once both sides have
+    # moved the combat phase has nothing to do and auto-ends back to initiative.
     guard = 0
     while out["state"]["phase"] == "move" and guard < 6:
         out = _post(client, gid, {"type": "end_side_move"})
         assert "error" not in out
         guard += 1
-    assert out["state"]["phase"] == "combat"   # the computer's move turn auto-ran
+    assert out["state"]["phase"] == "initiative"   # idle combat auto-ended the turn
+    assert out["state"]["turn"] == 2
 
-    out = _post(client, gid, {"type": "resolve_combat"})
-    assert "error" not in out
-    out = _post(client, gid, {"type": "end_turn"})
-    assert "error" not in out
-    assert out["state"]["phase"] == "initiative"
+
+def test_auto_end_turn_when_no_attacks_remain() -> None:
+    from board.views import _auto_end_if_idle
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    blue = create_human("Knight", 12, 12, "blue", weapons=[BROADSWORD],
+                        ready_weapon=BROADSWORD)
+    red = create_human("Knight", 12, 12, "red", weapons=[BROADSWORD],
+                       ready_weapon=BROADSWORD)
+    blue.position = Hex(3, 3)
+    red.position = layout.neighbor(blue.position, 0)
+    red.facing = next(d for d in range(6)
+                      if layout.neighbor(red.position, d) == blue.position)
+    game = {
+        "state": GameState(arena, [red, blue]),
+        "phase": "combat", "order": ["red", "blue"], "moving": 0, "winner": None,
+        "controllers": {"red": "human", "blue": "computer"}, "combat_prepared": True,
+    }
+    # Red still has an attack to declare -> the turn must NOT auto-end.
+    red.current_option = Option.SHIFT_ATTACK
+    _auto_end_if_idle(game)
+    assert game["phase"] == "combat"
+    # Red has already attacked -> nothing left -> auto-end.
+    red.attacked_this_turn = True
+    _auto_end_if_idle(game)
+    assert game["phase"] == "initiative"
