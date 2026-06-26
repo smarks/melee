@@ -446,16 +446,16 @@ function addBtn(parent, text, fn, primary, disabled) {
 // ---- pre-match fighter editor ----------------------------------------------
 const DEFAULTS = {
   "Classic Melee": [
-    {name:"Swordsman", side:"red", strength:12, dexterity:12, weapon:"Shortsword", armor:"Chainmail", shield:"Small shield"},
-    {name:"Archer", side:"red", strength:14, dexterity:10, weapon:"Longbow", armor:"None", shield:"None"},
-    {name:"Knight", side:"blue", strength:13, dexterity:11, weapon:"Broadsword", armor:"Plate", shield:"Large shield"},
-    {name:"Spearman", side:"blue", strength:13, dexterity:11, weapon:"Spear", armor:"Leather", shield:"None"},
+    {name:"Swordsman", side:"red", strength:12, dexterity:12, weapon:"Shortsword", weapon2:"Mace", armor:"Chainmail", shield:"Small shield"},
+    {name:"Archer", side:"red", strength:14, dexterity:10, weapon:"Longbow", weapon2:"Shortsword", armor:"None", shield:"None"},
+    {name:"Knight", side:"blue", strength:13, dexterity:11, weapon:"Broadsword", weapon2:"Mace", armor:"Plate", shield:"Large shield"},
+    {name:"Spearman", side:"blue", strength:13, dexterity:11, weapon:"Spear", weapon2:"Shortsword", armor:"Leather", shield:"None"},
   ],
   "Tarmar": [
-    {name:"Swordsman", side:"red", strength:12, dexterity:12, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Shortsword", armor:"Chainmail", shield:"Small shield", skill:3},
-    {name:"Archer", side:"red", strength:12, dexterity:13, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Longbow", armor:"None", shield:"None", skill:3},
-    {name:"Knight", side:"blue", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Broadsword", armor:"Plate", shield:"Large shield", skill:3},
-    {name:"Spearman", side:"blue", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Spear", armor:"Leather", shield:"None", skill:2},
+    {name:"Swordsman", side:"red", strength:12, dexterity:12, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Shortsword", weapon2:"Mace", armor:"Chainmail", shield:"Small shield", skill:3, skill2:1},
+    {name:"Archer", side:"red", strength:12, dexterity:13, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Longbow", weapon2:"Shortsword", armor:"None", shield:"None", skill:3, skill2:1},
+    {name:"Knight", side:"blue", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Broadsword", weapon2:"Mace", armor:"Plate", shield:"Large shield", skill:3, skill2:1},
+    {name:"Spearman", side:"blue", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Spear", weapon2:"Shortsword", armor:"Leather", shield:"None", skill:2, skill2:1},
   ],
 };
 let CAT = null, RULES = null;
@@ -475,19 +475,23 @@ function closeEditor() { $("editor").style.display = "none"; }
 function optionTags(list, chosen) {
   return list.map(o => `<option ${o.name === chosen ? "selected" : ""}>${o.name}</option>`).join("");
 }
+function skillInput(key, value) {
+  return RULES.model === "tarmar"
+    ? `<label>skill <input type="number" data-skillkey="${key}" value="${value || 0}" `
+      + `min="0" max="${RULES.skill_max}" style="width:46px"></label>` : "";
+}
 function fighterCard(f, side_i) {
   const card = document.createElement("div"); card.className = "card";
   const stats = RULES.fields.map(field =>
     `<label>${field.slice(0,3).toUpperCase()} <input type="number" data-stat="${field}" value="${f[field]}" `
     + `min="${RULES.min || 1}" max="${RULES.max || 30}" style="width:52px"></label>`).join(" ");
-  const skill = RULES.model === "tarmar"
-    ? `<label>skill <input type="number" data-skill value="${f.skill || 0}" min="0" max="${RULES.skill_max}" style="width:46px"></label>` : "";
   card.dataset.side = f.side;
   card.innerHTML =
     `<div><span class="chip ${f.side}">${f.side}</span> `
     + `<input data-name value="${f.name}" style="width:130px"></div>`
     + `<div style="margin-top:6px">${stats} <span class="muted" data-budget></span></div>`
-    + `<div style="margin-top:6px">Weapon <select data-eq="weapon">${optionTags(CAT.weapons, f.weapon)}</select> ${skill}</div>`
+    + `<div style="margin-top:6px">Weapon <select data-eq="weapon">${optionTags(CAT.weapons, f.weapon)}</select> ${skillInput("skill", f.skill)}</div>`
+    + `<div style="margin-top:6px">Weapon 2 <select data-eq="weapon2"><option ${!f.weapon2 || f.weapon2 === "None" ? "selected" : ""}>None</option>${optionTags(CAT.weapons, f.weapon2)}</select> ${skillInput("skill2", f.skill2)}</div>`
     + `<div style="margin-top:6px">Armour <select data-eq="armor">${optionTags(CAT.armors, f.armor || "None")}</select> `
     + `Shield <select data-eq="shield">${optionTags(CAT.shields, f.shield || "None")}</select></div>`
     + `<div class="hint" data-err></div>`;
@@ -501,9 +505,15 @@ function readCard(card) {
   const f = {side: card.dataset.side, name: card.querySelector("[data-name]").value};
   card.querySelectorAll("[data-stat]").forEach(i => f[i.dataset.stat] = parseInt(i.value || "0", 10));
   card.querySelectorAll("[data-eq]").forEach(s => f[s.dataset.eq] = s.value);
-  const sk = card.querySelector("[data-skill]");
-  if (sk) f.skill = parseInt(sk.value || "0", 10);
+  card.querySelectorAll("[data-skillkey]").forEach(i => f[i.dataset.skillkey] = parseInt(i.value || "0", 10));
   return f;
+}
+
+function disableByStrength(select, strength, offset) {
+  CAT.weapons.forEach((w, idx) => {
+    const opt = select.options[idx + offset];
+    if (opt) opt.disabled = (w.str_req || 0) > strength;
+  });
 }
 
 function refreshCard(card) {
@@ -514,11 +524,16 @@ function refreshCard(card) {
     note = `points ${total}/${RULES.budget}` + (total > RULES.budget ? " — over budget" : "");
   } else {
     const total = (f.strength || 0) + (f.dexterity || 0);
+    const st = f.strength || 0;
     note = `ST+DX ${total}/${RULES.total}` + (total !== RULES.total ? ` — must equal ${RULES.total}` : "");
-    const wsel = card.querySelector('[data-eq="weapon"]');
-    CAT.weapons.forEach((w, idx) => { wsel.options[idx].disabled = (w.str_req || 0) > (f.strength || 0); });
-    const w = CAT.weapons.find(w => w.name === f.weapon);
-    if (w && (w.str_req || 0) > (f.strength || 0)) err = `${f.weapon} needs ST ${w.str_req}`;
+    disableByStrength(card.querySelector('[data-eq="weapon"]'), st, 0);
+    disableByStrength(card.querySelector('[data-eq="weapon2"]'), st, 1);  // None is option 0
+    for (const name of [f.weapon, f.weapon2]) {
+      if (name && name !== "None") {
+        const w = CAT.weapons.find(x => x.name === name);
+        if (w && (w.str_req || 0) > st) err = `${name} needs ST ${w.str_req}`;
+      }
+    }
   }
   card.querySelector("[data-budget]").textContent = note;
   card.querySelector("[data-err]").textContent = err;
