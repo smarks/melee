@@ -207,10 +207,29 @@ def _start_game(arena, figures, profile, computer_sides, seed) -> dict:
     return payload
 
 
+def _int_param(request, name: str) -> int:
+    try:
+        return int(request.GET.get(name, "") or 0)
+    except ValueError:
+        return 0
+
+
 def api_new_game(request):
     profile = PROFILES.get(request.GET.get("profile", ""), PROFILES["Classic Melee"])
-    arena, figures = scenario.skirmish_for(profile.name)
-    computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
+    teams = _int_param(request, "teams")
+    per_team = _int_param(request, "per_team")
+    if teams >= 2 and per_team >= 1:
+        teams = min(teams, scenario.MAX_TEAMS)
+        per_team = min(per_team, scenario.MAX_PER_TEAM)
+        arena, figures = scenario.build_game(profile.name, teams, per_team)
+        # P x AI: you play the first team, the AI plays the rest. P x P: all human.
+        if request.GET.get("mode", "pxai") == "pxai":
+            computer_sides = set(scenario.TEAM_IDS[1:teams])
+        else:
+            computer_sides = set()
+    else:
+        arena, figures = scenario.skirmish_for(profile.name)
+        computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
     return JsonResponse(
         _start_game(arena, figures, profile, computer_sides, request.GET.get("seed")))
 

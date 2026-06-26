@@ -222,3 +222,20 @@ def test_move_can_switch_the_ready_weapon(client: Client) -> None:
     assert "error" not in out
     moved = next(f for f in out["state"]["figures"] if f["uid"] == archer["uid"])
     assert moved["weapon"] == "Shortsword"
+
+
+def test_multi_team_pxai_game(client: Client) -> None:
+    data = client.get("/api/game/new?teams=3&per_team=2&mode=pxai").json()
+    figures = data["state"]["figures"]
+    assert len(figures) == 6
+    assert {f["side"] for f in figures} == {"red", "blue", "green"}
+    ctrl = data["state"]["controllers"]
+    assert ctrl["red"] == "human"
+    assert ctrl["blue"] == "computer" and ctrl["green"] == "computer"
+
+
+def test_multi_team_pxp_is_all_human(client: Client) -> None:
+    data = client.get("/api/game/new?teams=4&per_team=1&mode=pxp").json()
+    ctrl = data["state"]["controllers"]
+    assert len(data["state"]["figures"]) == 4
+    assert set(ctrl.values()) == {"human"}
