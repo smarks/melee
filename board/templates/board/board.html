@@ -8,7 +8,8 @@
   :root {
     --bg: #34313f; --panel: #3f3c4c; --ink: #f1eff6; --muted: #c0b9cf;
     --line: #5a546b; --hex: #4d4960; --hex-stroke: #6a6480;
-    --red: #d0524f; --blue: #4f86d0; --reach: #3a6f4a; --reach2: #5fae74;
+    --red: #d0524f; --blue: #4f86d0; --green: #57b894; --gold: #e0b13c; --violet: #b07ad8;
+    --reach: #3a6f4a; --reach2: #5fae74;
     --target: #d8b54a; --accent: #8a78d0;
   }
   * { box-sizing: border-box; }
@@ -37,6 +38,9 @@
           border: 1px solid var(--line); }
   .chip.red { color: var(--red); border-color: var(--red); }
   .chip.blue { color: var(--blue); border-color: var(--blue); }
+  .chip.green { color: var(--green); border-color: var(--green); }
+  .chip.gold { color: var(--gold); border-color: var(--gold); }
+  .chip.violet { color: var(--violet); border-color: var(--violet); }
   #log { flex: 1 1 140px; min-height: 120px; overflow: auto; padding: 6px 16px 10px;
          font-size: 12.5px; }
   #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
@@ -59,7 +63,7 @@
   .fig text { fill: #100f15; font-weight: 700; font-size: 13px; text-anchor: middle;
               dominant-baseline: central; pointer-events: none; }
   .hint { color: var(--accent); font-size: 12.5px; min-height: 18px; }
-  #editor { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
+  #editor, #setup { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
             flex-direction: column; align-items: center; overflow: auto; }
   #editorBox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
                margin: 24px; padding: 16px 18px; width: min(700px, 94vw); }
@@ -88,23 +92,40 @@
     <div class="pad roster" id="roster"></div>
     <div class="pad" id="controls"></div>
     <div class="pad">
+      <button class="primary" onclick="openSetup()">New game</button>
+    </div>
+    <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
+  </aside>
+</div>
+<div id="setup">
+  <div id="editorBox">
+    <div class="banner">New game</div>
+    <div style="margin-top:8px">
       <label>Rules
         <select id="profile">
           <option value="Classic Melee">Classic Melee</option>
           <option value="Tarmar">Tarmar (d20)</option>
         </select>
       </label>
-      <label>Opponent
-        <select id="opponent">
-          <option value="blue">vs Computer (you are red)</option>
-          <option value="">Hot-seat (2 players)</option>
+    </div>
+    <div style="margin-top:8px">
+      <label>Mode
+        <select id="mode">
+          <option value="pxai">Player vs Computer</option>
+          <option value="pxp">Player vs Player (hot-seat)</option>
         </select>
       </label>
-      <button onclick="newGame()">New game</button>
-      <button onclick="openEditor()">Customize…</button>
     </div>
-    <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
-  </aside>
+    <div style="margin-top:8px">
+      <label>Teams <select id="teams"><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+      <label>Combatants per team <select id="perTeam"><option>1</option><option selected>2</option><option>3</option></select></label>
+    </div>
+    <div style="margin-top:12px">
+      <button class="primary" onclick="startSetup()">Begin game</button>
+      <button onclick="closeSetup()">Cancel</button>
+      <button onclick="openEditor()">Customize fighters… (2-team)</button>
+    </div>
+  </div>
 </div>
 <div id="editor">
   <div id="editorBox">
@@ -131,12 +152,19 @@ let pendingReady = null; // carried weapon to switch to
 const $ = id => document.getElementById(id);
 const api = (path, opts) => fetch(path, opts).then(r => r.json());
 
-async function newGame() {
-  const profile = encodeURIComponent($("profile") ? $("profile").value : "Classic Melee");
-  const computer = encodeURIComponent($("opponent") ? $("opponent").value : "");
-  const data = await api(`/api/game/new?profile=${profile}&computer=${computer}`);
+async function startGame(query) {
+  const data = await api(`/api/game/new?${query}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   resetSelection(); render();
+}
+function bootGame() { startGame("teams=2&per_team=2&mode=pxai"); }  // default on load
+function openSetup() { $("setup").style.display = "flex"; }
+function closeSetup() { $("setup").style.display = "none"; }
+async function startSetup() {
+  const p = encodeURIComponent($("profile").value);
+  const q = `profile=${p}&mode=${$("mode").value}&teams=${$("teams").value}&per_team=${$("perTeam").value}`;
+  await startGame(q);
+  closeSetup();
 }
 async function refresh() {
   const data = await api(`/api/game/${GID}`);
@@ -166,6 +194,8 @@ const OPTION_LABEL = {
 };
 const NEEDS_DEST = new Set(["move", "charge_attack", "dodge", "disengage"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
+const TEAM_FILL = {red: "#d0524f", blue: "#4f86d0", green: "#57b894", gold: "#e0b13c", violet: "#b07ad8"};
+const fillFor = side => TEAM_FILL[side] || "#888";
 const optLabel = o => OPTION_LABEL[o] || o;
 
 // health pool: Fatigue for Tarmar figures, ST for classic Melee
@@ -215,7 +245,7 @@ function drawArena() {
     if (!f.label) continue;
     const h = LAYOUT.hexes[f.label];
     const g = document.createElementNS(SVG, "g");
-    let cls = "fig " + (f.side === "red" ? "red" : "blue");
+    let cls = "fig " + f.side;
     if (f.uid === sel) cls += " sel";
     if (isTarget(f.uid)) cls += " target";
     if (f.posture === "prone") cls += " prone";
@@ -234,7 +264,7 @@ function drawArena() {
       const ox = -uy, oy = ux;
       tip.setAttribute("points",
         `${px},${py} ${h.cx + ux*r + ox*7},${h.cy + uy*r + oy*7} ${h.cx + ux*r - ox*7},${h.cy + uy*r - oy*7}`);
-      tip.setAttribute("fill", f.side === "red" ? "var(--red)" : "var(--blue)");
+      tip.setAttribute("fill", fillFor(f.side));
       g.appendChild(tip);
     }
 
@@ -242,8 +272,7 @@ function drawArena() {
     body.setAttribute("class", "body");
     body.setAttribute("cx", h.cx); body.setAttribute("cy", h.cy);
     body.setAttribute("r", LAYOUT.size * 0.6);
-    body.setAttribute("fill", f.dead ? "#555"
-      : (f.side === "red" ? "var(--red)" : "var(--blue)"));
+    body.setAttribute("fill", f.dead ? "#555" : fillFor(f.side));
     g.appendChild(body);
 
     const txt = document.createElementNS(SVG, "text");
@@ -562,17 +591,17 @@ function refreshCard(card) {
 
 async function startCustom() {
   const fighters = Array.from($("editorRoster").children).map(readCard);
-  const body = {profile: $("profile").value,
-                computer: $("opponent") ? $("opponent").value : "", fighters};
+  const computer = ($("mode") && $("mode").value === "pxai") ? "blue" : "";
+  const body = {profile: $("profile").value, computer, fighters};
   const data = await api("/api/game/new_custom", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)});
   if (data.error) { $("editorErr").textContent = "Can't start: " + data.error; return; }
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
-  closeEditor(); resetSelection(); render();
+  closeEditor(); closeSetup(); resetSelection(); render();
 }
 
-newGame();
+bootGame();
 </script>
 </body>
 </html>
