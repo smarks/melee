@@ -20,9 +20,11 @@
   header .sub { color: var(--muted); font-size: 12px; }
   .wrap { display: flex; gap: 0; height: calc(100vh - 49px); }
   .arena { flex: 1; overflow: auto; display: grid; place-items: center; padding: 16px; }
-  aside { width: 320px; border-left: 1px solid var(--line); background: var(--panel);
-          display: flex; flex-direction: column; }
+  aside { width: 340px; border-left: 1px solid var(--line); background: var(--panel);
+          display: flex; flex-direction: column; overflow: auto; }
   .pad { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .seclabel { padding: 9px 16px 3px; color: var(--muted); font-size: 11px;
+              text-transform: uppercase; letter-spacing: .6px; }
   .banner { font-weight: 600; }
   .muted { color: var(--muted); }
   button { background: #2f2b3b; color: var(--ink); border: 1px solid var(--line);
@@ -35,7 +37,8 @@
           border: 1px solid var(--line); }
   .chip.red { color: var(--red); border-color: var(--red); }
   .chip.blue { color: var(--blue); border-color: var(--blue); }
-  #log { flex: 1; overflow: auto; padding: 10px 16px; font-size: 12.5px; }
+  #log { flex: 1 1 140px; min-height: 120px; overflow: auto; padding: 6px 16px 10px;
+         font-size: 12.5px; }
   #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
   .roster .row { display: flex; justify-content: space-between; padding: 4px 0;
                  border-bottom: 1px solid #2a2733; cursor: pointer; }
@@ -80,10 +83,10 @@
       <div class="banner" id="phaseBanner">Loading…</div>
       <div class="hint" id="hint"></div>
     </div>
-    <div class="pad" id="controls"></div>
-    <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
-    <div class="pad roster" id="roster"></div>
+    <div class="seclabel">Game status</div>
     <div id="log"></div>
+    <div class="pad roster" id="roster"></div>
+    <div class="pad" id="controls"></div>
     <div class="pad">
       <label>Rules
         <select id="profile">
@@ -100,6 +103,7 @@
       <button onclick="newGame()">New game</button>
       <button onclick="openEditor()">Customize…</button>
     </div>
+    <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
   </aside>
 </div>
 <div id="editor">
