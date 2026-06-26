@@ -28,7 +28,17 @@ from .combat import AttackResult
 from .facing import attack_zone, front_hexes, is_engaged
 from .figure import Figure, Posture
 from .movement import reachable_moves
-from .narrative import narrate_attack, narrate_fumble, narrate_status
+from .narrative import (
+    narrate_attack,
+    narrate_fumble,
+    narrate_initiative,
+    narrate_move,
+    narrate_move_order,
+    narrate_ready,
+    narrate_retreat,
+    narrate_status,
+    narrate_turn,
+)
 from .options import Option, OptionSpec, options_for, spec
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
 from .rules_data import WOUND_HITS_THRESHOLD, WeaponKind
@@ -118,15 +128,14 @@ class GameState:
             best = max(rolls.values())
             winners = [side for side, value in rolls.items() if value == best]
             if len(winners) == 1:
-                self.log.append(
-                    f"Initiative: {rolls}; {winners[0]} chooses move order."
-                )
+                self.log.append(narrate_initiative(rolls, winners[0]))
                 return {"rolls": rolls, "winner": winners[0]}
 
     def choose_first(self, side: str) -> None:
         if side not in self.sides:
             raise IllegalAction(f"unknown side {side!r}")
         self.first_side = side
+        self.log.append(narrate_move_order(side))
 
     def move_order(self) -> list[str]:
         if self.first_side is None:
@@ -210,6 +219,9 @@ class GameState:
             figure.posture = Posture.STANDING
         if ready is not None:
             self._ready_weapon(figure, option, ready)
+        line = narrate_move(figure, option, bool(path))
+        if line:
+            self.log.append(line)
 
     def _ready_weapon(self, figure: Figure, option: Option, weapon_name: str) -> None:
         """Switch ``figure``'s ready weapon to a carried one (Section IV e/m)."""
@@ -223,6 +235,7 @@ class GameState:
         figure.ready_weapon = weapon
         if weapon.two_handed and figure.shield_ready:
             figure.shield_ready = False   # a two-handed weapon needs both hands
+        self.log.append(narrate_ready(figure, weapon))
 
     def _validate_path(self, figure: Figure, path: list[Hex]) -> None:
         blocked = set(self.occupied(exclude=figure))
@@ -372,9 +385,9 @@ class GameState:
             raise IllegalAction("no hex to retreat into")
         vacated = target.position
         target.position = destinations[0]
-        self.log.append(f"{attacker.name} forces {target.name} to retreat.")
         if advance:
             attacker.position = vacated
+        self.log.append(narrate_retreat(attacker, target, advance))
         return target.position
 
     # ---- end of turn ----
@@ -391,3 +404,4 @@ class GameState:
         self._pending.clear()
         self.first_side = None
         self.turn_number += 1
+        self.log.append(narrate_turn(self.turn_number))

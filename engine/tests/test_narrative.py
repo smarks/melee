@@ -3,7 +3,18 @@ from __future__ import annotations
 
 from engine.combat import AttackResult
 from engine.figure import create_human
-from engine.narrative import narrate_attack, narrate_fumble, narrate_status
+from engine.narrative import (
+    narrate_attack,
+    narrate_fumble,
+    narrate_initiative,
+    narrate_move,
+    narrate_move_order,
+    narrate_ready,
+    narrate_retreat,
+    narrate_status,
+    narrate_turn,
+)
+from engine.options import Option
 from engine.rules_data import BROADSWORD, LONGBOW
 from engine.ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS
 
@@ -65,3 +76,23 @@ def test_fumble_and_status_lines():
     assert narrate_status(blue, UNCONSCIOUS) == "The blue Knight crumples, unconscious."
     assert narrate_status(blue, KNOCKDOWN) == "The blue Knight is knocked sprawling."
     assert narrate_status(blue, None) is None
+
+
+def test_movement_narration():
+    red, _ = _duo()
+    assert narrate_move(red, Option.MOVE, True) == "The red Knight advances."
+    assert narrate_move(red, Option.MOVE, False) == "The red Knight holds position."
+    assert narrate_move(red, Option.CHARGE_ATTACK, True) == "The red Knight charges in."
+    assert narrate_move(red, Option.STAND_UP, False) == "The red Knight rises to their feet."
+    # weapon-change options are narrated by narrate_ready, not narrate_move
+    assert narrate_move(red, Option.READY_WEAPON, False) is None
+
+
+def test_other_operation_narration():
+    red, blue = _duo()
+    assert narrate_ready(red, BROADSWORD) == "The red Knight readies a Broadsword."
+    assert narrate_initiative({"red": 4, "blue": 2}, "red").startswith("Initiative")
+    assert narrate_move_order("blue") == "Blue will move first."
+    assert narrate_retreat(red, blue, True).endswith("advancing into the gap.")
+    assert narrate_retreat(red, blue, False).endswith("back.")
+    assert narrate_turn(3) == "— Turn 3 —"
