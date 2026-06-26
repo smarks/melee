@@ -56,6 +56,15 @@
   .fig text { fill: #100f15; font-weight: 700; font-size: 13px; text-anchor: middle;
               dominant-baseline: central; pointer-events: none; }
   .hint { color: var(--accent); font-size: 12.5px; min-height: 18px; }
+  #editor { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
+            flex-direction: column; align-items: center; overflow: auto; }
+  #editorBox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+               margin: 24px; padding: 16px 18px; width: min(700px, 94vw); }
+  #editorRoster .card { border: 1px solid var(--line); border-radius: 8px;
+                        padding: 10px 12px; margin: 8px 0; }
+  #editor input, #editor select { background: #2f2b3b; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 5px; padding: 3px 5px; margin: 1px; }
+  #editor label { white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -89,8 +98,21 @@
         </select>
       </label>
       <button onclick="newGame()">New game</button>
+      <button onclick="openEditor()">Customize…</button>
     </div>
   </aside>
+</div>
+<div id="editor">
+  <div id="editorBox">
+    <div class="banner">Customize fighters</div>
+    <div class="muted">Edit each fighter's stats and gear. Only legal choices start a match.</div>
+    <div id="editorRoster"></div>
+    <div class="hint" id="editorErr"></div>
+    <div style="margin-top:8px">
+      <button class="primary" onclick="startCustom()">Start match</button>
+      <button onclick="closeEditor()">Cancel</button>
+    </div>
+  </div>
 </div>
 <script>
 const SVG = "http://www.w3.org/2000/svg";
@@ -419,6 +441,99 @@ function addBtn(parent, text, fn, primary, disabled) {
   b.textContent = text; if (primary) b.className = "primary";
   if (disabled) b.disabled = true; else b.addEventListener("click", fn);
   parent.appendChild(b); return b;
+}
+
+// ---- pre-match fighter editor ----------------------------------------------
+const DEFAULTS = {
+  "Classic Melee": [
+    {name:"Swordsman", side:"red", strength:12, dexterity:12, weapon:"Shortsword", armor:"Chainmail", shield:"Small shield"},
+    {name:"Archer", side:"red", strength:14, dexterity:10, weapon:"Longbow", armor:"None", shield:"None"},
+    {name:"Knight", side:"blue", strength:13, dexterity:11, weapon:"Broadsword", armor:"Plate", shield:"Large shield"},
+    {name:"Spearman", side:"blue", strength:13, dexterity:11, weapon:"Spear", armor:"Leather", shield:"None"},
+  ],
+  "Tarmar": [
+    {name:"Swordsman", side:"red", strength:12, dexterity:12, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Shortsword", armor:"Chainmail", shield:"Small shield", skill:3},
+    {name:"Archer", side:"red", strength:12, dexterity:13, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Longbow", armor:"None", shield:"None", skill:3},
+    {name:"Knight", side:"blue", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Broadsword", armor:"Plate", shield:"Large shield", skill:3},
+    {name:"Spearman", side:"blue", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Spear", armor:"Leather", shield:"None", skill:2},
+  ],
+};
+let CAT = null, RULES = null;
+
+async function openEditor() {
+  const profile = $("profile").value;
+  CAT = await api(`/api/catalog?profile=${encodeURIComponent(profile)}`);
+  RULES = CAT.stat_rules;
+  const roster = $("editorRoster"); roster.innerHTML = "";
+  (DEFAULTS[profile] || DEFAULTS["Classic Melee"]).forEach((f, i) =>
+    roster.appendChild(fighterCard(f, i)));
+  $("editorErr").textContent = "";
+  $("editor").style.display = "flex";
+}
+function closeEditor() { $("editor").style.display = "none"; }
+
+function optionTags(list, chosen) {
+  return list.map(o => `<option ${o.name === chosen ? "selected" : ""}>${o.name}</option>`).join("");
+}
+function fighterCard(f, side_i) {
+  const card = document.createElement("div"); card.className = "card";
+  const stats = RULES.fields.map(field =>
+    `<label>${field.slice(0,3).toUpperCase()} <input type="number" data-stat="${field}" value="${f[field]}" `
+    + `min="${RULES.min || 1}" max="${RULES.max || 30}" style="width:52px"></label>`).join(" ");
+  const skill = RULES.model === "tarmar"
+    ? `<label>skill <input type="number" data-skill value="${f.skill || 0}" min="0" max="${RULES.skill_max}" style="width:46px"></label>` : "";
+  card.dataset.side = f.side;
+  card.innerHTML =
+    `<div><span class="chip ${f.side}">${f.side}</span> `
+    + `<input data-name value="${f.name}" style="width:130px"></div>`
+    + `<div style="margin-top:6px">${stats} <span class="muted" data-budget></span></div>`
+    + `<div style="margin-top:6px">Weapon <select data-eq="weapon">${optionTags(CAT.weapons, f.weapon)}</select> ${skill}</div>`
+    + `<div style="margin-top:6px">Armour <select data-eq="armor">${optionTags(CAT.armors, f.armor || "None")}</select> `
+    + `Shield <select data-eq="shield">${optionTags(CAT.shields, f.shield || "None")}</select></div>`
+    + `<div class="hint" data-err></div>`;
+  card.addEventListener("input", () => refreshCard(card));
+  card.addEventListener("change", () => refreshCard(card));
+  setTimeout(() => refreshCard(card), 0);
+  return card;
+}
+
+function readCard(card) {
+  const f = {side: card.dataset.side, name: card.querySelector("[data-name]").value};
+  card.querySelectorAll("[data-stat]").forEach(i => f[i.dataset.stat] = parseInt(i.value || "0", 10));
+  card.querySelectorAll("[data-eq]").forEach(s => f[s.dataset.eq] = s.value);
+  const sk = card.querySelector("[data-skill]");
+  if (sk) f.skill = parseInt(sk.value || "0", 10);
+  return f;
+}
+
+function refreshCard(card) {
+  const f = readCard(card);
+  let note = "", err = "";
+  if (RULES.model === "tarmar") {
+    const total = RULES.fields.reduce((s, k) => s + (f[k] || 0), 0);
+    note = `points ${total}/${RULES.budget}` + (total > RULES.budget ? " — over budget" : "");
+  } else {
+    const total = (f.strength || 0) + (f.dexterity || 0);
+    note = `ST+DX ${total}/${RULES.total}` + (total !== RULES.total ? ` — must equal ${RULES.total}` : "");
+    const wsel = card.querySelector('[data-eq="weapon"]');
+    CAT.weapons.forEach((w, idx) => { wsel.options[idx].disabled = (w.str_req || 0) > (f.strength || 0); });
+    const w = CAT.weapons.find(w => w.name === f.weapon);
+    if (w && (w.str_req || 0) > (f.strength || 0)) err = `${f.weapon} needs ST ${w.str_req}`;
+  }
+  card.querySelector("[data-budget]").textContent = note;
+  card.querySelector("[data-err]").textContent = err;
+}
+
+async function startCustom() {
+  const fighters = Array.from($("editorRoster").children).map(readCard);
+  const body = {profile: $("profile").value,
+                computer: $("opponent") ? $("opponent").value : "", fighters};
+  const data = await api("/api/game/new_custom", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)});
+  if (data.error) { $("editorErr").textContent = "Can't start: " + data.error; return; }
+  GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
+  closeEditor(); resetSelection(); render();
 }
 
 newGame();
