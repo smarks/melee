@@ -122,6 +122,7 @@ let optInfo = null;      // options payload for selected figure
 let chosenOption = null; // option string chosen for movement
 let pendingDest = null;  // hex label
 let pendingFacing = null;// facing index
+let pendingReady = null; // carried weapon to switch to
 
 const $ = id => document.getElementById(id);
 const api = (path, opts) => fetch(path, opts).then(r => r.json());
@@ -147,7 +148,7 @@ async function act(body) {
   return data;
 }
 function flash(msg) { $("hint").textContent = msg; }
-function resetSelection() { sel = null; optInfo = null; chosenOption = null; pendingDest = null; pendingFacing = null; }
+function resetSelection() { sel = null; optInfo = null; chosenOption = null; pendingDest = null; pendingFacing = null; pendingReady = null; }
 
 function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 
@@ -160,6 +161,7 @@ const OPTION_LABEL = {
   one_last_shot: "One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
 };
 const NEEDS_DEST = new Set(["move", "charge_attack", "dodge", "disengage"]);
+const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
 const optLabel = o => OPTION_LABEL[o] || o;
 
 // health pool: Fatigue for Tarmar figures, ST for classic Melee
@@ -322,21 +324,34 @@ function drawControls() {
 
 function drawMoveActions(c) {
   const needsDest = NEEDS_DEST.has(chosenOption) && !pendingDest;
+  const f = figByUid(sel);
+  const swap = WEAPON_CHANGE.has(chosenOption) && f && (f.weapons || []).length > 1;
+  if (swap && pendingReady == null) {
+    pendingReady = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
+  }
   const wrap = document.createElement("div");
   wrap.style.marginTop = "8px";
-  wrap.innerHTML =
-    `<div class="muted">Action: <b>${optLabel(chosenOption)}</b> · `
-    + `dest ${pendingDest || "—"} · facing ${pendingFacing}</div>`
-    + (needsDest ? `<div class="hint">Click a green hex to set the destination.</div>` : "");
+  let html = `<div class="muted">Action: <b>${optLabel(chosenOption)}</b> · `
+    + `dest ${pendingDest || "—"} · facing ${pendingFacing}</div>`;
+  if (swap) {
+    html += `<div style="margin-top:6px">Ready: <select id="readySel">`
+      + (f.weapons || []).map(w => `<option ${w === pendingReady ? "selected" : ""}>${w}</option>`).join("")
+      + `</select></div>`;
+  }
+  if (needsDest) html += `<div class="hint">Click a green hex to set the destination.</div>`;
+  wrap.innerHTML = html;
   c.appendChild(wrap);
+  if (swap) {
+    wrap.querySelector("#readySel").addEventListener("change", e => { pendingReady = e.target.value; });
+  }
   addBtn(c, "⟲ turn", () => { pendingFacing = (pendingFacing + 5) % 6; render(); });
   addBtn(c, "⟳ turn", () => { pendingFacing = (pendingFacing + 1) % 6; render(); });
   addBtn(c, "Confirm move", async () => {
-    await act({type:"move", uid: sel, option: chosenOption,
-               dest: pendingDest, facing: pendingFacing});
+    await act({type:"move", uid: sel, option: chosenOption, dest: pendingDest,
+               facing: pendingFacing, ready: swap ? pendingReady : null});
     resetSelection(); after();
   }, true, needsDest);
-  addBtn(c, "Cancel", () => { chosenOption = null; pendingDest = null; render(); });
+  addBtn(c, "Cancel", () => { chosenOption = null; pendingDest = null; pendingReady = null; render(); });
 }
 
 function after() { render(); }
@@ -395,6 +410,7 @@ function drawSelInfo() {
       : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx} · ${f.armor}${f.shield ? " · "+f.shield : ""}</div>`) +
     `<div class="muted">weapon: ${f.weapon || "—"} · ${f.posture}` +
     `${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>` +
+    `<div class="muted">carrying: ${(f.weapons || []).join(", ") || "—"}</div>` +
     optionButtons(f);
 }
 function optionButtons(f) {
@@ -410,6 +426,7 @@ function optionButtons(f) {
 function pickOption(opt) {
   chosenOption = opt;
   pendingDest = null;
+  pendingReady = null;
   const f = figByUid(sel);
   pendingFacing = (pendingFacing == null) ? f.facing : pendingFacing;
   render();

@@ -205,3 +205,20 @@ def test_new_custom_game_rejects_an_illegal_fighter(client: Client) -> None:
     resp = client.post("/api/game/new_custom", data=json.dumps(roster),
                        content_type="application/json")
     assert resp.status_code == 400 and "error" in resp.json()
+
+
+def test_move_can_switch_the_ready_weapon(client: Client) -> None:
+    data = _new(client)            # hot-seat default skirmish
+    gid = data["gid"]
+    _post(client, gid, {"type": "roll_initiative"})
+    _post(client, gid, {"type": "choose_first", "side": "red"})
+    # The Archer starts disengaged carrying a Longbow + Shortsword + Dagger.
+    archer = next(f for f in data["state"]["figures"]
+                  if f["side"] == "red" and f["weapon"] == "Longbow")
+    assert "Shortsword" in archer["weapons"]
+    out = _post(client, gid, {"type": "move", "uid": archer["uid"],
+                              "option": "ready_weapon", "facing": archer["facing"],
+                              "ready": "Shortsword"})
+    assert "error" not in out
+    moved = next(f for f in out["state"]["figures"] if f["uid"] == archer["uid"])
+    assert moved["weapon"] == "Shortsword"

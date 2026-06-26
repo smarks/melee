@@ -176,8 +176,14 @@ class GameState:
         *,
         path: list[Hex] | None = None,
         facing: int | None = None,
+        ready: str | None = None,
     ) -> None:
-        """Execute the movement part of ``option`` for ``figure``."""
+        """Execute the movement part of ``option`` for ``figure``.
+
+        ``ready`` names a carried weapon to switch to, valid only with the
+        weapon-changing options (Ready Weapon when disengaged, Change Weapons
+        when engaged).
+        """
         if not figure.can_act():
             raise IllegalAction(f"{figure.name} cannot act")
         if option not in self.legal_options(figure):
@@ -202,6 +208,21 @@ class GameState:
         figure.dodging = option_spec.sets_dodge
         if option == Option.STAND_UP:
             figure.posture = Posture.STANDING
+        if ready is not None:
+            self._ready_weapon(figure, option, ready)
+
+    def _ready_weapon(self, figure: Figure, option: Option, weapon_name: str) -> None:
+        """Switch ``figure``'s ready weapon to a carried one (Section IV e/m)."""
+        if option not in (Option.READY_WEAPON, Option.CHANGE_WEAPONS):
+            raise IllegalAction(f"{option.value} cannot change weapons")
+        weapon = next((w for w in figure.weapons if w.name == weapon_name), None)
+        if weapon is None:
+            raise IllegalAction(f"{figure.name} is not carrying {weapon_name}")
+        if option == Option.CHANGE_WEAPONS and weapon.kind == WeaponKind.MISSILE:
+            raise IllegalAction("cannot ready a missile weapon while engaged")
+        figure.ready_weapon = weapon
+        if weapon.two_handed and figure.shield_ready:
+            figure.shield_ready = False   # a two-handed weapon needs both hands
 
     def _validate_path(self, figure: Figure, path: list[Hex]) -> None:
         blocked = set(self.occupied(exclude=figure))
