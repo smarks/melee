@@ -241,3 +241,18 @@ def test_multi_team_pxp_is_all_human(client: Client) -> None:
     ctrl = data["state"]["controllers"]
     assert len(data["state"]["figures"]) == 4
     assert set(ctrl.values()) == {"human"}
+
+
+def test_new_custom_multi_team_one_ai(client: Client) -> None:
+    fighters = [
+        {"name": f"{side}-A", "side": side, "strength": 13, "dexterity": 11,
+         "weapon": "Broadsword", "armor": "Leather", "shield": "None"}
+        for side in ("red", "blue", "green")
+    ]
+    body = {"profile": "Classic Melee", "computer": "green", "fighters": fighters}
+    out = client.post("/api/game/new_custom", data=json.dumps(body),
+                      content_type="application/json").json()
+    assert {f["side"] for f in out["state"]["figures"]} == {"red", "blue", "green"}
+    ctrl = out["state"]["controllers"]
+    assert ctrl["green"] == "computer"
+    assert ctrl["red"] == "human" and ctrl["blue"] == "human"
