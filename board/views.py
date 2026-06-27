@@ -142,12 +142,13 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list]:
     return [e.uid for e in state.enemies_of(figure) if e.position in fronts], []
 
 
-def _auto_facing(state: GameState, figure, final_hex):
-    """Direction to face the nearest enemy adjacent to ``final_hex``.
+def _auto_facing(state: GameState, figure, final_hex, path=None):
+    """Sensible facing for a move that requested facing "auto":
 
-    Used when a move requests facing "auto" — so moving into contact with an
-    enemy leaves you facing it (engaged, ready to attack). Falls back to the
-    figure's current facing when no enemy ends up adjacent.
+    1. face an enemy you end up adjacent to (engaged, ready to attack); else
+    2. face the direction you travelled (so a figure that moved points where it
+       went, not where it started); else
+    3. keep the figure's current facing (e.g. it didn't move).
     """
     if final_hex is None:
         return figure.facing
@@ -155,9 +156,11 @@ def _auto_facing(state: GameState, figure, final_hex):
     adjacent = [enemy for enemy in state.enemies_of(figure)
                 if enemy.position is not None
                 and layout.distance(final_hex, enemy.position) == 1]
-    if not adjacent:
-        return figure.facing
-    return layout.direction_to(final_hex, adjacent[0].position)
+    if adjacent:
+        return layout.direction_to(final_hex, adjacent[0].position)
+    prev = path[-2] if path and len(path) >= 2 else figure.position
+    travelled = layout.direction_to(prev, final_hex)
+    return travelled if travelled is not None else figure.facing
 
 
 def _ensure_attack_option(state: GameState, figure) -> None:
@@ -448,8 +451,8 @@ def _dispatch(game: dict, body: dict):
             path = reach.path_to(final_hex)
             if path is None:
                 raise IllegalAction("destination not reachable under that option")
-        if facing == "auto":   # default: turn to face an enemy you end up beside
-            facing = _auto_facing(state, figure, final_hex)
+        if facing == "auto":   # default: face an adjacent enemy, else the way you went
+            facing = _auto_facing(state, figure, final_hex, path)
         state.move(figure, option, path=path, facing=facing, ready=body.get("ready"))
         return None
 
