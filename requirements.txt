@@ -12,3 +12,7 @@ hexarena @ git+https://github.com/smarks/hexarena.git@main
 # single source of truth for the "Tarmar rules" profile, also used by
 # tarmar-studio. Local dev:  pip install -e ../tarmar-rules
 tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@main
+
+# Shared Django login app (user model + register/login/logout/profile). Local
+# dev:  pip install -e ../tarmar-auth
+tarmar-auth @ git+https://github.com/smarks/tarmar-auth.git@main
