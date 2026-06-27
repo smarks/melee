@@ -447,15 +447,16 @@ function drawPlacement(c) {
   if (swap && pendingReady == null) pendingReady = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
   const wrap = document.createElement("div"); wrap.style.marginTop = "8px";
   let html = `<div class="muted">Placing <b>${f.name}</b>: ${optLabel(chosenOption)} · `
-    + `dest ${pendingDest || "—"} · facing ${pendingFacing}</div>`;
+    + `dest ${pendingDest || "—"} · facing ${pendingFacing === "auto" ? "→ enemy" : pendingFacing}</div>`;
   if (swap) html += `<div style="margin-top:6px">Ready: <select id="readySel">`
     + (f.weapons || []).map(w => `<option ${w === pendingReady ? "selected" : ""}>${w}</option>`).join("")
     + `</select></div>`;
   if (needHex && !pendingDest) html += `<div class="hint">Click a green hex to set the destination.</div>`;
   wrap.innerHTML = html; c.appendChild(wrap);
   if (swap) wrap.querySelector("#readySel").addEventListener("change", e => { pendingReady = e.target.value; });
-  addBtn(c, "⟲ turn", () => { pendingFacing = (pendingFacing + 5) % 6; render(); });
-  addBtn(c, "⟳ turn", () => { pendingFacing = (pendingFacing + 1) % 6; render(); });
+  const facingNow = () => pendingFacing === "auto" ? f.facing : pendingFacing;
+  addBtn(c, "⟲ turn", () => { pendingFacing = (facingNow() + 5) % 6; render(); });
+  addBtn(c, "⟳ turn", () => { pendingFacing = (facingNow() + 1) % 6; render(); });
   addBtn(c, "Set action", () => {
     PLAN[sel] = {uid: sel, phase: "move", option: chosenOption, label: optLabel(chosenOption),
                  dest: pendingDest, facing: pendingFacing, ready: swap ? pendingReady : null};
@@ -500,9 +501,9 @@ function openMenu(f) {
 function chooseMoveOption(f, option) {
   sel = f.uid; pendingDest = null; pendingReady = null;
   if (NEEDS_DEST.has(option)) {
-    chosenOption = option; pendingFacing = f.facing; render();     // enter placement
+    chosenOption = option; pendingFacing = "auto"; render();       // enter placement
   } else {
-    const plan = {uid: f.uid, phase: "move", option, label: optLabel(option)};
+    const plan = {uid: f.uid, phase: "move", option, label: optLabel(option), facing: "auto"};
     if (WEAPON_CHANGE.has(option)) plan.ready = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
     PLAN[f.uid] = plan; chosenOption = null; render();
   }

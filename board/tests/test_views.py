@@ -245,6 +245,30 @@ def test_attack_can_be_declared_in_the_combat_phase(client: Client) -> None:
         del GAMES["duel-test"]
 
 
+def test_auto_facing_turns_toward_an_adjacent_enemy() -> None:
+    from board.views import _auto_facing
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    grid = arena.layout
+    mover = create_human("M", 12, 12, "a", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    enemy = create_human("E", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    enemy.position = Hex(3, 3)
+    dest = grid.neighbor(enemy.position, 0)   # land adjacent to the enemy
+    mover.position = dest
+    mover.facing = 3                          # initially facing away
+    state = GameState(arena, [mover, enemy])
+
+    facing = _auto_facing(state, mover, dest)
+    assert grid.neighbor(dest, facing) == enemy.position   # turned to face the enemy
+    # No enemy adjacent -> keep current facing.
+    assert _auto_facing(state, mover, Hex(6, 6)) == mover.facing
+
+
 def test_catalog_endpoint_lists_legal_choices(client: Client) -> None:
     data = client.get("/api/catalog?profile=Tarmar").json()
     assert data["stat_rules"]["model"] == "tarmar"

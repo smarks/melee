@@ -40,6 +40,25 @@ def test_engaged_figure_gets_engaged_options() -> None:
     assert Option.MOVE not in state.legal_options(a)  # engaged: no full move
 
 
+def test_legal_options_hide_illegal_choices() -> None:
+    from engine.rules_data import LONGBOW
+
+    arena = Arena(cols=9, rows=15)
+    swordsman = create_human("S", 12, 12, "a", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    archer = create_human("A", 12, 12, "b", weapons=[LONGBOW], ready_weapon=LONGBOW)
+    swordsman.position = Hex(5, 5)
+    archer.position = Hex(1, 1)                      # far apart -> both disengaged
+    state = GameState(arena, [swordsman, archer])
+
+    sword_opts = state.legal_options(swordsman)
+    assert Option.STAND_UP not in sword_opts          # already standing
+    assert Option.MISSILE_ATTACK not in sword_opts    # no missile weapon ready
+    assert Option.MISSILE_ATTACK in state.legal_options(archer)  # has a bow
+
+    swordsman.posture = Posture.PRONE
+    assert state.legal_options(swordsman) == [Option.STAND_UP]
+
+
 def test_attack_ordering_is_highest_adjdx_first() -> None:
     # Both declared, but 'a' has higher adjDX and lands a lethal triple before
     # 'b' (lower adjDX) gets to strike, so 'b''s attack never resolves.
