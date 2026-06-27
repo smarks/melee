@@ -30,6 +30,11 @@
   #bgColor   { top: 8px; left: 8px; }
   #textColor { top: 8px; right: 8px; }
   #hexColor  { bottom: 8px; right: 8px; }
+  #resetColors { position: absolute; top: 8px; left: 34px; height: 20px; padding: 0 7px;
+                 font-size: 11px; cursor: pointer; opacity: .55; transition: opacity .15s;
+                 border: 1px solid var(--line); border-radius: 4px;
+                 background: var(--panel); color: var(--ink); }
+  #resetColors:hover { opacity: 1; }
   /* Per-character options pop-up. */
   .menu { position: fixed; z-index: 60; background: var(--panel); border: 1px solid var(--line);
           border-radius: 8px; padding: 4px; min-width: 160px; box-shadow: 0 8px 22px #0008; }
@@ -114,6 +119,7 @@
     <input type="color" id="bgColor"   class="swatch" title="Background &amp; controls colour">
     <input type="color" id="textColor" class="swatch" title="Text colour">
     <input type="color" id="hexColor"  class="swatch" title="Hex / board colour">
+    <button id="resetColors" title="Reset colours to default" onclick="resetTheme()">⟲ reset</button>
     <svg id="svg"></svg>
   </div>
   <aside>
@@ -814,19 +820,57 @@ async function startCustom() {
 // Configurable colours: each corner swatch drives one or more CSS variables and
 // remembers the choice in localStorage. bg swatch also recolours the controls.
 const THEME = { bgColor: ["--bg", "--panel"], textColor: ["--ink"], hexColor: ["--hex"] };
+const RESET_VARS = ["--bg", "--panel", "--ink", "--hex"];
+const cleanHex = v => { v = (v || "").trim(); return /^#[0-9a-f]{6}$/i.test(v) ? v : null; };
+function luminance(hex) {
+  const m = cleanHex(hex); if (!m) return 0;
+  const c = [1, 3, 5].map(i => parseInt(m.slice(i, i + 2), 16) / 255)
+    .map(x => x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+function contrast(a, b) {
+  const la = luminance(a), lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+const root = () => document.documentElement;
+function syncMuted() {  // grey text tracks the text colour so it stays visible
+  root().style.setProperty("--muted", getComputedStyle(root()).getPropertyValue("--ink").trim());
+}
+function ensureTextContrast() {  // keep text readable against the chosen background
+  const cs = getComputedStyle(root());
+  const bg = cs.getPropertyValue("--bg").trim(), ink = cs.getPropertyValue("--ink").trim();
+  if (contrast(ink, bg) < 4) {
+    const good = luminance(bg) > 0.45 ? "#181818" : "#f4f4f4";
+    root().style.setProperty("--ink", good);
+    localStorage.setItem("melee.theme.textColor", good);
+    $("textColor").value = good;
+  }
+  syncMuted();
+}
 function applyTheme() {
-  const root = document.documentElement;
   for (const [id, vars] of Object.entries(THEME)) {
     const input = $(id);
     const saved = localStorage.getItem("melee.theme." + id);
-    if (saved) vars.forEach(v => root.style.setProperty(v, saved));
-    const current = saved || getComputedStyle(root).getPropertyValue(vars[0]).trim();
-    if (/^#[0-9a-f]{6}$/i.test(current)) input.value = current;
+    if (saved) vars.forEach(v => root().style.setProperty(v, saved));
+    const current = cleanHex(saved) || cleanHex(getComputedStyle(root()).getPropertyValue(vars[0]));
+    if (current) input.value = current;
     input.addEventListener("input", () => {
-      vars.forEach(v => root.style.setProperty(v, input.value));
+      vars.forEach(v => root().style.setProperty(v, input.value));
       localStorage.setItem("melee.theme." + id, input.value);
+      ensureTextContrast();
     });
   }
+  ensureTextContrast();
+}
+function resetTheme() {
+  ["bgColor", "textColor", "hexColor"].forEach(id => localStorage.removeItem("melee.theme." + id));
+  RESET_VARS.forEach(v => root().style.removeProperty(v));   // fall back to the CSS :root defaults
+  const cs = getComputedStyle(root());
+  for (const [id, vars] of Object.entries(THEME)) {
+    const c = cleanHex(cs.getPropertyValue(vars[0]));
+    if (c) $(id).value = c;
+  }
+  syncMuted();
 }
 
 applyTheme();
