@@ -128,9 +128,12 @@
       <label>Combatants per team <select id="perTeam"><option>1</option><option selected>2</option><option>3</option></select></label>
     </div>
     <div style="margin-top:12px">
+      <button onclick="openEditor()">✎ Edit fighters…</button>
+      <span class="muted">— customise each team's stats &amp; gear (optional)</span>
+    </div>
+    <div style="margin-top:10px">
       <button class="primary" onclick="startSetup()">Begin game</button>
       <button onclick="closeSetup()">Cancel</button>
-      <button onclick="openEditor()">Pick / generate / edit fighters…</button>
     </div>
   </div>
 </div>
@@ -723,6 +726,8 @@ async function startCustom() {
 }
 
 bootGame();
+// Arriving from login (LOGIN_REDIRECT_URL = "/?setup") opens the wizard straight away.
+if (new URLSearchParams(location.search).has("setup")) openSetup();
 </script>
 </body>
 </html>
