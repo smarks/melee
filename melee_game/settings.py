@@ -72,7 +72,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # anonymously; logging in unlocks saving characters.
 AUTH_USER_MODEL = "tarmar_auth.User"
 LOGIN_URL = "/accounts/login/"
-LOGIN_REDIRECT_URL = "/"
+LOGIN_REDIRECT_URL = "/?setup"   # land on the board with the New-game wizard open
 LOGOUT_REDIRECT_URL = "/"
 
 USE_TZ = True
