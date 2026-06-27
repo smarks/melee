@@ -230,8 +230,10 @@ def test_multi_team_pxai_game(client: Client) -> None:
     assert len(figures) == 6
     assert {f["side"] for f in figures} == {"red", "blue", "green"}
     ctrl = data["state"]["controllers"]
-    assert ctrl["red"] == "human"
-    assert ctrl["blue"] == "computer" and ctrl["green"] == "computer"
+    # Exactly one AI team (the last); the rest are human.
+    assert ctrl["red"] == "human" and ctrl["blue"] == "human"
+    assert ctrl["green"] == "computer"
+    assert sum(c == "computer" for c in ctrl.values()) == 1
 
 
 def test_multi_team_pxp_is_all_human(client: Client) -> None:

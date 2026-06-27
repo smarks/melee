@@ -222,9 +222,9 @@ def api_new_game(request):
         teams = min(teams, scenario.MAX_TEAMS)
         per_team = min(per_team, scenario.MAX_PER_TEAM)
         arena, figures = scenario.build_game(profile.name, teams, per_team)
-        # P x AI: you play the first team, the AI plays the rest. P x P: all human.
+        # P x AI: exactly one AI team (the last); you play the rest. P x P: all human.
         if request.GET.get("mode", "pxai") == "pxai":
-            computer_sides = set(scenario.TEAM_IDS[1:teams])
+            computer_sides = {scenario.TEAM_IDS[teams - 1]}
         else:
             computer_sides = set()
     else:
