@@ -30,6 +30,14 @@
   #bgColor   { top: 8px; left: 8px; }
   #textColor { top: 8px; right: 8px; }
   #hexColor  { bottom: 8px; right: 8px; }
+  /* Per-character options pop-up. */
+  .menu { position: fixed; z-index: 60; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 8px; padding: 4px; min-width: 160px; box-shadow: 0 8px 22px #0008; }
+  .menu .head { padding: 5px 10px 6px; font-weight: 600; font-size: 12px; color: var(--muted); }
+  .menu .row { padding: 7px 10px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+  .menu .row:hover { background: var(--accent); color: #fff; }
+  .menu .row.muted { color: var(--muted); }
+  .menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
   aside { width: 420px; border-left: 1px solid var(--line); background: var(--panel);
           display: flex; flex-direction: column; overflow: auto; }
   .pad { padding: 14px 16px; border-bottom: 1px solid var(--line); }
@@ -123,6 +131,7 @@
     <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
   </aside>
 </div>
+<div id="tokenMenu" class="menu" style="display:none"></div>
 <div id="setup">
   <div id="editorBox">
     <div class="banner">New game</div>
@@ -171,12 +180,16 @@
 <script>
 const SVG = "http://www.w3.org/2000/svg";
 let GID = null, S = null, LAYOUT = null, PROFILE = null;
-let sel = null;          // selected figure uid
-let optInfo = null;      // options payload for selected figure
-let chosenOption = null; // option string chosen for movement
+let sel = null;          // figure being placed (movement), if any
+let optInfo = null;      // options payload for the active figure
+let chosenOption = null; // move option mid-placement (needs a destination hex)
 let pendingDest = null;  // hex label
 let pendingFacing = null;// facing index
 let pendingReady = null; // carried weapon to switch to
+let PLAN = {};           // uid -> pending action for this phase (executed on Continue)
+let warnKind = null;     // "move" | "combat" while showing the "not everyone set" warning
+let lastPhase = null;    // detect phase changes to clear the plan
+const myControlled = f => (S.controllers || {})[f.side] !== "computer";
 
 const $ = id => document.getElementById(id);
 const api = (path, opts) => fetch(path, opts).then(r => r.json());
@@ -250,6 +263,9 @@ function svgRect(x, y, w, h, fill) {
 // ---- rendering --------------------------------------------------------------
 function render() {
   if (!S) return;
+  if (S.phase !== lastPhase) {           // new phase → fresh, empty plan
+    lastPhase = S.phase; PLAN = {}; warnKind = null; resetSelection(); closeMenu();
+  }
   drawArena();
   drawControls();
   drawSelInfo();
@@ -257,7 +273,6 @@ function render() {
   drawLog();
   const vsComputer = S.controllers && Object.values(S.controllers).includes("computer");
   $("turnInfo").textContent = (PROFILE || "") + (vsComputer ? " · vs Computer" : " · hot-seat");
-  maybeAutoSelect();
 }
 
 function drawArena() {
@@ -328,7 +343,16 @@ function drawArena() {
         frac > 0.5 ? "#5fae74" : frac > 0.25 ? "#d8b54a" : "#d0524f"));
     }
 
-    g.addEventListener("click", () => onFigureClick(f));
+    if (PLAN[f.uid]) {                               // green ring = action set
+      const ring = document.createElementNS(SVG, "circle");
+      ring.setAttribute("cx", h.cx); ring.setAttribute("cy", h.cy);
+      ring.setAttribute("r", LAYOUT.size * 0.82);
+      ring.setAttribute("fill", "none");
+      ring.setAttribute("stroke", "#7CFC8C"); ring.setAttribute("stroke-width", "2.5");
+      g.appendChild(ring);
+    }
+
+    g.addEventListener("click", (ev) => { ev.stopPropagation(); onFigureClick(f); });
     svg.appendChild(g);
   }
 }
@@ -373,87 +397,139 @@ function drawControls() {
       }
     }
   } else if (phase === "move") {
-    const left = S.figures.filter(f => f.side === S.moving_side && f.can_act && !f.acted).length;
+    const movers = S.figures.filter(f => f.side === S.moving_side && f.can_act && f.label);
+    const set = movers.filter(f => PLAN[f.uid]).length;
     const span = document.createElement("div");
     span.innerHTML = `<span class="chip ${S.moving_side}">${S.moving_side}</span> to move`
-      + ` — <b>${left}</b> left. Pick an action, set destination &amp; facing, then Confirm.`;
+      + ` — click a counter to set its action. <b>${set}/${movers.length}</b> set.`;
     c.appendChild(span);
-    if (sel && chosenOption) drawMoveActions(c);
-    addBtn(c, "Done with movement phase", () => {
-      resetSelection(); act({type:"end_side_move"}).then(after);
-    });
+    if (sel && chosenOption) drawPlacement(c);
+    else drawContinue(c, "move", movers.length - set);
   } else if (phase === "combat") {
-    const queued = S.queued || 0;
+    const actors = S.figures.filter(f => f.label && f.can_act && myControlled(f));
+    const set = actors.filter(f => PLAN[f.uid]).length;
     const span = document.createElement("div");
-    span.innerHTML = `Pick a character, then click a highlighted enemy — or Do nothing. `
-      + `<b>${queued}</b> declared.`;
+    span.innerHTML = `Click a counter to choose its attack or Do nothing.`
+      + ` <b>${set}/${actors.length}</b> set.`;
     c.appendChild(span);
-    if (sel) drawCombatActions(c);
-    addBtn(c, queued ? `Done with combat phase — resolve (${queued})` : "Done with combat phase",
-      () => { act({type:"resolve_combat"}).then(() => { resetSelection(); render(); }); },
-      true, queued === 0);
-    addBtn(c, "End turn", () => { resetSelection(); act({type:"end_turn"}).then(after); });
+    drawContinue(c, "combat", actors.length - set);
+    addBtn(c, "End turn", () => { resetAll(); act({type:"end_turn"}).then(after); });
   }
 }
 
-function drawMoveActions(c) {
-  const needsDest = NEEDS_DEST.has(chosenOption) && !pendingDest;
+// The Continue button, gated by a "not everyone has an action" warning.
+function drawContinue(c, kind, missing) {
+  if (warnKind === kind) {
+    const w = document.createElement("div"); w.style.marginTop = "6px";
+    w.innerHTML = `<span class="muted">${missing} character(s) have no action set — `
+      + `they'll do nothing.</span>`;
+    c.appendChild(w);
+    addBtn(c, "Continue anyway", () => { warnKind = null; executePlans(kind); }, true);
+    addBtn(c, "Go back", () => { warnKind = null; render(); });
+    return;
+  }
+  addBtn(c, kind === "move" ? "Continue ▸ execute moves" : "Continue ▸ resolve combat",
+    () => { if (missing > 0) { warnKind = kind; render(); } else executePlans(kind); }, true);
+}
+
+// Placement: a move option that needs a destination hex + facing, then "Set action".
+function drawPlacement(c) {
   const f = figByUid(sel);
-  const swap = WEAPON_CHANGE.has(chosenOption) && f && (f.weapons || []).length > 1;
-  if (swap && pendingReady == null) {
-    pendingReady = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
-  }
-  const wrap = document.createElement("div");
-  wrap.style.marginTop = "8px";
-  let html = `<div class="muted">Action: <b>${optLabel(chosenOption)}</b> · `
+  if (!f) { chosenOption = null; return; }
+  const needHex = NEEDS_DEST.has(chosenOption);
+  const swap = WEAPON_CHANGE.has(chosenOption) && (f.weapons || []).length > 1;
+  if (swap && pendingReady == null) pendingReady = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
+  const wrap = document.createElement("div"); wrap.style.marginTop = "8px";
+  let html = `<div class="muted">Placing <b>${f.name}</b>: ${optLabel(chosenOption)} · `
     + `dest ${pendingDest || "—"} · facing ${pendingFacing}</div>`;
-  if (swap) {
-    html += `<div style="margin-top:6px">Ready: <select id="readySel">`
-      + (f.weapons || []).map(w => `<option ${w === pendingReady ? "selected" : ""}>${w}</option>`).join("")
-      + `</select></div>`;
-  }
-  if (needsDest) html += `<div class="hint">Click a green hex to set the destination.</div>`;
-  wrap.innerHTML = html;
-  c.appendChild(wrap);
-  if (swap) {
-    wrap.querySelector("#readySel").addEventListener("change", e => { pendingReady = e.target.value; });
-  }
+  if (swap) html += `<div style="margin-top:6px">Ready: <select id="readySel">`
+    + (f.weapons || []).map(w => `<option ${w === pendingReady ? "selected" : ""}>${w}</option>`).join("")
+    + `</select></div>`;
+  if (needHex && !pendingDest) html += `<div class="hint">Click a green hex to set the destination.</div>`;
+  wrap.innerHTML = html; c.appendChild(wrap);
+  if (swap) wrap.querySelector("#readySel").addEventListener("change", e => { pendingReady = e.target.value; });
   addBtn(c, "⟲ turn", () => { pendingFacing = (pendingFacing + 5) % 6; render(); });
   addBtn(c, "⟳ turn", () => { pendingFacing = (pendingFacing + 1) % 6; render(); });
-  addBtn(c, "Confirm move", async () => {
-    await act({type:"move", uid: sel, option: chosenOption, dest: pendingDest,
-               facing: pendingFacing, ready: swap ? pendingReady : null});
-    resetSelection(); after();
-  }, true, needsDest);
+  addBtn(c, "Set action", () => {
+    PLAN[sel] = {uid: sel, phase: "move", option: chosenOption, label: optLabel(chosenOption),
+                 dest: pendingDest, facing: pendingFacing, ready: swap ? pendingReady : null};
+    chosenOption = null; pendingDest = null; pendingReady = null; render();
+  }, true, needHex && !pendingDest);
   addBtn(c, "Cancel", () => { chosenOption = null; pendingDest = null; pendingReady = null; render(); });
 }
 
-function drawCombatActions(c) {
-  const f = figByUid(sel);
-  if (!f) return;
-  const div = document.createElement("div");
-  div.style.marginTop = "6px";
-  div.innerHTML = validTargets().length
-    ? `<span class="muted">Click a highlighted enemy to attack with ${f.name}, or:</span>`
-    : `<span class="muted">${f.name} has no combat options this turn.</span>`;
-  c.appendChild(div);
-  addBtn(c, "Do nothing", () => { resetSelection(); render(); });
+// ---- per-character pop-up options menu --------------------------------------
+function closeMenu() { $("tokenMenu").style.display = "none"; }
+function openMenu(f) {
+  const rows = [];
+  if (S.phase === "move") {
+    for (const o of (optInfo.options || []))
+      rows.push({label: optLabel(o.option), act: () => chooseMoveOption(f, o.option)});
+    if (!rows.length) rows.push({label: "No moves available", muted: true});
+  } else if (S.phase === "combat") {
+    for (const uid of (optInfo._targets || [])) {
+      const e = figByUid(uid);
+      rows.push({label: `Attack ${e ? e.name : uid}`, act: () => setAttack(f, uid)});
+    }
+    rows.push({label: "Do nothing", act: () => setDoNothing(f)});
+  } else return;
+  const menu = $("tokenMenu");
+  let html = `<div class="head">${f.name}</div>`;
+  rows.forEach((r, i) => html += `<div class="row ${r.muted ? "muted" : ""}" data-i="${i}">${r.label}</div>`);
+  html += `<div class="sep"></div><div class="row muted" data-clear>Clear</div>`;
+  menu.innerHTML = html;
+  menu.style.display = "block";
+  const rect = $("svg").getBoundingClientRect(), hx = LAYOUT.hexes[f.label];
+  const px = rect.left + (hx.cx / LAYOUT.width) * rect.width + 12;
+  const py = rect.top + (hx.cy / LAYOUT.height) * rect.height - 10;
+  menu.style.left = Math.min(px, window.innerWidth - menu.offsetWidth - 8) + "px";
+  menu.style.top = Math.min(Math.max(8, py), window.innerHeight - menu.offsetHeight - 8) + "px";
+  menu.querySelectorAll(".row[data-i]").forEach(el => {
+    const r = rows[+el.dataset.i];
+    if (!r.muted) el.addEventListener("click", () => { closeMenu(); r.act(); });
+  });
+  menu.querySelector("[data-clear]").addEventListener("click", () => { closeMenu(); clearPlan(f); });
 }
 
-// Movement phase: once nothing is selected, auto-select the next character that
-// still has to move (the human's side only — computer sides play themselves).
-let autoBusy = false;
-async function maybeAutoSelect() {
-  if (autoBusy || sel || !S || S.phase !== "move") return;
-  if ((S.controllers || {})[S.moving_side] === "computer") return;
-  const next = S.figures.find(f => f.side === S.moving_side && f.can_act && !f.acted && f.label);
-  if (!next) return;
-  autoBusy = true;
-  sel = next.uid; chosenOption = null; pendingDest = null;
-  pendingFacing = next.facing; pendingReady = null;
-  optInfo = await api(`/api/game/${GID}/options?uid=${next.uid}`);
-  autoBusy = false;
+function chooseMoveOption(f, option) {
+  sel = f.uid; pendingDest = null; pendingReady = null;
+  if (NEEDS_DEST.has(option)) {
+    chosenOption = option; pendingFacing = f.facing; render();     // enter placement
+  } else {
+    const plan = {uid: f.uid, phase: "move", option, label: optLabel(option)};
+    if (WEAPON_CHANGE.has(option)) plan.ready = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
+    PLAN[f.uid] = plan; chosenOption = null; render();
+  }
+}
+function setAttack(f, target) {
+  const e = figByUid(target);
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", target, label: `Attack ${e ? e.name : target}`};
   render();
+}
+function setDoNothing(f) {
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", none: true, label: "Do nothing"};
+  render();
+}
+function clearPlan(f) {
+  delete PLAN[f.uid];
+  if (sel === f.uid) { chosenOption = null; pendingDest = null; }
+  render();
+}
+function resetAll() { PLAN = {}; warnKind = null; resetSelection(); closeMenu(); }
+
+async function executePlans(kind) {
+  closeMenu();
+  const plans = Object.values(PLAN).filter(p => p.phase === kind);
+  if (kind === "move") {
+    for (const p of plans)
+      await act({type: "move", uid: p.uid, option: p.option, dest: p.dest,
+                 facing: p.facing, ready: p.ready || null});
+    resetAll(); await act({type: "end_side_move"}); after();
+  } else {
+    for (const p of plans)
+      if (p.target) await act({type: "queue_attack", uid: p.uid, target: p.target});
+    resetAll(); await act({type: "resolve_combat"}); render();
+  }
 }
 
 function after() { render(); }
@@ -465,26 +541,20 @@ function bannerFor(phase) {
 
 // ---- interaction ------------------------------------------------------------
 async function onFigureClick(f) {
-  $("hint").textContent = "";
+  flash("");
   if (S.phase === "move") {
-    if (f.side !== S.moving_side) { flash(`${f.name} is not on the moving side.`); return; }
-    sel = f.uid; chosenOption = null; pendingDest = null; pendingFacing = f.facing;
+    if (f.side !== S.moving_side) { flash(`${f.name} is on another side.`); return; }
+    if (!f.can_act) { flash(`${f.name} can't move this turn.`); return; }
+    sel = f.uid; chosenOption = null; pendingDest = null; pendingFacing = f.facing; pendingReady = null;
     optInfo = await api(`/api/game/${GID}/options?uid=${f.uid}`);
-    render();
+    render(); openMenu(f);
   } else if (S.phase === "combat") {
-    const cur = sel ? figByUid(sel) : null;
-    if (cur && f.side !== cur.side && validTargets().includes(f.uid)) {
-      await act({type:"queue_attack", uid: sel, target: f.uid});
-      flash(`${cur.name} → ${f.name} declared.`);
-      render();
-      return;
-    }
-    // select an attacker (must have chosen an attack option this turn)
+    if (!myControlled(f)) { flash(`${f.name} isn't yours to command.`); return; }
     sel = f.uid; pendingFacing = f.facing;
     optInfo = await api(`/api/game/${GID}/options?uid=${f.uid}`);
     optInfo._targets = (f.weapon && missileReady(f))
       ? optInfo.missile_targets : optInfo.melee_targets;
-    render();
+    render(); openMenu(f);
   } else {
     sel = f.uid; render();
   }
@@ -498,6 +568,12 @@ function missileReady(f) {
 function onReachClick(label) {
   pendingDest = label; render();
 }
+
+// Click anywhere off the menu (and off a token, which stops propagation) closes it.
+document.addEventListener("click", (e) => {
+  const menu = $("tokenMenu");
+  if (menu.style.display === "block" && !menu.contains(e.target)) closeMenu();
+});
 
 // ---- side panels ------------------------------------------------------------
 function drawSelInfo() {
@@ -513,25 +589,16 @@ function drawSelInfo() {
     `<div class="muted">weapon: ${f.weapon || "—"} · ${f.posture}` +
     `${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>` +
     `<div class="muted">carrying: ${(f.weapons || []).join(", ") || "—"}</div>` +
-    optionButtons(f);
+    planLine(f);
 }
-function optionButtons(f) {
-  if (S.phase !== "move" || f.uid !== sel || f.side !== S.moving_side || !optInfo) return "";
-  let html = `<div style="margin-top:8px" class="muted">Choose an action:</div><div>`;
-  for (const o of optInfo.options) {
-    const cls = (o.option === chosenOption) ? "primary" : "";
-    html += `<button class="${cls}" onclick="pickOption('${o.option}')">` +
-            `${optLabel(o.option)}${o.is_attack ? " ⚔" : ""}</button>`;
-  }
-  return html + `</div>`;
-}
-function pickOption(opt) {
-  chosenOption = opt;
-  pendingDest = null;
-  pendingReady = null;
-  const f = figByUid(sel);
-  pendingFacing = (pendingFacing == null) ? f.facing : pendingFacing;
-  render();
+function planLine(f) {
+  const p = PLAN[f.uid];
+  if (p) return `<div style="margin-top:8px" class="muted">Action set: <b>${p.label}</b>`
+    + `${p.dest ? " → " + p.dest : ""}</div>`;
+  if ((S.phase === "move" && f.side === S.moving_side && f.can_act) ||
+      (S.phase === "combat" && myControlled(f) && f.can_act))
+    return `<div style="margin-top:8px" class="muted">Click this counter on the board for its options.</div>`;
+  return "";
 }
 
 function drawRoster() {
