@@ -81,6 +81,7 @@ def narrate_status(target: Figure, status: str | None) -> str | None:
 # ---- non-combat operations -------------------------------------------------
 _MOVE_VERB = {
     Option.MOVE: "advances",
+    Option.HALF_MOVE: "moves up",
     Option.CHARGE_ATTACK: "charges in",
     Option.DODGE: "darts, dodging",
     Option.MISSILE_ATTACK: "takes aim",

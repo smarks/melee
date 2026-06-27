@@ -23,6 +23,7 @@ ANY = "any"
 class Option(str, Enum):
     # disengaged options (a, b, c, e, f, g)
     MOVE = "move"                    # (a) move up to full MA
+    HALF_MOVE = "half_move"          # (a') move up to half MA, no attack
     CHARGE_ATTACK = "charge_attack"  # (b) move <= half MA, then attack (no missile)
     DODGE = "dodge"                  # (c) move <= half MA while dodging
     READY_WEAPON = "ready_weapon"    # (e) move <= 2, swap ready weapon/shield
@@ -48,6 +49,7 @@ class OptionSpec:
 
 _SPECS: dict[Option, OptionSpec] = {
     Option.MOVE: OptionSpec(Option.MOVE, DISENGAGED, "full", False, False, False),
+    Option.HALF_MOVE: OptionSpec(Option.HALF_MOVE, DISENGAGED, "half", False, False, False),
     Option.CHARGE_ATTACK: OptionSpec(
         Option.CHARGE_ATTACK, DISENGAGED, "half", True, False, False),
     Option.DODGE: OptionSpec(Option.DODGE, DISENGAGED, "half", False, False, True),

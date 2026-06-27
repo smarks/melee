@@ -39,6 +39,7 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "collapsed": figure.collapsed,
         "engaged": state.engaged(figure) if figure.can_act() else False,
         "can_act": figure.can_act(),
+        "acted": figure.current_option is not None,
         "armor": figure.armor.name,
         "model": "melee",
     }
