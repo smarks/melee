@@ -16,7 +16,7 @@ import secrets
 
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 
 from hexarena.dice import Dice
 from hexarena.hex import Hex
@@ -30,6 +30,7 @@ from engine.state import GameState, IllegalAction
 
 from . import scenario
 from .geometry import label_of, layout
+from .models import SavedCharacter
 from .serialize import dump_game
 
 # gid -> {"state": GameState, "layout": dict, "phase": str,
@@ -178,8 +179,44 @@ def _payload(game: dict) -> dict:
 
 
 # ---- views ------------------------------------------------------------------
+@ensure_csrf_cookie
 def index(request):
     return render(request, "board/board.html")
+
+
+# ---- saved characters (logged-in players) -----------------------------------
+def api_characters(request):
+    """List (GET) or save (POST) the signed-in player's saved fighters."""
+    if not request.user.is_authenticated:
+        return JsonResponse({"error": "log in to save characters"}, status=401)
+    if request.method == "GET":
+        saved = request.user.saved_characters.all()
+        profile = request.GET.get("profile")
+        if profile:
+            saved = saved.filter(profile=profile)
+        return JsonResponse({"characters": [c.as_dict() for c in saved]})
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "bad JSON"}, status=400)
+        name = (body.get("name") or "").strip()
+        if not name:
+            return JsonResponse({"error": "a name is required"}, status=400)
+        obj, _ = SavedCharacter.objects.update_or_create(
+            owner=request.user, name=name,
+            defaults={"profile": body.get("profile", ""), "spec": body.get("spec", {})})
+        return JsonResponse(obj.as_dict())
+    return HttpResponse(status=405)
+
+
+def api_character_delete(request, pk):
+    if not request.user.is_authenticated:
+        return JsonResponse({"error": "log in"}, status=401)
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    request.user.saved_characters.filter(pk=pk).delete()
+    return JsonResponse({"ok": True})
 
 
 def _start_game(arena, figures, profile, computer_sides, seed) -> dict:
