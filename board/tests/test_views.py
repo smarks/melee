@@ -245,6 +245,27 @@ def test_attack_can_be_declared_in_the_combat_phase(client: Client) -> None:
         del GAMES["duel-test"]
 
 
+def test_auto_facing_follows_direction_of_travel() -> None:
+    from board.views import _auto_facing
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=9, rows=9)
+    grid = arena.layout
+    mover = create_human("M", 12, 12, "a", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    mover.position = Hex(5, 5)
+    mover.facing = 0                                  # starts facing "up"
+    state = GameState(arena, [mover])
+    dest = Hex(5, 8)
+    path = [Hex(5, 6), Hex(5, 7), Hex(5, 8)]          # walked downward, no enemy near
+    facing = _auto_facing(state, mover, dest, path)
+    assert facing == grid.direction_to(Hex(5, 7), Hex(5, 8))   # faces the way it went
+    assert facing != 0                                # not the stale starting facing
+
+
 def test_auto_facing_turns_toward_an_adjacent_enemy() -> None:
     from board.views import _auto_facing
     from engine.arena import Arena

@@ -313,22 +313,6 @@ function drawArena() {
     if (f.dodging) cls += " dodge";
     g.setAttribute("class", cls);
 
-    // facing wedge toward the front hex
-    if (f.front_label && LAYOUT.hexes[f.front_label]) {
-      const fh = LAYOUT.hexes[f.front_label];
-      const dx = fh.cx - h.cx, dy = fh.cy - h.cy;
-      const len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len, uy = dy / len;
-      const r = LAYOUT.size * 0.62;
-      const tip = document.createElementNS(SVG, "polygon");
-      const px = h.cx + ux * (r + 8), py = h.cy + uy * (r + 8);
-      const ox = -uy, oy = ux;
-      tip.setAttribute("points",
-        `${px},${py} ${h.cx + ux*r + ox*7},${h.cy + uy*r + oy*7} ${h.cx + ux*r - ox*7},${h.cy + uy*r - oy*7}`);
-      tip.setAttribute("fill", fillFor(f.side));
-      g.appendChild(tip);
-    }
-
     const body = document.createElementNS(SVG, "circle");
     body.setAttribute("class", "body");
     body.setAttribute("cx", h.cx); body.setAttribute("cy", h.cy);
@@ -340,6 +324,24 @@ function drawArena() {
     txt.setAttribute("x", h.cx); txt.setAttribute("y", h.cy);
     txt.textContent = f.dead ? "✗" : hpCur(f);
     g.appendChild(txt);
+
+    // facing arrow — drawn on top of the token, in white, so it reads clearly
+    if (!f.dead && f.front_label && LAYOUT.hexes[f.front_label]) {
+      const fh = LAYOUT.hexes[f.front_label];
+      const len = Math.hypot(fh.cx - h.cx, fh.cy - h.cy) || 1;
+      const ux = (fh.cx - h.cx) / len, uy = (fh.cy - h.cy) / len;
+      const ox = -uy, oy = ux, s = LAYOUT.size;
+      const rIn = s * 0.5, rOut = s * 0.92, w = s * 0.32;
+      const arrow = document.createElementNS(SVG, "polygon");
+      arrow.setAttribute("points",
+        `${h.cx + ux*rOut},${h.cy + uy*rOut} `
+        + `${h.cx + ux*rIn + ox*w},${h.cy + uy*rIn + oy*w} `
+        + `${h.cx + ux*rIn - ox*w},${h.cy + uy*rIn - oy*w}`);
+      arrow.setAttribute("fill", "#fff");
+      arrow.setAttribute("stroke", "#0008");
+      arrow.setAttribute("stroke-width", "0.8");
+      g.appendChild(arrow);
+    }
 
     if (!f.dead) {                                   // health bar beneath the token
       const bw = LAYOUT.size * 1.1, bh = 5;
