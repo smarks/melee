@@ -4,6 +4,16 @@ import json
 import pytest
 
 
+def test_board_migration_is_detected_on_disk() -> None:
+    """Guards the SavedCharacter table: if board/migrations/__init__.py goes
+    missing, Django treats board.migrations as a namespace package and silently
+    ignores the migration, so `migrate` never creates board_savedcharacter."""
+    from django.db.migrations.loader import MigrationLoader
+
+    loader = MigrationLoader(connection=None, ignore_no_migrations=True)
+    assert ("board", "0001_initial") in loader.disk_migrations
+
+
 def _spec(**kw):
     base = dict(name="Bruiser", side="red", strength=13, dexterity=11,
                 weapon="Broadsword", armor="Plate", shield="None")
