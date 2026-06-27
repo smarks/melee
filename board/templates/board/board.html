@@ -699,6 +699,20 @@ function buildRoster(profile, teams, perTeam) {
 }
 
 const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+// A random weapon of the given kind. Prefer ones the strength allows; fall back
+// to any of that kind only when under-strength wielding is allowed (Tarmar).
+function randWeapon(kind, strength, allowUnder) {
+  const ofKind = CAT.weapons.filter(w => w.kind === kind);
+  const legal = ofKind.filter(w => (w.str_req || 0) <= strength);
+  const pool = legal.length ? legal : (allowUnder ? ofKind : []);
+  return pool.length ? pool[rint(0, pool.length - 1)].name : null;
+}
+function setWeapons(card, strength, allowUnder) {     // always one melee + one missile
+  const melee = randWeapon("melee", strength, allowUnder);
+  const missile = randWeapon("missile", strength, allowUnder);
+  if (melee) card.querySelector('[data-eq="weapon"]').value = melee;
+  if (missile) card.querySelector('[data-eq="weapon2"]').value = missile;
+}
 function generateInto(card) {       // randomize this fighter within the rules
   if (RULES.model === "tarmar") {
     let pts = RULES.budget - RULES.fields.length * RULES.min;
@@ -710,12 +724,12 @@ function generateInto(card) {       // randomize this fighter within the rules
     }
     RULES.fields.forEach(f => card.querySelector(`[data-stat="${f}"]`).value = vals[f]);
     card.querySelectorAll("[data-skillkey]").forEach(i => i.value = rint(0, RULES.skill_max));
+    setWeapons(card, vals.strength || RULES.min, true);   // under-strength allowed in Tarmar
   } else {
     const st = rint(RULES.min, RULES.total - RULES.min);
     card.querySelector('[data-stat="strength"]').value = st;
     card.querySelector('[data-stat="dexterity"]').value = RULES.total - st;
-    const legal = CAT.weapons.filter(w => (w.str_req || 0) <= st);
-    card.querySelector('[data-eq="weapon"]').value = legal[rint(0, legal.length - 1)].name;
+    setWeapons(card, st, false);
   }
   refreshCard(card);
 }
