@@ -245,10 +245,10 @@ function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 // human-readable labels + which options require a destination hex
 const PHASE_LABEL = {initiative: "Initiative", move: "Movement", combat: "Combat"};
 const OPTION_LABEL = {
-  move: "Full move", half_move: "Half move", charge_attack: "Charge & Attack", dodge: "Dodge",
-  ready_weapon: "Ready Weapon", missile_attack: "Missile Attack", stand_up: "Stand Up",
-  shift_attack: "Shift & Attack", shift_defend: "Shift & Defend",
-  one_last_shot: "One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
+  move: "Full move", half_move: "Half move", charge_attack: "⚔ Charge & Attack", dodge: "Dodge",
+  ready_weapon: "Ready Weapon", missile_attack: "⚔ Missile Attack", stand_up: "Stand Up",
+  shift_attack: "⚔ Attack (may shift 1)", shift_defend: "Shift & Defend",
+  one_last_shot: "⚔ One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
 };
 const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
