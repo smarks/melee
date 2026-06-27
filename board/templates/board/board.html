@@ -16,14 +16,19 @@
   body { margin: 0; background: var(--bg); color: var(--ink);
          font: 14px/1.45 system-ui, sans-serif; }
   header { padding: 10px 16px; border-bottom: 1px solid var(--line);
-           display: flex; align-items: baseline; gap: 16px; }
+           display: flex; align-items: center; gap: 16px; }
   header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
   header .sub { color: var(--muted); font-size: 12px; }
   .wrap { display: flex; gap: 0; height: calc(100vh - 49px); }
   .arena { flex: 1; overflow: auto; display: grid; place-items: center; padding: 16px; }
-  aside { width: 340px; border-left: 1px solid var(--line); background: var(--panel);
+  aside { width: 420px; border-left: 1px solid var(--line); background: var(--panel);
           display: flex; flex-direction: column; overflow: auto; }
   .pad { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  /* Fixed-size right-hand panels: each scrolls internally; the layout never
+     reshuffles as content changes. Details (#selInfo) is the largest. */
+  #roster { flex: 0 0 150px; overflow: auto; }
+  #controls { flex: 0 0 210px; overflow: auto; }
+  #selInfo { flex: 1 1 260px; overflow: auto; }
   .seclabel { padding: 9px 16px 3px; color: var(--muted); font-size: 11px;
               text-transform: uppercase; letter-spacing: .6px; }
   .banner { font-weight: 600; }
@@ -41,8 +46,7 @@
   .chip.green { color: var(--green); border-color: var(--green); }
   .chip.gold { color: var(--gold); border-color: var(--gold); }
   .chip.violet { color: var(--violet); border-color: var(--violet); }
-  #log { flex: 1 1 140px; min-height: 120px; overflow: auto; padding: 6px 16px 10px;
-         font-size: 12.5px; }
+  #log { flex: 0 0 190px; overflow: auto; padding: 6px 16px 10px; font-size: 12.5px; }
   #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
   .roster .row { display: flex; justify-content: space-between; padding: 4px 0;
                  border-bottom: 1px solid #2a2733; cursor: pointer; }
@@ -77,6 +81,7 @@
 <body>
 <header>
   <h1>Melee</h1>
+  <button class="primary" onclick="openSetup()">New game</button>
   <span class="sub">The Fantasy Trip — man-to-man combat</span>
   <span class="sub" id="turnInfo"></span>
   <span class="sub" style="margin-left:auto">
@@ -96,11 +101,11 @@
     </div>
     <div class="seclabel">Game status</div>
     <div id="log"></div>
+    <div class="seclabel">Characters</div>
     <div class="pad roster" id="roster"></div>
+    <div class="seclabel">Controls</div>
     <div class="pad" id="controls"></div>
-    <div class="pad">
-      <button class="primary" onclick="openSetup()">New game</button>
-    </div>
+    <div class="seclabel">Selected character</div>
     <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
   </aside>
 </div>
