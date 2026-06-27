@@ -187,12 +187,12 @@ function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 // human-readable labels + which options require a destination hex
 const PHASE_LABEL = {initiative: "Initiative", move: "Movement", combat: "Combat"};
 const OPTION_LABEL = {
-  move: "Move", charge_attack: "Charge & Attack", dodge: "Dodge",
+  move: "Full move", half_move: "Half move", charge_attack: "Charge & Attack", dodge: "Dodge",
   ready_weapon: "Ready Weapon", missile_attack: "Missile Attack", stand_up: "Stand Up",
   shift_attack: "Shift & Attack", shift_defend: "Shift & Defend",
   one_last_shot: "One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
 };
-const NEEDS_DEST = new Set(["move", "charge_attack", "dodge", "disengage"]);
+const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
 const TEAM_FILL = {red: "#d0524f", blue: "#4f86d0", green: "#57b894", gold: "#e0b13c", violet: "#b07ad8"};
 const fillFor = side => TEAM_FILL[side] || "#888";
@@ -219,6 +219,7 @@ function render() {
   drawLog();
   const vsComputer = S.controllers && Object.values(S.controllers).includes("computer");
   $("turnInfo").textContent = (PROFILE || "") + (vsComputer ? " · vs Computer" : " · hot-seat");
+  maybeAutoSelect();
 }
 
 function drawArena() {
@@ -334,21 +335,23 @@ function drawControls() {
       }
     }
   } else if (phase === "move") {
+    const left = S.figures.filter(f => f.side === S.moving_side && f.can_act && !f.acted).length;
     const span = document.createElement("div");
-    span.innerHTML = `<span class="chip ${S.moving_side}">${S.moving_side}</span> to move — `
-      + `pick a figure, choose an action, set its destination &amp; facing, then Confirm.`;
+    span.innerHTML = `<span class="chip ${S.moving_side}">${S.moving_side}</span> to move`
+      + ` — <b>${left}</b> left. Pick an action, set destination &amp; facing, then Confirm.`;
     c.appendChild(span);
-    if (chosenOption) drawMoveActions(c);
-    addBtn(c, `End ${S.moving_side}'s movement`, () => {
+    if (sel && chosenOption) drawMoveActions(c);
+    addBtn(c, "Done with movement phase", () => {
       resetSelection(); act({type:"end_side_move"}).then(after);
     });
   } else if (phase === "combat") {
     const queued = S.queued || 0;
     const span = document.createElement("div");
-    span.innerHTML = `Declare attacks: click an enemy in a figure's front hex. `
+    span.innerHTML = `Pick a character, then click a highlighted enemy — or Do nothing. `
       + `<b>${queued}</b> declared.`;
     c.appendChild(span);
-    addBtn(c, queued ? `Resolve combat (${queued})` : "Resolve combat",
+    if (sel) drawCombatActions(c);
+    addBtn(c, queued ? `Done with combat phase — resolve (${queued})` : "Done with combat phase",
       () => { act({type:"resolve_combat"}).then(() => { resetSelection(); render(); }); },
       true, queued === 0);
     addBtn(c, "End turn", () => { resetSelection(); act({type:"end_turn"}).then(after); });
@@ -385,6 +388,34 @@ function drawMoveActions(c) {
     resetSelection(); after();
   }, true, needsDest);
   addBtn(c, "Cancel", () => { chosenOption = null; pendingDest = null; pendingReady = null; render(); });
+}
+
+function drawCombatActions(c) {
+  const f = figByUid(sel);
+  if (!f) return;
+  const div = document.createElement("div");
+  div.style.marginTop = "6px";
+  div.innerHTML = validTargets().length
+    ? `<span class="muted">Click a highlighted enemy to attack with ${f.name}, or:</span>`
+    : `<span class="muted">${f.name} has no combat options this turn.</span>`;
+  c.appendChild(div);
+  addBtn(c, "Do nothing", () => { resetSelection(); render(); });
+}
+
+// Movement phase: once nothing is selected, auto-select the next character that
+// still has to move (the human's side only — computer sides play themselves).
+let autoBusy = false;
+async function maybeAutoSelect() {
+  if (autoBusy || sel || !S || S.phase !== "move") return;
+  if ((S.controllers || {})[S.moving_side] === "computer") return;
+  const next = S.figures.find(f => f.side === S.moving_side && f.can_act && !f.acted && f.label);
+  if (!next) return;
+  autoBusy = true;
+  sel = next.uid; chosenOption = null; pendingDest = null;
+  pendingFacing = next.facing; pendingReady = null;
+  optInfo = await api(`/api/game/${GID}/options?uid=${next.uid}`);
+  autoBusy = false;
+  render();
 }
 
 function after() { render(); }
