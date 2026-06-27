@@ -269,6 +269,48 @@ def test_auto_facing_turns_toward_an_adjacent_enemy() -> None:
     assert _auto_facing(state, mover, Hex(6, 6)) == mover.facing
 
 
+def test_edit_spec_round_trips_through_build() -> None:
+    from engine import chargen
+
+    from board.serialize import _edit_spec
+
+    spec = {"name": "Bob", "side": "red", "strength": 13, "dexterity": 11,
+            "weapon": "Broadsword", "weapon2": "Mace", "armor": "Plate", "shield": "None"}
+    figure = chargen.build("Classic Melee", spec)
+    derived = _edit_spec(figure)
+    assert derived["strength"] == 13 and derived["dexterity"] == 11
+    assert derived["weapon"] == "Broadsword" and derived["armor"] == "Plate"
+    # the derived spec rebuilds the same fighter
+    assert chargen.build("Classic Melee", derived).ready_weapon.name == "Broadsword"
+
+
+def test_update_figure_rebuilds_in_place_preserving_board_state() -> None:
+    from board.views import GAMES, _update_figure
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import SHORTSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    hero = create_human("Hero", 12, 12, "red", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    hero.position = Hex(3, 3)
+    hero.facing = 2
+    hero.damage_taken = 3
+    GAMES["upd-test"] = {"state": GameState(arena, [hero]), "profile": "Classic Melee"}
+    try:
+        _update_figure(GAMES["upd-test"], hero.uid, {
+            "strength": 13, "dexterity": 11, "weapon": "Broadsword",
+            "armor": "Leather", "shield": "None"})
+        new = GAMES["upd-test"]["state"].figures[0]
+        assert new.uid == hero.uid                       # same identity
+        assert new.strength == 13 and new.ready_weapon.name == "Broadsword"
+        assert new.position == Hex(3, 3) and new.facing == 2   # board state kept
+        assert new.damage_taken == 3                     # wounds carried over
+    finally:
+        del GAMES["upd-test"]
+
+
 def test_catalog_endpoint_lists_legal_choices(client: Client) -> None:
     data = client.get("/api/catalog?profile=Tarmar").json()
     assert data["stat_rules"]["model"] == "tarmar"

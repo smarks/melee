@@ -14,6 +14,28 @@ from engine.tarmar import TarmarFigure
 from .geometry import label_of
 
 
+def _edit_spec(figure: Figure) -> dict:
+    """The figure's base chargen spec, so the UI can edit it and round-trip it
+    through :func:`engine.chargen.build`."""
+    ready = figure.ready_weapon
+    ready_name = ready.name if ready else "Dagger"
+    second = next((w for w in figure.weapons
+                   if w is not ready and w.name != "Dagger"), None)
+    spec = {
+        "name": figure.name, "side": figure.side,
+        "strength": figure.strength, "dexterity": figure.dexterity,
+        "weapon": ready_name, "weapon2": second.name if second else "None",
+        "armor": figure.armor.name, "shield": figure.shield.name,
+    }
+    if isinstance(figure, TarmarFigure):
+        spec.update(
+            intelligence=figure.intelligence, wisdom=figure.wisdom,
+            constitution=figure.constitution, charisma=figure.charisma,
+            skill=figure.weapon_skill.get(ready_name, 0),
+            skill2=figure.weapon_skill.get(second.name, 0) if second else 0)
+    return spec
+
+
 def _figure_dict(state: GameState, figure: Figure) -> dict:
     front_label = None
     if figure.position is not None:
@@ -42,6 +64,7 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "acted": figure.current_option is not None,
         "armor": figure.armor.name,
         "model": "melee",
+        "edit_spec": _edit_spec(figure),
     }
     if isinstance(figure, TarmarFigure):
         # Tarmar fighters track two pools instead of a single ST; surface both

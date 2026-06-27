@@ -213,7 +213,7 @@ function postJSON(path, body) {
 async function startGame(query) {
   const data = await api(`/api/game/new?${query}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
-  resetSelection(); render();
+  resetSelection(); ensureGameCatalog(); render();
 }
 function bootGame() { startGame("teams=2&per_team=2&mode=pxai"); }  // default on load
 function openSetup() { $("setup").style.display = "flex"; }
@@ -588,16 +588,50 @@ function drawSelInfo() {
   const box = $("selInfo");
   const f = sel ? figByUid(sel) : null;
   if (!f) { box.innerHTML = `<span class="muted">No figure selected.</span>`; return; }
-  box.innerHTML =
-    `<div><b>${f.name}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
+  box.innerHTML = statusHeader(f) + planLine(f);
+  if (!f.edit_spec) return;
+  if (!CAT || !RULES || CAT.profile !== PROFILE) { ensureGameCatalog(); return; }
+  const label = document.createElement("div");
+  label.className = "muted"; label.style.margin = "8px 0 2px";
+  label.textContent = "Edit & apply live:";
+  box.appendChild(label);
+  box.appendChild(liveEditCard(f));
+}
+function statusHeader(f) {
+  return `<div><b>${f.name}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
     (f.model === "tarmar"
-      ? `<div class="muted">Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · adjDX ${f.dx} · ${f.armor}${f.shield ? " · "+f.shield : ""}</div>`
-        + `<div class="muted">weapon skill: ${f.skill}</div>`
-      : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx} · ${f.armor}${f.shield ? " · "+f.shield : ""}</div>`) +
-    `<div class="muted">weapon: ${f.weapon || "—"} · ${f.posture}` +
-    `${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>` +
-    `<div class="muted">carrying: ${(f.weapons || []).join(", ") || "—"}</div>` +
-    planLine(f);
+      ? `<div class="muted">Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · adjDX ${f.dx}</div>`
+      : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx}</div>`) +
+    `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>`;
+}
+
+// Catalog for the *running* game's profile (the editor may have loaded another).
+let gameCatBusy = false;
+async function ensureGameCatalog() {
+  if (gameCatBusy || !PROFILE || (CAT && RULES && CAT.profile === PROFILE)) return;
+  gameCatBusy = true;
+  CAT = await api(`/api/catalog?profile=${encodeURIComponent(PROFILE)}`);
+  RULES = CAT.stat_rules;
+  gameCatBusy = false;
+  render();
+}
+
+function liveEditCard(f) {
+  const card = document.createElement("div"); card.className = "card";
+  card.dataset.side = f.side;
+  card.innerHTML = cardInner(f.edit_spec);
+  card.addEventListener("input", () => refreshCard(card));
+  card.addEventListener("change", () => refreshCard(card));
+  const apply = document.createElement("button");
+  apply.className = "primary"; apply.textContent = "Apply to game";
+  apply.addEventListener("click", () => applyEdit(card, f.uid));
+  card.appendChild(apply);
+  setTimeout(() => refreshCard(card), 0);
+  return card;
+}
+async function applyEdit(card, uid) {
+  const data = await act({type: "update_figure", uid, spec: readCard(card)});
+  if (data) { flash("Applied changes."); render(); }
 }
 function planLine(f) {
   const p = PLAN[f.uid];
@@ -729,14 +763,11 @@ function skillInput(key, value) {
     ? `<label>skill <input type="number" data-skillkey="${key}" value="${value || 0}" `
       + `min="0" max="${RULES.skill_max}" style="width:46px"></label>` : "";
 }
-function fighterCard(f, side_i) {
-  const card = document.createElement("div"); card.className = "card";
+function cardInner(f) {     // the editable fields shared by the editor and the live panel
   const stats = RULES.fields.map(field =>
     `<label>${field.slice(0,3).toUpperCase()} <input type="number" data-stat="${field}" value="${f[field]}" `
     + `min="${RULES.min || 1}" max="${RULES.max || 30}" style="width:52px"></label>`).join(" ");
-  card.dataset.side = f.side;
-  card.innerHTML =
-    `<div><span class="chip ${f.side}">${f.side}</span> `
+  return `<div><span class="chip ${f.side}">${f.side}</span> `
     + `<input data-name value="${f.name}" style="width:130px"></div>`
     + `<div style="margin-top:6px">${stats} <span class="muted" data-budget></span></div>`
     + `<div style="margin-top:6px">Weapon <select data-eq="weapon">${optionTags(CAT.weapons, f.weapon)}</select> ${skillInput("skill", f.skill)}</div>`
@@ -744,6 +775,11 @@ function fighterCard(f, side_i) {
     + `<div style="margin-top:6px">Armour <select data-eq="armor">${optionTags(CAT.armors, f.armor || "None")}</select> `
     + `Shield <select data-eq="shield">${optionTags(CAT.shields, f.shield || "None")}</select></div>`
     + `<div class="hint" data-err></div>`;
+}
+function fighterCard(f, side_i) {
+  const card = document.createElement("div"); card.className = "card";
+  card.dataset.side = f.side;
+  card.innerHTML = cardInner(f);
   card.addEventListener("input", () => refreshCard(card));
   card.addEventListener("change", () => refreshCard(card));
   const gen = document.createElement("button");

@@ -27,6 +27,7 @@ from engine.options import Option, spec
 from engine.profile import PROFILES
 from engine.rules_data import WeaponKind
 from engine.state import GameState, IllegalAction
+from engine.tarmar import TarmarFigure
 
 from . import scenario
 from .geometry import label_of, layout
@@ -492,4 +493,35 @@ def _dispatch(game: dict, body: dict):
         _do_end_turn(game)
         return None
 
+    if action == "update_figure":
+        _update_figure(game, body.get("uid", ""), body.get("spec") or {})
+        return None
+
     raise IllegalAction(f"unknown action {action!r}")
+
+
+def _update_figure(game: dict, uid: str, spec: dict) -> None:
+    """Rebuild a live figure from an edited spec, in place — same board position,
+    facing, posture, current option and carried-over damage. Side is fixed."""
+    state: GameState = game["state"]
+    figure = _figure(state, uid)
+    spec = dict(spec)
+    spec["side"] = figure.side
+    spec.setdefault("name", figure.name)
+    try:
+        rebuilt = chargen.build(game["profile"], spec)
+    except (ValueError, KeyError) as exc:
+        raise IllegalAction(str(exc))
+    rebuilt.uid = figure.uid
+    rebuilt.position = figure.position
+    rebuilt.facing = figure.facing
+    rebuilt.posture = figure.posture
+    rebuilt.current_option = figure.current_option
+    rebuilt.attacked_this_turn = figure.attacked_this_turn
+    rebuilt.dodging = figure.dodging
+    rebuilt.damage_taken = min(figure.damage_taken, rebuilt.strength)
+    if isinstance(rebuilt, TarmarFigure) and isinstance(figure, TarmarFigure):
+        rebuilt.fatigue_roll = figure.fatigue_roll
+        rebuilt.fatigue_taken = min(figure.fatigue_taken, rebuilt.fatigue)
+        rebuilt.body_taken = min(figure.body_taken, rebuilt.body)
+    state.figures[state.figures.index(figure)] = rebuilt
