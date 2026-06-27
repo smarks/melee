@@ -159,6 +159,15 @@ let pendingReady = null; // carried weapon to switch to
 const $ = id => document.getElementById(id);
 const api = (path, opts) => fetch(path, opts).then(r => r.json());
 
+const LOGGED_IN = {{ request.user.is_authenticated|yesno:"true,false" }};
+const csrftoken = () => (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || "";
+let SAVED = [];   // the signed-in player's saved characters (for the editor)
+function postJSON(path, body) {
+  return fetch(path, {method: "POST", headers: {
+    "Content-Type": "application/json", "X-CSRFToken": csrftoken()},
+    body: JSON.stringify(body)}).then(r => r.json());
+}
+
 async function startGame(query) {
   const data = await api(`/api/game/new?${query}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
@@ -582,13 +591,37 @@ async function openEditor() {
   const profile = $("profile").value;
   CAT = await api(`/api/catalog?profile=${encodeURIComponent(profile)}`);
   RULES = CAT.stat_rules;
+  if (LOGGED_IN) {
+    SAVED = (await api(`/api/characters?profile=${encodeURIComponent(profile)}`)).characters || [];
+  }
   const teams = parseInt($("teams").value, 10), perTeam = parseInt($("perTeam").value, 10);
   const wrap = $("editorRoster"); wrap.innerHTML = "";
   buildRoster(profile, teams, perTeam).forEach((f, i) => wrap.appendChild(fighterCard(f, i)));
-  $("editorErr").textContent = "";
+  $("editorErr").textContent = LOGGED_IN ? "" : "Log in to save and reuse characters.";
   $("editor").style.display = "flex";
 }
 function closeEditor() { $("editor").style.display = "none"; }
+
+function loadOptions() {
+  return `<option value="">Load saved…</option>`
+    + SAVED.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
+}
+function applySpecToCard(card, spec) {        // fill a card from a saved spec (keep its team)
+  if (spec.name != null) card.querySelector("[data-name]").value = spec.name;
+  card.querySelectorAll("[data-stat]").forEach(i => { if (spec[i.dataset.stat] != null) i.value = spec[i.dataset.stat]; });
+  card.querySelectorAll("[data-eq]").forEach(s => { if (spec[s.dataset.eq] != null) s.value = spec[s.dataset.eq]; });
+  card.querySelectorAll("[data-skillkey]").forEach(i => { if (spec[i.dataset.skillkey] != null) i.value = spec[i.dataset.skillkey]; });
+  refreshCard(card);
+}
+async function saveCharacter(card) {
+  const spec = readCard(card);
+  const data = await postJSON("/api/characters", {name: spec.name, profile: $("profile").value, spec});
+  if (data.error) { $("editorErr").textContent = "Save failed: " + data.error; return; }
+  const idx = SAVED.findIndex(c => c.id === data.id);
+  if (idx >= 0) SAVED[idx] = data; else SAVED.push(data);
+  $("editorErr").textContent = `Saved “${data.name}”.`;
+  $("editorRoster").querySelectorAll("select.loadsel").forEach(s => s.innerHTML = loadOptions());
+}
 
 function optionTags(list, chosen) {
   return list.map(o => `<option ${o.name === chosen ? "selected" : ""}>${o.name}</option>`).join("");
@@ -619,6 +652,21 @@ function fighterCard(f, side_i) {
   gen.textContent = "🎲 Generate";
   gen.addEventListener("click", () => generateInto(card));
   card.appendChild(gen);
+  if (LOGGED_IN) {
+    const save = document.createElement("button");
+    save.textContent = "💾 Save";
+    save.addEventListener("click", () => saveCharacter(card));
+    card.appendChild(save);
+    const load = document.createElement("select");
+    load.className = "loadsel";
+    load.innerHTML = loadOptions();
+    load.addEventListener("change", () => {
+      const c = SAVED.find(x => String(x.id) === load.value);
+      if (c) applySpecToCard(card, c.spec);
+      load.value = "";
+    });
+    card.appendChild(load);
+  }
   setTimeout(() => refreshCard(card), 0);
   return card;
 }
