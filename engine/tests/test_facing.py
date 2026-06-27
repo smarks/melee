@@ -9,6 +9,7 @@ from engine.facing import (
     SIDE,
     attack_zone,
     facing_bonus,
+    is_engaged,
     is_engaged_by,
     zone_of_direction,
 )
@@ -71,3 +72,20 @@ def test_prone_figure_engages_no_one() -> None:
     front_hex = LAYOUT.neighbor(Hex(5, 5), 0)
     attacker = _place("A", front_hex, facing=3)
     assert not is_engaged_by(LAYOUT, attacker, target)
+
+
+def test_engagement_is_mutual_facing_an_adjacent_enemy_counts() -> None:
+    enemy = _place("E", Hex(5, 5), facing=0)          # the enemy faces direction 0
+    behind = LAYOUT.neighbor(Hex(5, 5), 3)            # stand behind it (its rear)
+    me = _place("M", behind, facing=0)                # but I turn to face the enemy
+    # I'm in the enemy's rear, so it does not engage me...
+    assert not is_engaged_by(LAYOUT, me, enemy)
+    # ...yet the enemy stands in MY front hex, so I am engaged and may Shift & Attack.
+    assert is_engaged(LAYOUT, me, [enemy])
+
+
+def test_not_engaged_when_neither_faces_the_other() -> None:
+    enemy = _place("E", Hex(5, 5), facing=0)
+    side = LAYOUT.neighbor(Hex(5, 5), 2)              # the enemy's side hex
+    me = _place("M", side, facing=2)                  # facing away from the enemy
+    assert not is_engaged(LAYOUT, me, [enemy])

@@ -86,8 +86,24 @@ def is_engaged_by(layout: HexLayout, figure: Figure, enemy: Figure) -> bool:
 
 
 def is_engaged(layout: HexLayout, figure: Figure, enemies) -> bool:
-    """True if any standing enemy has ``figure`` in its front hex."""
-    return any(is_engaged_by(layout, figure, enemy) for enemy in enemies)
+    """True if ``figure`` is in melee contact with any standing enemy.
+
+    Contact is mutual: a figure is engaged if it stands in an enemy's front hex
+    **or** a standing enemy stands in the figure's own front hex (i.e. it is
+    adjacent and facing the enemy). So two figures standing face-to-face both
+    count as engaged — and both may Shift & Attack.
+    """
+    for enemy in enemies:
+        if enemy.posture == Posture.PRONE or enemy.collapsed:
+            continue
+        if is_engaged_by(layout, figure, enemy):
+            return True  # the enemy faces the figure
+        if (figure.posture != Posture.PRONE and not figure.collapsed
+                and figure.position is not None and enemy.position is not None
+                and layout.distance(figure.position, enemy.position) == 1
+                and zone_toward(layout, figure, enemy.position) == FRONT):
+            return True  # the figure faces the enemy
+    return False
 
 
 def attack_zone(layout: HexLayout, attacker: Figure, target: Figure) -> str | None:
