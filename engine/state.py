@@ -146,7 +146,16 @@ class GameState:
     def legal_options(self, figure: Figure) -> list[Option]:
         if figure.posture != Posture.STANDING:
             return [Option.STAND_UP]
-        return options_for(engaged=self.engaged(figure))
+        weapon = figure.ready_weapon
+        has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+        legal: list[Option] = []
+        for option in options_for(engaged=self.engaged(figure)):
+            if option == Option.STAND_UP:
+                continue                       # already standing — nothing to do
+            if spec(option).is_missile and not has_missile:
+                continue                       # no missile weapon ready to fire
+            legal.append(option)
+        return legal
 
     def reach_for(self, figure: Figure, option: Option) -> Reach:
         """The reachability (with paths) of ``figure`` under ``option``.
