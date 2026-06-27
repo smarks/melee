@@ -20,7 +20,16 @@
   header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
   header .sub { color: var(--muted); font-size: 12px; }
   .wrap { display: flex; gap: 0; height: calc(100vh - 49px); }
-  .arena { flex: 1; overflow: auto; display: grid; place-items: center; padding: 16px; }
+  .arena { flex: 1; overflow: auto; display: grid; place-items: center; padding: 16px;
+           position: relative; }
+  /* Configurable-colour swatches pinned to the corners of the play area. */
+  .swatch { position: absolute; width: 20px; height: 20px; padding: 0; cursor: pointer;
+            border: 1px solid var(--line); border-radius: 4px; background: none;
+            opacity: .55; transition: opacity .15s; }
+  .swatch:hover { opacity: 1; }
+  #bgColor   { top: 8px; left: 8px; }
+  #textColor { top: 8px; right: 8px; }
+  #hexColor  { bottom: 8px; right: 8px; }
   aside { width: 420px; border-left: 1px solid var(--line); background: var(--panel);
           display: flex; flex-direction: column; overflow: auto; }
   .pad { padding: 14px 16px; border-bottom: 1px solid var(--line); }
@@ -93,7 +102,12 @@
   </span>
 </header>
 <div class="wrap">
-  <div class="arena"><svg id="svg"></svg></div>
+  <div class="arena">
+    <input type="color" id="bgColor"   class="swatch" title="Background &amp; controls colour">
+    <input type="color" id="textColor" class="swatch" title="Text colour">
+    <input type="color" id="hexColor"  class="swatch" title="Hex / board colour">
+    <svg id="svg"></svg>
+  </div>
   <aside>
     <div class="pad">
       <div class="banner" id="phaseBanner">Loading…</div>
@@ -730,6 +744,25 @@ async function startCustom() {
   closeEditor(); closeSetup(); resetSelection(); render();
 }
 
+// Configurable colours: each corner swatch drives one or more CSS variables and
+// remembers the choice in localStorage. bg swatch also recolours the controls.
+const THEME = { bgColor: ["--bg", "--panel"], textColor: ["--ink"], hexColor: ["--hex"] };
+function applyTheme() {
+  const root = document.documentElement;
+  for (const [id, vars] of Object.entries(THEME)) {
+    const input = $(id);
+    const saved = localStorage.getItem("melee.theme." + id);
+    if (saved) vars.forEach(v => root.style.setProperty(v, saved));
+    const current = saved || getComputedStyle(root).getPropertyValue(vars[0]).trim();
+    if (/^#[0-9a-f]{6}$/i.test(current)) input.value = current;
+    input.addEventListener("input", () => {
+      vars.forEach(v => root.style.setProperty(v, input.value));
+      localStorage.setItem("melee.theme." + id, input.value);
+    });
+  }
+}
+
+applyTheme();
 bootGame();
 // Arriving from login (LOGIN_REDIRECT_URL = "/?setup") opens the wizard straight away.
 if (new URLSearchParams(location.search).has("setup")) openSetup();
