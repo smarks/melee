@@ -91,8 +91,9 @@
   .hint { color: var(--accent); font-size: 12.5px; min-height: 18px; }
   #editor, #setup { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
             flex-direction: column; align-items: center; overflow: auto; }
-  #editorBox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-               margin: 24px; padding: 16px 18px; width: min(700px, 94vw); }
+  #editor { z-index: 55; }   /* the editor opens on top of the setup panel */
+  #editorBox, #setupBox { background: var(--panel); border: 1px solid var(--line);
+               border-radius: 10px; margin: 24px; padding: 16px 18px; width: min(700px, 94vw); }
   #editorRoster .card { border: 1px solid var(--line); border-radius: 8px;
                         padding: 10px 12px; margin: 8px 0; }
   #editor input, #editor select { background: #2f2b3b; color: var(--ink);
@@ -139,7 +140,7 @@
 </div>
 <div id="tokenMenu" class="menu" style="display:none"></div>
 <div id="setup">
-  <div id="editorBox">
+  <div id="setupBox">
     <div class="banner">New game</div>
     <div style="margin-top:8px">
       <label>Rules
@@ -179,7 +180,7 @@
     <div class="hint" id="editorErr"></div>
     <div style="margin-top:8px">
       <button class="primary" onclick="startCustom()">Start match</button>
-      <button onclick="closeEditor()">Cancel</button>
+      <button onclick="closeEditor(); openSetup()">Back</button>
     </div>
   </div>
 </div>
@@ -694,6 +695,7 @@ async function openEditor() {
   const wrap = $("editorRoster"); wrap.innerHTML = "";
   buildRoster(profile, teams, perTeam).forEach((f, i) => wrap.appendChild(fighterCard(f, i)));
   $("editorErr").textContent = LOGGED_IN ? "" : "Log in to save and reuse characters.";
+  closeSetup();                       // the editor replaces the setup panel
   $("editor").style.display = "flex";
 }
 function closeEditor() { $("editor").style.display = "none"; }
