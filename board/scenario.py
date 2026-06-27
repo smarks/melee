@@ -184,15 +184,24 @@ def build_game(
 def build_custom_skirmish(
     profile_name: str, fighter_specs: list[dict]
 ) -> tuple[Arena, list[Figure]]:
-    """Build a skirmish from validated, player-edited fighter specs.
+    """Build a game from validated, player-edited fighter specs (any team count).
 
     Each spec is validated and built by :mod:`engine.chargen` (raising
-    ``ValueError`` on an illegal fighter). Figures are seated by side at the
-    opposite entrances, exactly like the preset skirmishes.
+    ``ValueError`` on an illegal fighter), then grouped by side and seated around
+    the arena edges like :func:`build_game`.
     """
-    arena = Arena(cols=9, rows=15)
     built = [chargen.build(profile_name, spec) for spec in fighter_specs]
-    red = [figure for figure in built if figure.side == "red"]
-    blue = [figure for figure in built if figure.side == "blue"]
-    figures = _place(arena, red, blue)
+    team_ids: list[str] = []
+    for figure in built:
+        if figure.side not in team_ids:
+            team_ids.append(figure.side)
+    arena = Arena(cols=13, rows=13)
+    by_team = {tid: [f for f in built if f.side == tid] for tid in team_ids}
+    largest = max((len(team) for team in by_team.values()), default=1)
+    zones = _start_zones(arena, max(1, len(team_ids)), largest)
+    figures: list[Figure] = []
+    for team_index, team_id in enumerate(team_ids):
+        for combatant_index, figure in enumerate(by_team[team_id]):
+            figure.position, figure.facing = zones[team_index][combatant_index]
+            figures.append(figure)
     return arena, figures
