@@ -121,27 +121,51 @@ def _do_end_turn(game: dict) -> None:
     game["combat_prepared"] = False
 
 
+def _attack_targets(state: GameState, figure) -> tuple[list, list]:
+    """``(melee_targets, missile_targets)`` ``figure`` could attack this combat phase.
+
+    Based on where it stands and what weapon is ready — attacks are chosen in the
+    combat phase, so no movement-time attack declaration is required. A figure
+    that committed to defending (dodge/defend) does not attack.
+    """
+    weapon = figure.ready_weapon
+    if not (figure.can_act() and not figure.attacked_this_turn
+            and weapon is not None and figure.position is not None):
+        return [], []
+    option = figure.current_option
+    if option is not None and spec(option).sets_dodge:
+        return [], []
+    if weapon.kind == WeaponKind.MISSILE:
+        return [], [e.uid for e in state.enemies_of(figure) if e.position is not None]
+    fronts = set(front_hexes(state.arena.layout, figure))
+    return [e.uid for e in state.enemies_of(figure) if e.position in fronts], []
+
+
+def _ensure_attack_option(state: GameState, figure) -> None:
+    """Give a figure declaring its attack in the combat phase a fitting attack
+    option, if it didn't already choose one during movement (e.g. a charge)."""
+    option = figure.current_option
+    if option is not None and spec(option).is_attack:
+        return
+    weapon = figure.ready_weapon
+    if weapon is not None and weapon.kind == WeaponKind.MISSILE:
+        figure.current_option = (Option.ONE_LAST_SHOT if state.engaged(figure)
+                                 else Option.MISSILE_ATTACK)
+    else:
+        figure.current_option = (Option.SHIFT_ATTACK if state.engaged(figure)
+                                 else Option.CHARGE_ATTACK)
+
+
 def _human_has_attack_left(game: dict) -> bool:
-    """True if any human figure still has an attack it could declare."""
+    """True if any human figure could still declare an attack."""
     state: GameState = game["state"]
     controllers = game.get("controllers", {})
-    layout = state.arena.layout
     for figure in state.figures:
         if controllers.get(figure.side, "human") != "human":
             continue
-        option = figure.current_option
-        weapon = figure.ready_weapon
-        if not (figure.can_act() and not figure.attacked_this_turn
-                and option is not None and spec(option).is_attack and weapon):
-            continue
-        enemies = [e for e in state.enemies_of(figure) if e.position is not None]
-        if weapon.kind == WeaponKind.MISSILE:
-            if enemies:
-                return True
-        else:
-            fronts = set(front_hexes(layout, figure))
-            if any(e.position in fronts for e in enemies):
-                return True
+        melee, missile = _attack_targets(state, figure)
+        if melee or missile:
+            return True
     return False
 
 
@@ -332,32 +356,9 @@ def api_options(request, gid):
             "reach": reach,
         })
 
-    # Only a figure that actually took an attack option this turn (and still can
-    # act, with a weapon ready) has any combat targets — so the combat menu never
-    # offers an attack the figure can't make.
-    weapon = figure.ready_weapon
-    can_attack = (
-        figure.can_act()
-        and not figure.attacked_this_turn
-        and figure.current_option is not None
-        and spec(figure.current_option).is_attack
-        and weapon is not None
-    )
-    melee_targets = []
-    missile_targets = []
-    if can_attack and weapon.kind == WeaponKind.MISSILE:
-        # missile targets: any living enemy (range handled at resolution)
-        missile_targets = [
-            enemy.uid for enemy in state.enemies_of(figure)
-            if enemy.position is not None
-        ]
-    elif can_attack and figure.position is not None:
-        # melee targets: enemies in this figure's front hexes
-        fronts = set(front_hexes(state.arena.layout, figure))
-        melee_targets = [
-            enemy.uid for enemy in state.enemies_of(figure)
-            if enemy.position in fronts
-        ]
+    # Attacks are chosen in the combat phase: targets depend on where the figure
+    # stands and what it has ready, not on a movement-time declaration.
+    melee_targets, missile_targets = _attack_targets(state, figure)
     return JsonResponse({
         "uid": uid,
         "options": options,
@@ -442,6 +443,7 @@ def _dispatch(game: dict, body: dict):
             raise IllegalAction("not the combat phase")
         attacker = _figure(state, body.get("uid", ""))
         target = _figure(state, body.get("target", ""))
+        _ensure_attack_option(state, attacker)
         state.queue_attack(attacker, target)
         return None
 

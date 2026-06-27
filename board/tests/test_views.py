@@ -71,12 +71,15 @@ def test_initiative_move_and_combat_flow(client: Client) -> None:
     assert moved_fig["label"] == dest
     assert moved_fig["facing"] == 2
 
-    # Both sides end movement with no attacks declared, so the combat phase has
-    # nothing to do and the turn auto-ends straight back to initiative.
+    # Both sides end movement. Combat may stay open if anyone can still attack
+    # (e.g. an archer's shot); otherwise it auto-ends. Either way, ending the
+    # turn lands back in initiative on turn 2.
     _post(client, gid, {"type": "end_side_move"})
-    ended = _post(client, gid, {"type": "end_side_move"})
-    assert ended["state"]["phase"] == "initiative"
-    assert ended["state"]["turn"] == 2
+    out = _post(client, gid, {"type": "end_side_move"})
+    if out["state"]["phase"] == "combat":
+        out = _post(client, gid, {"type": "end_turn"})
+    assert out["state"]["phase"] == "initiative"
+    assert out["state"]["turn"] == 2
 
 
 def test_illegal_move_is_rejected(client: Client) -> None:
@@ -137,7 +140,11 @@ def test_vs_computer_sets_controllers_and_plays_a_turn(client: Client) -> None:
         out = _post(client, gid, {"type": "end_side_move"})
         assert "error" not in out
         guard += 1
-    assert out["state"]["phase"] == "initiative"   # idle combat auto-ended the turn
+    # Combat may stay open if the human still has a shot; ending the turn (or an
+    # idle auto-end) returns to initiative on turn 2.
+    if out["state"]["phase"] == "combat":
+        out = _post(client, gid, {"type": "end_turn"})
+    assert out["state"]["phase"] == "initiative"
     assert out["state"]["turn"] == 2
 
 
@@ -175,38 +182,67 @@ def test_auto_end_turn_when_no_attacks_remain() -> None:
     assert game["phase"] == "initiative"
 
 
-def test_combat_targets_only_for_a_figure_with_an_attack_option(client: Client) -> None:
+def _combat_duel():
+    """A red & blue knight adjacent (red facing blue), registered in combat phase."""
+    from board.geometry import layout as board_layout
     from board.views import GAMES
     from engine.arena import Arena
     from engine.figure import create_human
-    from engine.options import Option
     from engine.rules_data import BROADSWORD
     from engine.state import GameState
     from hexarena.hex import Hex
 
     arena = Arena(cols=7, rows=7)
-    layout = arena.layout
+    grid = arena.layout
     red = create_human("Knight", 12, 12, "red", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     blue = create_human("Knight", 12, 12, "blue", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     blue.position = Hex(3, 3)
-    red.position = layout.neighbor(blue.position, 0)
+    red.position = grid.neighbor(blue.position, 0)
     red.facing = next(d for d in range(6)
-                      if layout.neighbor(red.position, d) == blue.position)
-    GAMES["gate-test"] = {
-        "state": GameState(arena, [red, blue]), "phase": "combat",
-        "order": ["red", "blue"], "moving": 0, "winner": None,
+                      if grid.neighbor(red.position, d) == blue.position)
+    GAMES["duel-test"] = {
+        "state": GameState(arena, [red, blue]), "layout": board_layout(arena),
+        "phase": "combat", "order": ["red", "blue"], "moving": 0, "winner": None,
         "controllers": {"red": "human", "blue": "human"}, "combat_prepared": True,
     }
+    return red, blue
+
+
+def test_combat_targets_are_position_based_not_pre_declared(client: Client) -> None:
+    from board.views import GAMES
+    from engine.options import Option
+
+    red, blue = _combat_duel()
     try:
-        # No attack option chosen -> blue is in front but offered no attack.
-        out = client.get(f"/api/game/gate-test/options?uid={red.uid}").json()
-        assert out["melee_targets"] == []
-        # With an attack option, the adjacent enemy becomes a target.
-        red.current_option = Option.SHIFT_ATTACK
-        out = client.get(f"/api/game/gate-test/options?uid={red.uid}").json()
+        # No movement-time attack option, but red stands in front of blue:
+        # the adjacent enemy is offered as a target.
+        out = client.get(f"/api/game/duel-test/options?uid={red.uid}").json()
         assert blue.uid in out["melee_targets"]
+        # A figure that committed to defending does not get to attack.
+        red.current_option = Option.DODGE
+        out = client.get(f"/api/game/duel-test/options?uid={red.uid}").json()
+        assert out["melee_targets"] == []
     finally:
-        del GAMES["gate-test"]
+        del GAMES["duel-test"]
+
+
+def test_attack_can_be_declared_in_the_combat_phase(client: Client) -> None:
+    import json
+
+    from board.views import GAMES
+
+    red, blue = _combat_duel()
+    try:
+        # Red never declared an attack during movement; declaring it now works.
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "queue_attack", "uid": red.uid,
+                                           "target": blue.uid}),
+                          content_type="application/json")
+        assert out.status_code == 200
+        assert "error" not in out.json()
+        assert GAMES["duel-test"]["state"]._pending  # an attack is now queued
+    finally:
+        del GAMES["duel-test"]
 
 
 def test_catalog_endpoint_lists_legal_choices(client: Client) -> None:
