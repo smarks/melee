@@ -175,6 +175,40 @@ def test_auto_end_turn_when_no_attacks_remain() -> None:
     assert game["phase"] == "initiative"
 
 
+def test_combat_targets_only_for_a_figure_with_an_attack_option(client: Client) -> None:
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    red = create_human("Knight", 12, 12, "red", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue = create_human("Knight", 12, 12, "blue", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue.position = Hex(3, 3)
+    red.position = layout.neighbor(blue.position, 0)
+    red.facing = next(d for d in range(6)
+                      if layout.neighbor(red.position, d) == blue.position)
+    GAMES["gate-test"] = {
+        "state": GameState(arena, [red, blue]), "phase": "combat",
+        "order": ["red", "blue"], "moving": 0, "winner": None,
+        "controllers": {"red": "human", "blue": "human"}, "combat_prepared": True,
+    }
+    try:
+        # No attack option chosen -> blue is in front but offered no attack.
+        out = client.get(f"/api/game/gate-test/options?uid={red.uid}").json()
+        assert out["melee_targets"] == []
+        # With an attack option, the adjacent enemy becomes a target.
+        red.current_option = Option.SHIFT_ATTACK
+        out = client.get(f"/api/game/gate-test/options?uid={red.uid}").json()
+        assert blue.uid in out["melee_targets"]
+    finally:
+        del GAMES["gate-test"]
+
+
 def test_catalog_endpoint_lists_legal_choices(client: Client) -> None:
     data = client.get("/api/catalog?profile=Tarmar").json()
     assert data["stat_rules"]["model"] == "tarmar"

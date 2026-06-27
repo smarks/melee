@@ -332,18 +332,32 @@ def api_options(request, gid):
             "reach": reach,
         })
 
-    # melee targets: enemies in this figure's front hexes
+    # Only a figure that actually took an attack option this turn (and still can
+    # act, with a weapon ready) has any combat targets — so the combat menu never
+    # offers an attack the figure can't make.
+    weapon = figure.ready_weapon
+    can_attack = (
+        figure.can_act()
+        and not figure.attacked_this_turn
+        and figure.current_option is not None
+        and spec(figure.current_option).is_attack
+        and weapon is not None
+    )
     melee_targets = []
-    if figure.position is not None:
+    missile_targets = []
+    if can_attack and weapon.kind == WeaponKind.MISSILE:
+        # missile targets: any living enemy (range handled at resolution)
+        missile_targets = [
+            enemy.uid for enemy in state.enemies_of(figure)
+            if enemy.position is not None
+        ]
+    elif can_attack and figure.position is not None:
+        # melee targets: enemies in this figure's front hexes
         fronts = set(front_hexes(state.arena.layout, figure))
-        for enemy in state.enemies_of(figure):
-            if enemy.position in fronts:
-                melee_targets.append(enemy.uid)
-    # missile targets: any living enemy (range handled at resolution)
-    missile_targets = [
-        enemy.uid for enemy in state.enemies_of(figure)
-        if figure.ready_weapon and figure.ready_weapon.kind == WeaponKind.MISSILE
-    ]
+        melee_targets = [
+            enemy.uid for enemy in state.enemies_of(figure)
+            if enemy.position in fronts
+        ]
     return JsonResponse({
         "uid": uid,
         "options": options,
