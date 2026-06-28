@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import json
 import secrets
+import threading
+import time
+from collections import OrderedDict
+from collections.abc import Iterator, MutableMapping
 
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
@@ -35,9 +39,93 @@ from .geometry import label_of, layout
 from .models import SavedCharacter
 from .serialize import dump_game
 
+# In-memory games are bounded so the registry can't grow without limit (a DoS)
+# and stale games are reclaimed. Active games are touched on every access, so
+# only genuinely idle/old games are dropped. Full DB-backed persistence is out
+# of scope here (tracked in #12/#83).
+MAX_GAMES = 512                     # most-recently-touched games kept in memory
+GAME_TTL_SECONDS = 6 * 60 * 60      # drop games untouched for this long (6 hours)
+
+
+class BoundedGameStore(MutableMapping):
+    """In-memory game registry with LRU + TTL eviction.
+
+    Behaves like a ``dict`` of ``gid -> game`` but caps how much it can hold.
+    A game is dropped when the store exceeds ``max_games`` (least-recently
+    touched first) or when it has gone untouched for longer than
+    ``ttl_seconds``. Every read or write touches the game's last-access time,
+    so games in active play are never evicted out from under a player.
+
+    The store is guarded by a re-entrant lock, which is adequate for the dev
+    server's threaded request handling.
+    """
+
+    def __init__(self, max_games: int = MAX_GAMES,
+                 ttl_seconds: float = GAME_TTL_SECONDS,
+                 clock=time.monotonic) -> None:
+        self._max_games = max_games
+        self._ttl_seconds = ttl_seconds
+        self._clock = clock
+        self._games: OrderedDict[str, dict] = OrderedDict()
+        self._touched_at: dict[str, float] = {}
+        self._lock = threading.RLock()
+
+    def _drop(self, gid: str) -> None:
+        self._games.pop(gid, None)
+        self._touched_at.pop(gid, None)
+
+    def _evict_expired(self, now: float) -> None:
+        expired = [gid for gid, touched in self._touched_at.items()
+                   if now - touched > self._ttl_seconds]
+        for gid in expired:
+            self._drop(gid)
+
+    def _evict_over_cap(self) -> None:
+        while len(self._games) > self._max_games:
+            oldest_gid = next(iter(self._games))
+            self._drop(oldest_gid)
+
+    def _touch(self, gid: str, now: float) -> None:
+        self._games.move_to_end(gid)
+        self._touched_at[gid] = now
+
+    def __getitem__(self, gid: str) -> dict:
+        with self._lock:
+            now = self._clock()
+            self._evict_expired(now)
+            game = self._games[gid]          # raises KeyError if missing/expired
+            self._touch(gid, now)
+            return game
+
+    def __setitem__(self, gid: str, game: dict) -> None:
+        with self._lock:
+            now = self._clock()
+            self._games[gid] = game
+            self._touch(gid, now)
+            self._evict_expired(now)
+            self._evict_over_cap()
+
+    def __delitem__(self, gid: str) -> None:
+        with self._lock:
+            del self._games[gid]
+            self._touched_at.pop(gid, None)
+
+    def __contains__(self, gid: object) -> bool:
+        with self._lock:
+            return gid in self._games
+
+    def __iter__(self) -> Iterator[str]:
+        with self._lock:
+            return iter(list(self._games))
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._games)
+
+
 # gid -> {"state": GameState, "layout": dict, "phase": str,
 #         "order": [side,...], "moving": int, "winner": str|None}
-GAMES: dict[str, dict] = {}
+GAMES: BoundedGameStore = BoundedGameStore()
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -281,9 +369,24 @@ def api_character_delete(request, pk):
     return JsonResponse({"ok": True})
 
 
+def _coerce_seed(raw) -> int | None:
+    """Parse a client-supplied RNG seed; ``None``/blank means 'pick randomly'.
+
+    A non-integer seed is bad client input, so it surfaces as an
+    :class:`IllegalAction` (a clean 400) rather than an uncaught 500.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise IllegalAction(f"seed must be an integer, got {raw!r}") from exc
+
+
 def _start_game(arena, figures, profile, computer_sides, seed) -> dict:
     """Register a new game and return its initial payload (shared entry point)."""
-    dice = Dice(seed=int(seed)) if seed else Dice()
+    parsed_seed = _coerce_seed(seed)
+    dice = Dice(seed=parsed_seed) if parsed_seed is not None else Dice()
     state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset)
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
@@ -329,8 +432,12 @@ def api_new_game(request):
     else:
         arena, figures = scenario.skirmish_for(profile.name)
         computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
-    return JsonResponse(
-        _start_game(arena, figures, profile, computer_sides, request.GET.get("seed")))
+    try:
+        return JsonResponse(
+            _start_game(arena, figures, profile, computer_sides,
+                        request.GET.get("seed")))
+    except IllegalAction as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
 
 
 def api_catalog(request):
@@ -414,8 +521,11 @@ def api_new_custom(request):
             profile.name, body.get("fighters", []))
     except (ValueError, KeyError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
-    return JsonResponse(
-        _start_game(arena, figures, profile, computer_sides, body.get("seed")))
+    try:
+        return JsonResponse(
+            _start_game(arena, figures, profile, computer_sides, body.get("seed")))
+    except IllegalAction as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
 
 
 def api_state(request, gid):
@@ -494,6 +604,22 @@ def api_action(request, gid):
     return JsonResponse(payload)
 
 
+def _parse_option(body: dict) -> Option:
+    """Coerce the client's ``option`` field into an :class:`Option`.
+
+    A missing key or an unrecognised value is bad client input, so it surfaces
+    as an :class:`IllegalAction` (mapped to a 400) rather than an uncaught 500.
+    """
+    try:
+        raw = body["option"]
+    except KeyError as exc:
+        raise IllegalAction("missing 'option'") from exc
+    try:
+        return Option(raw)
+    except ValueError as exc:
+        raise IllegalAction(f"unknown option {raw!r}") from exc
+
+
 def _dispatch(game: dict, body: dict):
     state: GameState = game["state"]
     action = body.get("type")
@@ -520,7 +646,7 @@ def _dispatch(game: dict, body: dict):
         moving_side = game["order"][game["moving"]]
         if figure.side != moving_side:
             raise IllegalAction(f"it is {moving_side}'s turn to move")
-        option = Option(body["option"])
+        option = _parse_option(body)
         facing = body.get("facing")
         dest = body.get("dest")
         path = []

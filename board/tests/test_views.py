@@ -95,6 +95,94 @@ def test_illegal_move_is_rejected(client: Client) -> None:
     assert "error" in out
 
 
+def _reach_move_phase(client: Client) -> tuple[str, dict]:
+    """Start a seeded game and advance it to red's movement turn."""
+    data = _new(client)
+    gid = data["gid"]
+    _post(client, gid, {"type": "roll_initiative"})
+    chosen = _post(client, gid, {"type": "choose_first", "side": "red"})
+    assert chosen["state"]["phase"] == "move"
+    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+    return gid, red
+
+
+def test_move_with_unknown_option_is_rejected_with_400(client: Client) -> None:
+    """A bad ``option`` value is client error -> 400, not an uncaught 500 (#82)."""
+    gid, red = _reach_move_phase(client)
+    resp = client.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "move", "uid": red["uid"],
+                         "option": "not-a-real-option", "facing": 0}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+    assert "error" in resp.json()
+
+
+def test_move_with_missing_option_is_rejected_with_400(client: Client) -> None:
+    """A missing ``option`` key is client error -> 400, not a 500 (#82)."""
+    gid, red = _reach_move_phase(client)
+    resp = client.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "move", "uid": red["uid"], "facing": 0}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+    assert "error" in resp.json()
+
+
+def test_new_game_with_non_int_seed_is_rejected_with_400(client: Client) -> None:
+    """A non-integer seed is client error -> 400, not a 500 (#82)."""
+    resp = client.get("/api/game/new?seed=not-a-number")
+    assert resp.status_code == 400
+    assert "error" in resp.json()
+
+
+def test_new_custom_with_non_int_seed_is_rejected_with_400(client: Client) -> None:
+    roster = {"profile": "Classic Melee", "seed": "bogus", "fighters": [
+        {"name": "Hero", "side": "red", "strength": 12, "dexterity": 12,
+         "weapon": "Dagger", "armor": "None", "shield": "None"},
+        {"name": "Foe", "side": "blue", "strength": 12, "dexterity": 12,
+         "weapon": "Dagger", "armor": "None", "shield": "None"},
+    ]}
+    resp = client.post("/api/game/new_custom", data=json.dumps(roster),
+                       content_type="application/json")
+    assert resp.status_code == 400
+    assert "error" in resp.json()
+
+
+def test_bounded_store_evicts_least_recently_touched_over_cap() -> None:
+    """Over the cap, the least-recently-touched game is dropped while a freshly
+    touched one survives (#83)."""
+    from board.views import BoundedGameStore
+
+    store = BoundedGameStore(max_games=2, ttl_seconds=10_000)
+    store["a"] = {"n": 1}
+    store["b"] = {"n": 2}
+    assert store["a"]                 # touch "a" so "b" becomes least-recent
+    store["c"] = {"n": 3}             # over cap -> evict the LRU entry ("b")
+    assert "a" in store and "c" in store
+    assert "b" not in store
+    assert len(store) == 2
+
+
+def test_bounded_store_evicts_games_past_their_ttl() -> None:
+    """A game untouched past the TTL is reclaimed; a recently touched one is
+    kept (#83)."""
+    from board.views import BoundedGameStore
+
+    now = [0.0]
+    store = BoundedGameStore(max_games=100, ttl_seconds=10,
+                             clock=lambda: now[0])
+    store["old"] = {"n": 1}
+    now[0] = 5.0
+    store["fresh"] = {"n": 2}
+    now[0] = 12.0                     # "old" is 12s idle (> TTL); "fresh" is 7s
+    assert store["fresh"]            # any access triggers TTL eviction
+    assert "old" not in store
+    assert "fresh" in store
+
+
 def test_default_profile_is_classic_melee(client: Client) -> None:
     data = _new(client)
     assert data["profile"] == "Classic Melee"
