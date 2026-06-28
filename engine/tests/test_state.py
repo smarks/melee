@@ -29,6 +29,24 @@ def _rear_grapple(defense_roll):
     return state, attacker, defender
 
 
+def test_drop_and_pick_up_a_weapon() -> None:
+    from engine.rules_data import BROADSWORD, DAGGER
+    arena = Arena(cols=9, rows=15)
+    fig = create_human("Fig", 13, 11, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    fig.position = Hex(5, 5)
+    state = GameState(arena, [fig])
+    assert Option.PICK_UP not in state.legal_options(fig)      # nothing on the ground
+
+    state.dropped.append((LAYOUT.neighbor(Hex(5, 5), 0), BROADSWORD))
+    assert [w.name for w in state.dropped_in_reach(fig)] == ["Broadsword"]
+    assert Option.PICK_UP in state.legal_options(fig)
+
+    state.move(fig, Option.PICK_UP, ready="Broadsword")
+    assert fig.ready_weapon.name == "Broadsword"               # now wielding it
+    ground = [w.name for _, w in state.dropped]
+    assert "Broadsword" not in ground and "Dagger" in ground   # swapped on the ground
+
+
 def test_hth_grapple_takes_both_to_the_ground() -> None:
     state, attacker, defender = _rear_grapple(2)
     assert state.hth_attack(attacker, defender) == "grappled"

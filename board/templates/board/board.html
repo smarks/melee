@@ -253,6 +253,7 @@ const OPTION_LABEL = {
   ready_weapon: "Ready Weapon", missile_attack: "⚔ Missile Attack", stand_up: "Stand Up",
   shift_attack: "⚔ Attack (may shift 1)", shift_defend: "Shift & Defend",
   one_last_shot: "⚔ One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
+  hth_attack: "🤼 Grapple", pick_up: "Pick up weapon",
 };
 const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
@@ -304,6 +305,21 @@ function drawArena() {
       + (label === pendingDest ? " chosen" : ""));
     if (reach.has(label)) poly.addEventListener("click", () => onReachClick(label));
     svg.appendChild(poly);
+  }
+
+  for (const d of (S.dropped || [])) {              // weapons lying on the ground
+    const h = LAYOUT.hexes[d.label];
+    if (!h) continue;
+    const mark = document.createElementNS(SVG, "text");
+    mark.setAttribute("x", h.cx + LAYOUT.size * 0.5);
+    mark.setAttribute("y", h.cy + LAYOUT.size * 0.5);
+    mark.setAttribute("font-size", LAYOUT.size * 0.5);
+    mark.setAttribute("opacity", "0.75");
+    mark.textContent = "🗡";
+    const dtip = document.createElementNS(SVG, "title");
+    dtip.textContent = `${d.name} (dropped)`;
+    mark.appendChild(dtip);
+    svg.appendChild(mark);
   }
 
   for (const f of S.figures) {
@@ -530,6 +546,10 @@ function chooseMoveOption(f, option) {
   } else {
     const plan = {uid: f.uid, phase: "move", option, label: optLabel(option), facing: "auto"};
     if (WEAPON_CHANGE.has(option)) plan.ready = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
+    if (option === "pick_up") {
+      plan.ready = (optInfo.pickups || [])[0];
+      plan.label = `Pick up ${plan.ready || "weapon"}`;
+    }
     PLAN[f.uid] = plan; chosenOption = null; render();
   }
 }
