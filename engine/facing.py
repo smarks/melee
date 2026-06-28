@@ -66,7 +66,7 @@ def zone_toward(layout: HexLayout, observer: Figure, point: Hex) -> str | None:
     direction = layout.direction_to(observer.position, line[1])
     if direction is None:
         return None
-    if observer.posture == Posture.PRONE:
+    if observer.posture != Posture.STANDING:    # prone or kneeling: no front (p.7)
         return REAR
     return zone_of_direction(observer.facing, direction)
 
