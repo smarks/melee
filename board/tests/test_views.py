@@ -290,6 +290,24 @@ def test_auto_facing_turns_toward_an_adjacent_enemy() -> None:
     assert _auto_facing(state, mover, Hex(6, 6)) == mover.facing
 
 
+def test_best_weapons_scale_with_strength_and_stay_wieldable(client: Client) -> None:
+    from engine.rules_data import WEAPONS
+
+    # Classic (default profile): highest-damage weapon the strength allows.
+    strong = client.get("/api/best_weapons?strength=16").json()
+    weak = client.get("/api/best_weapons?strength=8").json()
+    assert strong["melee"] == "Battleaxe"
+    assert (WEAPONS[weak["melee"]].min_strength or 0) <= 8        # never over-strength
+    assert (WEAPONS[strong["melee"]].min_strength or 0) > (WEAPONS[weak["melee"]].min_strength or 0)
+
+    # Tarmar: a stronger figure earns a heavier weapon; a weak one is not handed it.
+    t_weak = client.get("/api/best_weapons?profile=Tarmar&strength=8&dexterity=10&skill=2").json()
+    t_strong = client.get("/api/best_weapons?profile=Tarmar&strength=16&dexterity=14&skill=2").json()
+    assert t_weak["melee"] and t_weak["missile"]
+    assert (WEAPONS[t_weak["melee"]].min_strength or 0) <= 8
+    assert (WEAPONS[t_strong["melee"]].min_strength or 0) > (WEAPONS[t_weak["melee"]].min_strength or 0)
+
+
 def test_edit_spec_round_trips_through_build() -> None:
     from engine import chargen
 
