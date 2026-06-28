@@ -100,6 +100,13 @@
   .fig.target .body { stroke: var(--target); stroke-width: 3.5; }
   .fig.prone .body { opacity: .65; }
   .fig.dodge .body { stroke-dasharray: 3 3; stroke: var(--target); }
+  /* Defending (dodge/defend) marker: a guard ring + shield glyph on the token. */
+  .fig .guardring { fill: none; stroke: var(--target); stroke-width: 2;
+                    stroke-dasharray: 2 3; opacity: .9; pointer-events: none; }
+  .fig text.guard { fill: initial; text-anchor: middle; pointer-events: none; }
+  /* Force-retreat controls (post-combat shove). */
+  .fr-row { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+  .fr-adv { font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
   .fig text { fill: #100f15; font-weight: 700; font-size: 13px; text-anchor: middle;
               dominant-baseline: central; pointer-events: none; }
   .hint { color: var(--accent); font-size: 12.5px; min-height: 18px; }
@@ -210,6 +217,7 @@ let pendingReady = null; // carried weapon to switch to
 let PLAN = {};           // uid -> pending action for this phase (executed on Continue)
 let warnKind = null;     // "move" | "combat" while showing the "not everyone set" warning
 let lastPhase = null;    // detect phase changes to clear the plan
+let frAdvance = {};      // "attackerUid>targetUid" -> follow-into-vacated-hex toggle
 const myControlled = f => (S.controllers || {})[f.side] !== "computer";
 
 const $ = id => document.getElementById(id);
@@ -405,6 +413,23 @@ function drawArena() {
       g.appendChild(ring);
     }
 
+    // A figure that chose dodge/defend this turn is attacked on FOUR dice — mark
+    // it with a guard ring + shield glyph so everyone can see who's defending.
+    if (f.dodging && !f.dead) {
+      const guardRing = document.createElementNS(SVG, "circle");
+      guardRing.setAttribute("cx", h.cx); guardRing.setAttribute("cy", h.cy);
+      guardRing.setAttribute("r", LAYOUT.size * 0.74);
+      guardRing.setAttribute("class", "guardring");
+      g.appendChild(guardRing);
+      const shield = document.createElementNS(SVG, "text");
+      shield.setAttribute("x", h.cx - LAYOUT.size * 0.6);
+      shield.setAttribute("y", h.cy - LAYOUT.size * 0.52);
+      shield.setAttribute("font-size", LAYOUT.size * 0.72);
+      shield.setAttribute("class", "guard");
+      shield.textContent = "🛡";
+      g.appendChild(shield);
+    }
+
     g.addEventListener("click", (ev) => { ev.stopPropagation(); onFigureClick(f); });
     g.addEventListener("mouseenter", () => onFigureHover(f));
     g.addEventListener("mouseleave", scheduleHoverClose);
@@ -471,6 +496,43 @@ function drawControls() {
     // "anyway" only when figures are still uncommitted this phase (issue #70).
     addBtn(c, "End turn" + ((actors.length - set) > 0 ? " anyway" : ""),
       () => { resetAll(); act({type:"end_turn"}).then(after); });
+    drawForceRetreat(c);   // post-combat shoves, once damage has been resolved
+  }
+}
+
+// Post-combat: an attacker that dealt ST damage and took none this turn may
+// shove an adjacent, beaten foe back one hex (the server lists eligible pairs in
+// force_retreat_options). Each control carries an "advance" toggle to follow
+// into the vacated hex. State-driven: the controls stay until acted on or the
+// turn ends — no transient prompt (project UI rule).
+function drawForceRetreat(c) {
+  const opts = (S.force_retreat_options || []).filter(o => {
+    const attacker = figByUid(o.attacker);
+    return attacker && myControlled(attacker);
+  });
+  if (!opts.length) return;
+  const head = document.createElement("div");
+  head.style.marginTop = "10px";
+  head.innerHTML = `<span class="muted">Force retreat — push a beaten foe back a hex:</span>`;
+  c.appendChild(head);
+  for (const o of opts) {
+    const attacker = figByUid(o.attacker), target = figByUid(o.target);
+    const key = o.attacker + ">" + o.target;
+    const row = document.createElement("div");
+    row.className = "fr-row";
+    addBtn(row, `↩ ${attacker ? attacker.name : o.attacker} pushes ${target ? target.name : o.target}`,
+      () => act({type: "force_retreat", uid: o.attacker, target: o.target,
+                 advance: !!frAdvance[key]}).then(after), true);
+    const adv = document.createElement("label");
+    adv.className = "fr-adv";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = !!frAdvance[key];
+    box.addEventListener("change", () => { frAdvance[key] = box.checked; });
+    adv.appendChild(box);
+    adv.appendChild(document.createTextNode(" advance (follow up)"));
+    row.appendChild(adv);
+    c.appendChild(row);
   }
 }
 

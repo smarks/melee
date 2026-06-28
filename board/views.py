@@ -145,11 +145,32 @@ def _figure(state: GameState, uid: str):
     raise IllegalAction(f"no figure {uid!r}")
 
 
+def _force_retreat_options(state: GameState) -> list[dict]:
+    """``[{attacker, target}]`` uid pairs eligible for a force-retreat right now.
+
+    An attacker that dealt ST damage and took none this turn may shove an
+    adjacent, still-living foe back one hex (Section: Forcing Retreat). The
+    engine owns the rule via :meth:`GameState.can_force_retreat`; this just
+    surfaces every qualifying pair so the board can offer the control. Outside
+    the combat phase nothing is eligible (the flags reset at end of turn).
+    """
+    options = []
+    for attacker in state.figures:
+        if attacker.position is None or not attacker.dealt_st_damage_this_turn:
+            continue
+        for target in state.enemies_of(attacker):
+            if target.position is not None and state.can_force_retreat(attacker, target):
+                options.append({"attacker": attacker.uid, "target": target.uid})
+    return options
+
+
 def _meta(game: dict) -> dict:
     state: GameState = game["state"]
     moving = None
     if game["phase"] == "move" and game["order"]:
         moving = game["order"][game["moving"]]
+    retreat_options = (_force_retreat_options(state)
+                       if game["phase"] == "combat" else [])
     return {
         "phase": game["phase"],
         "move_order": game["order"],
@@ -158,6 +179,7 @@ def _meta(game: dict) -> dict:
         "victory": _victory(state),
         "controllers": game.get("controllers", {}),
         "queued": len(state._pending),
+        "force_retreat_options": retreat_options,
     }
 
 
@@ -318,7 +340,24 @@ def _auto_end_if_idle(game: dict) -> None:
         return
     if game["state"]._pending or _human_has_attack_left(game):
         return
+    if _human_force_retreat_available(game):
+        return                        # let the player take (or skip) a force-retreat
     _do_end_turn(game)
+
+
+def _human_force_retreat_available(game: dict) -> bool:
+    """True if any human-controlled attacker could still force a foe to retreat.
+
+    Combat must not auto-end while a player has this post-combat choice open;
+    the player ends the turn (or acts) explicitly once they're done.
+    """
+    state: GameState = game["state"]
+    controllers = game.get("controllers", {})
+    for option in _force_retreat_options(state):
+        attacker = _figure(state, option["attacker"])
+        if controllers.get(attacker.side, "human") == "human":
+            return True
+    return False
 
 
 def _victory(state: GameState) -> str | None:
