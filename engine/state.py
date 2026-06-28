@@ -267,14 +267,17 @@ class GameState:
         """Whether ``attacker`` may move onto ``defender``'s hex to grapple (p.17).
 
         Allowed when the defender is down/kneeling, has a lower MA, or is taken
-        from the rear. (Mutual agreement — case (d) — is a table call we skip.)
+        from the rear. A foe already in a brawl can always be piled onto (p.18).
+        (Mutual agreement — case (d) — is a table call we skip.)
         """
         if attacker.position is None or defender.position is None:
             return False
-        if attacker.in_hth or defender.in_hth:
-            return False          # 1-on-1 grapples; joining a brawl is its own path
+        if attacker.in_hth:
+            return False          # already grappling — fight who you're locked with
         if self.arena.distance(attacker.position, defender.position) != 1:
             return False
+        if defender.in_hth:
+            return True           # join the brawl (no defense roll, p.18)
         if defender.posture != Posture.STANDING:
             return True
         if defender.movement_allowance < attacker.movement_allowance:
@@ -282,10 +285,10 @@ class GameState:
         return attack_zone(self.arena.layout, attacker, defender) == REAR
 
     def hth_targets(self, attacker: Figure) -> list[Figure]:
-        """Enemies ``attacker`` could grapple this combat phase."""
-        if attacker.in_hth:       # already grappling: the only target is that foe
-            foe = self._by_uid(attacker.hth_opponent)
-            return [foe] if foe is not None and foe.can_act() else []
+        """Enemies ``attacker`` could grapple (or, if already grappling, strike)."""
+        if attacker.in_hth:       # locked: can only attack a foe it's grappling
+            foes = [self._by_uid(uid) for uid in attacker.hth_opponents]
+            return [f for f in foes if f is not None and f.can_act()]
         if not attacker.can_act() or attacker.attacked_this_turn:
             return []
         return [e for e in self.enemies_of(attacker)
@@ -294,19 +297,29 @@ class GameState:
     def _by_uid(self, uid: str | None) -> Figure | None:
         return next((f for f in self.figures if f.uid == uid), None) if uid else None
 
+    def _hth_grapplers_of(self, defender: Figure, side: str) -> list[Figure]:
+        """Figures on ``side`` currently grappling ``defender``."""
+        return [f for f in self.figures
+                if f.side == side and defender.uid in f.hth_opponents]
+
     def _hth_damage(self, attacker: Figure, defender: Figure) -> DamageDice:
         """Damage dice for a grapple strike (p.18): a ready dagger/main-gauche, else
-        bare hands scaled by strength against the foe."""
+        bare hands — 1d-3 when two-plus gang up, otherwise the lone fighter's
+        strength against the *total* of the foes it grapples."""
         ready = attacker.ready_weapon
         if ready is not None and ready.name == "Dagger":
             return DAGGER.hth_damage or DAGGER.damage
         if ready is not None and ready.name == "Main-Gauche":
             return MAIN_GAUCHE.hth_damage or MAIN_GAUCHE.damage
-        if attacker.strength > defender.strength:
-            return DamageDice(1, -2)        # bare hands vs a weaker foe
-        if attacker.strength == defender.strength:
-            return DamageDice(1, -3)        # vs an equal
-        return DamageDice(1, -4)            # vs a stronger foe
+        if len(self._hth_grapplers_of(defender, attacker.side)) >= 2:
+            return DamageDice(1, -3)        # two-plus on a side each get 1d-3
+        foes = [self._by_uid(uid) for uid in attacker.hth_opponents]
+        total = sum(f.strength for f in foes if f is not None) or defender.strength
+        if attacker.strength > total:
+            return DamageDice(1, -2)        # stronger than all its foes together
+        if attacker.strength == total:
+            return DamageDice(1, -3)
+        return DamageDice(1, -4)            # outmuscled
 
     def _grapple_bare(self, figure: Figure) -> None:
         """Drop a non-dagger ready weapon and shield to grapple bare-handed."""
@@ -314,42 +327,48 @@ class GameState:
             figure.ready_weapon = None
             figure.shield_ready = False
 
+    def _link_hth(self, attacker: Figure, defender: Figure) -> None:
+        attacker.position = defender.position
+        attacker.posture = defender.posture = Posture.PRONE
+        if defender.uid not in attacker.hth_opponents:
+            attacker.hth_opponents.append(defender.uid)
+        if attacker.uid not in defender.hth_opponents:
+            defender.hth_opponents.append(attacker.uid)
+
     def hth_attack(self, attacker: Figure, defender: Figure) -> str:
         """Declare ``attacker``'s hand-to-hand attack on ``defender``.
 
-        Initiates the grapple (with the defender's defense roll, p.17) if they are
-        not already locked, then queues the grapple strike. Returns an outcome tag.
+        Strikes if already grappling; joins a brawl in progress without a roll
+        (p.18); otherwise initiates with the defender's 1d6 defense roll (p.17).
         """
-        if attacker.hth_opponent == defender.uid:      # already grappling — just strike
+        if defender.uid in attacker.hth_opponents:     # already grappling — just strike
             self._queue_hth_strike(attacker, defender)
             return "grappled"
         if not self._can_initiate_hth(attacker, defender):
             raise IllegalAction(f"{attacker.name} cannot grapple {defender.name}")
-        from_rear = attack_zone(self.arena.layout, attacker, defender) == REAR
-        roll = self.dice.dn(6)
-        while from_rear and roll == 6:                  # a 6 is ignored from behind
+        if not defender.in_hth:                         # a fresh grapple: defender rolls
+            from_rear = attack_zone(self.arena.layout, attacker, defender) == REAR
             roll = self.dice.dn(6)
-        if roll == 5:                                   # shrugged off, no grapple
-            self.log.append(narrate_hth(attacker, defender, "shrug"))
-            return "shrugged"
-        if roll == 6:                                   # free hit, attacker thrown back
-            counter = self.rules.resolve_attack(
-                self.dice, defender, attacker,
-                zone=attack_zone(self.arena.layout, defender, attacker),
-                dice_count=self.rules.attack_dice_count(attacker))
-            self.log.append(narrate_hth(attacker, defender, "free_hit"))
-            self._apply(defender, attacker, counter)
-            return "free_hit"
-        # 1-4: the grapple is on. Both go to the ground in the defender's hex.
-        self._grapple_bare(defender)
-        if roll in (3, 4):                              # had time to ready a dagger next turn
-            if any(w.name in self._DAGGERS for w in defender.weapons):
-                defender.hth_drew_dagger = True
+            while from_rear and roll == 6:              # a 6 is ignored from behind
+                roll = self.dice.dn(6)
+            if roll == 5:                               # shrugged off, no grapple
+                self.log.append(narrate_hth(attacker, defender, "shrug"))
+                return "shrugged"
+            if roll == 6:                               # free hit, attacker thrown back
+                counter = self.rules.resolve_attack(
+                    self.dice, defender, attacker,
+                    zone=attack_zone(self.arena.layout, defender, attacker),
+                    dice_count=self.rules.attack_dice_count(attacker))
+                self.log.append(narrate_hth(attacker, defender, "free_hit"))
+                self._apply(defender, attacker, counter)
+                return "free_hit"
+            self._grapple_bare(defender)
+            if roll in (3, 4) and any(w.name in self._DAGGERS for w in defender.weapons):
+                defender.hth_drew_dagger = True         # readies a dagger next turn
         self._grapple_bare(attacker)
-        attacker.position = defender.position
-        attacker.posture = defender.posture = Posture.PRONE
-        attacker.hth_opponent, defender.hth_opponent = defender.uid, attacker.uid
-        self.log.append(narrate_hth(attacker, defender, "grapple"))
+        self._link_hth(attacker, defender)
+        self.log.append(narrate_hth(attacker, defender,
+                                    "join" if len(defender.hth_opponents) > 1 else "grapple"))
         self._queue_hth_strike(attacker, defender)
         return "grappled"
 
@@ -360,11 +379,12 @@ class GameState:
             hth_damage=self._hth_damage(attacker, defender)))
 
     def _clear_hth(self, figure: Figure) -> None:
-        """Break any grapple ``figure`` is in (it died, or broke free)."""
-        foe = self._by_uid(figure.hth_opponent)
-        figure.hth_opponent = None
-        if foe is not None and foe.hth_opponent == figure.uid:
-            foe.hth_opponent = None
+        """Break every grapple ``figure`` is in (it died, or broke free)."""
+        for uid in figure.hth_opponents:
+            foe = self._by_uid(uid)
+            if foe is not None and figure.uid in foe.hth_opponents:
+                foe.hth_opponents.remove(figure.uid)
+        figure.hth_opponents = []
 
     def _pole_charge_dice(self, attacker: Figure, target: Figure,
                           weapon, adjacent: bool) -> int:

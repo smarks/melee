@@ -32,8 +32,8 @@ def _rear_grapple(defense_roll):
 def test_hth_grapple_takes_both_to_the_ground() -> None:
     state, attacker, defender = _rear_grapple(2)
     assert state.hth_attack(attacker, defender) == "grappled"
-    assert attacker.hth_opponent == defender.uid
-    assert defender.hth_opponent == attacker.uid
+    assert defender.uid in attacker.hth_opponents
+    assert attacker.uid in defender.hth_opponents
     assert attacker.posture == Posture.PRONE and defender.posture == Posture.PRONE
     assert attacker.position == defender.position        # sharing the hex
     assert defender.ready_weapon is None                 # sword dropped, bare-handed
@@ -42,8 +42,31 @@ def test_hth_grapple_takes_both_to_the_ground() -> None:
 def test_hth_defender_shrugs_off_on_a_five() -> None:
     state, attacker, defender = _rear_grapple(5)
     assert state.hth_attack(attacker, defender) == "shrugged"
-    assert attacker.hth_opponent is None and defender.hth_opponent is None
+    assert not attacker.in_hth and not defender.in_hth
     assert defender.ready_weapon is not None             # kept its weapon
+
+
+def test_multiple_hth_gang_up_joins_without_rolling_and_scales_dice() -> None:
+    from engine.rules_data import DAGGER
+    arena = Arena(cols=9, rows=15)
+    defender = create_human("Def", 9, 15, "b", weapons=[DAGGER], ready_weapon=DAGGER)
+    a1 = create_human("A1", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    a2 = create_human("A2", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    defender.position = Hex(5, 5)
+    defender.facing = 0
+    a1.position = LAYOUT.neighbor(Hex(5, 5), 3)          # behind (rear) — fresh grapple
+    a1.facing = LAYOUT.direction_to(a1.position, defender.position)
+    a2.position = LAYOUT.neighbor(Hex(5, 5), 1)          # adjacent — will pile on
+    a2.facing = LAYOUT.direction_to(a2.position, defender.position)
+    state = GameState(arena, [defender, a1, a2], dice=Dice(scripted=[2] + [3] * 20))
+
+    state.hth_attack(a1, defender)                       # rear grapple (defender rolls 2)
+    assert state.hth_attack(a2, defender) == "grappled"  # joins the brawl, no roll
+    assert a1.uid in defender.hth_opponents and a2.uid in defender.hth_opponents
+
+    a1.ready_weapon = a2.ready_weapon = defender.ready_weapon = None   # bare hands
+    assert state._hth_damage(a1, defender).modifier == -3   # two on a side -> 1d-3
+    assert state._hth_damage(defender, a1).modifier == -4   # lone, outmuscled 9 vs 24
 
 
 def test_hth_strike_uses_dagger_dice_at_plus_four() -> None:
@@ -67,7 +90,7 @@ def test_hth_free_hit_on_a_six() -> None:
     attacker.facing = LAYOUT.direction_to(attacker.position, defender.position)
     state = GameState(arena, [attacker, defender], dice=Dice(scripted=[6] + [3] * 12))
     assert state.hth_attack(attacker, defender) == "free_hit"
-    assert attacker.hth_opponent is None                 # no grapple took hold
+    assert not attacker.in_hth                            # no grapple took hold
 
 
 def test_cannot_grapple_a_standing_equal_foe_from_the_front() -> None:

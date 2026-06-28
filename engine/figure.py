@@ -84,7 +84,7 @@ class Figure:
     current_option: object | None = None  # the Option chosen this turn
     dealt_st_damage_this_turn: bool = False  # for force-retreat eligibility
     missile_cooldown: int = 0        # turns until a fired missile weapon reloads
-    hth_opponent: str | None = None  # uid of the foe this figure is grappling (HTH)
+    hth_opponents: list[str] = field(default_factory=list)  # uids grappled (HTH)
     hth_drew_dagger: bool = False    # readied a dagger mid-grapple (usable next turn)
 
     def __post_init__(self) -> None:
@@ -123,7 +123,7 @@ class Figure:
     @property
     def in_hth(self) -> bool:
         """Locked in hand-to-hand combat (grappling on the ground)."""
-        return self.hth_opponent is not None
+        return bool(self.hth_opponents)
 
     @property
     def base_adj_dx(self) -> int:
