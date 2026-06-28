@@ -555,6 +555,7 @@ def api_state(request, gid):
         return JsonResponse({"error": "unknown game"}, status=404)
     payload = _payload(game)
     payload.update(_ownership_fields(game, _player_id(request)))
+    payload["is_admin"] = _is_admin(request)
     return JsonResponse(payload)
 
 
@@ -654,14 +655,25 @@ def _ownership_fields(game: dict, pid: str | None) -> dict:
 _FIGURE_ACTIONS = {"move", "queue_attack", "force_retreat", "update_figure"}
 
 
+def _is_admin(request) -> bool:
+    """A logged-in tarmar-auth account with the admin flag (Spencer's Hybrid model,
+    #86). Admins override seat ownership; regular players stay bound to their seats."""
+    user = getattr(request, "user", None)
+    return bool(user is not None and user.is_authenticated and user.is_staff)
+
+
 def _authorize_action(game: dict, request, body: dict) -> None:
     """Enforce seat ownership on a mutating action: you must own at least one seat
     to drive the shared turn state, and may only act on a figure of a side you own.
-    Reads (state/options) stay open so anyone with the link can spectate. Games
-    built outside _start_game (test fixtures) carry no seats and are unrestricted.
+    An admin (#86) bypasses these checks — they may drive any side and edit any
+    figure. Reads (state/options) stay open so anyone with the link can spectate.
+    Games built outside _start_game (test fixtures) carry no seats and are
+    unrestricted.
     """
     seats = game.get("seats")
     if not seats:
+        return
+    if _is_admin(request):
         return
     mine = _owned_sides(game, request)
     if not mine:
@@ -696,6 +708,7 @@ def api_action(request, gid):
 
     payload = _payload(game)
     payload.update(_ownership_fields(game, _player_id(request)))
+    payload["is_admin"] = _is_admin(request)
     if result is not None:
         payload["result"] = result
     return JsonResponse(payload)
