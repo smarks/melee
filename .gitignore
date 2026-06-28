@@ -6,3 +6,7 @@ db.sqlite3
 staticfiles/
 build/
 dist/
+
+# Reference rulebook PDFs are kept local only (large binaries); the distilled
+# specs in docs/reference/*.md are tracked instead.
+docs/reference/*.pdf
