@@ -261,13 +261,13 @@ function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 const PHASE_LABEL = {initiative: "Initiative", move: "Movement", combat: "Combat"};
 const OPTION_LABEL = {
   move: "Full move", half_move: "Half move", charge_attack: "⚔ Charge & Attack", dodge: "Dodge",
-  ready_weapon: "Ready Weapon", missile_attack: "⚔ Missile Attack", stand_up: "Stand Up",
+  ready_weapon: "Ready Weapon", missile_attack: "⚔ Missile Attack", stand_up: "Stand Up", crawl: "Crawl 2",
   shift_attack: "⚔ Attack (may shift 1)", shift_defend: "Shift & Defend",
   one_last_shot: "⚔ One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
   hth_attack: "🤼 Grapple", pick_up: "Pick up weapon",
   go_prone: "Drop prone", kneel: "Kneel",
 };
-const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage"]);
+const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage", "crawl"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
 const TEAM_FILL = {red: "#d0524f", blue: "#4f86d0", green: "#57b894", gold: "#e0b13c", violet: "#b07ad8"};
 const fillFor = side => TEAM_FILL[side] || "#888";

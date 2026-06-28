@@ -165,14 +165,19 @@ class GameState:
     # ---- movement ----
     def legal_options(self, figure: Figure) -> list[Option]:
         if figure.posture != Posture.STANDING:
-            return [Option.STAND_UP]
+            # A grounded figure may rise (g) or, instead, crawl up to two hexes
+            # (g, p.7) — but only if there is somewhere to crawl to.
+            grounded = [Option.STAND_UP]
+            if self.reachable(figure, Option.CRAWL):
+                grounded.append(Option.CRAWL)
+            return grounded
         weapon = figure.ready_weapon
         has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
         can_fire = has_missile and figure.missile_cooldown == 0
         legal: list[Option] = []
         for option in options_for(engaged=self.engaged(figure)):
             option_spec = spec(option)
-            if option == Option.STAND_UP:
+            if option in (Option.STAND_UP, Option.CRAWL):
                 continue                       # already standing — nothing to do
             if option_spec.is_missile and not can_fire:
                 continue                       # no missile ready, or still reloading
@@ -204,6 +209,11 @@ class GameState:
             if option == Option.STAND_UP:
                 if standing:
                     reason = "already standing"
+            elif option == Option.CRAWL:
+                if standing:
+                    reason = "already standing"
+                elif not self.reachable(figure, Option.CRAWL):
+                    reason = "nowhere to crawl"
             elif not standing:
                 reason = "must stand up first"
             elif spec(option).is_missile and not can_fire:

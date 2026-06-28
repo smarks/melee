@@ -496,7 +496,8 @@ def test_legal_options_hide_illegal_choices() -> None:
     assert Option.MISSILE_ATTACK in state.legal_options(archer)  # has a bow
 
     swordsman.posture = Posture.PRONE
-    assert state.legal_options(swordsman) == [Option.STAND_UP]
+    # A grounded figure may rise or crawl (g, p.7); open ground -> both offered.
+    assert state.legal_options(swordsman) == [Option.STAND_UP, Option.CRAWL]
 
 
 def test_option_availability_surfaces_full_set_with_reasons() -> None:
@@ -517,12 +518,15 @@ def test_option_availability_surfaces_full_set_with_reasons() -> None:
     assert Option.STAND_UP in avail and avail[Option.STAND_UP] == "already standing"
     assert avail[Option.MISSILE_ATTACK] == "no missile weapon ready"
 
-    # A prone figure: every move option but Stand Up is shown disabled with a why.
+    # A prone figure: every move option but Stand Up and Crawl is shown disabled
+    # with a why (both grounded options are live on open ground).
     swordsman.posture = Posture.PRONE
     prone = dict(state.option_availability(swordsman))
     assert prone[Option.STAND_UP] is None
+    assert prone[Option.CRAWL] is None
     assert all(reason == "must stand up first"
-               for opt, reason in prone.items() if opt != Option.STAND_UP)
+               for opt, reason in prone.items()
+               if opt not in (Option.STAND_UP, Option.CRAWL))
 
 
 def test_attack_ordering_is_highest_adjdx_first() -> None:
@@ -680,3 +684,40 @@ def test_missile_shot_gains_no_rear_bonus_when_target_falls_mid_phase() -> None:
     target.posture = Posture.PRONE                       # felled before the arrow lands
     result = state.resolve_combat()[0]
     assert "rear" not in result.to_hit_breakdown         # missiles never get facing
+
+
+def test_prone_figure_may_crawl_two_hexes_and_stays_prone() -> None:
+    """Option (g) alternative (p.7): a grounded figure may crawl up to two hexes
+    during the movement phase instead of standing, and remains prone."""
+    arena = Arena(cols=9, rows=15)
+    crawler = create_human("Crawler", 12, 12, "a",
+                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    crawler.position = Hex(5, 5)
+    crawler.posture = Posture.PRONE
+    foe.position = Hex(8, 12)                             # well clear, no engagement
+    state = GameState(arena, [crawler, foe])
+    legal = state.legal_options(crawler)
+    assert Option.STAND_UP in legal and Option.CRAWL in legal
+    destination = state.reachable(crawler, Option.CRAWL)
+    assert destination                                   # somewhere to crawl
+    path = state.reach_for(crawler, Option.CRAWL).path_to(
+        next(h for h in destination
+             if arena.layout.distance(Hex(5, 5), h) == 2))
+    assert len(path) == 2                                # at most two hexes
+    state.move(crawler, Option.CRAWL, path=path)
+    assert crawler.posture == Posture.PRONE              # still on the ground
+    assert crawler.position == path[-1]
+
+
+def test_crawl_is_not_offered_to_a_standing_figure() -> None:
+    arena = Arena(cols=9, rows=15)
+    figure = create_human("Up", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    figure.position = Hex(5, 5)
+    foe.position = Hex(8, 12)
+    state = GameState(arena, [figure, foe])
+    assert Option.CRAWL not in state.legal_options(figure)
+    availability = dict(state.option_availability(figure))
+    assert availability[Option.CRAWL] == "already standing"
