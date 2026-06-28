@@ -447,7 +447,9 @@ def test_crossbow_must_reload_between_shots() -> None:
     foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     shooter.position = Hex(5, 5)
     foe.position = Hex(5, 9)                      # well apart — a missile shot
-    state = GameState(arena, [shooter, foe])
+    # Scripted dice keep this deterministic — an unseeded natural-16+ fumble would
+    # drop the crossbow and change legal_options out from under the assertions.
+    state = GameState(arena, [shooter, foe], dice=Dice(scripted=[3] * 12))
 
     shooter.current_option = Option.MISSILE_ATTACK
     state.queue_attack(shooter, foe)
