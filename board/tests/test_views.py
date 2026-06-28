@@ -558,3 +558,35 @@ def test_non_numeric_seed_falls_back_to_random_not_500(client: Client) -> None:
     resp = client.get("/api/game/new?seed=not-a-number")
     assert resp.status_code == 200
     assert "gid" in resp.json()
+
+
+def test_bounded_store_evicts_least_recently_touched_over_cap() -> None:
+    """Over the cap, the least-recently-touched game is dropped while a freshly
+    touched one survives (#83)."""
+    from board.views import BoundedGameStore
+
+    store = BoundedGameStore(max_games=2, ttl_seconds=10_000)
+    store["a"] = {"n": 1}
+    store["b"] = {"n": 2}
+    assert store["a"]                 # touch "a" so "b" becomes least-recent
+    store["c"] = {"n": 3}             # over cap -> evict the LRU entry ("b")
+    assert "a" in store and "c" in store
+    assert "b" not in store
+    assert len(store) == 2
+
+
+def test_bounded_store_evicts_games_past_their_ttl() -> None:
+    """A game untouched past the TTL is reclaimed; a recently touched one is
+    kept (#83)."""
+    from board.views import BoundedGameStore
+
+    now = [0.0]
+    store = BoundedGameStore(max_games=100, ttl_seconds=10,
+                             clock=lambda: now[0])
+    store["old"] = {"n": 1}
+    now[0] = 5.0
+    store["fresh"] = {"n": 2}
+    now[0] = 12.0                     # "old" is 12s idle (> TTL); "fresh" is 7s
+    assert store["fresh"]            # any access triggers TTL eviction
+    assert "old" not in store
+    assert "fresh" in store
