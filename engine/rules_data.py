@@ -51,6 +51,8 @@ class Weapon:
         hth_damage: damage when used in hand-to-hand (only daggers differ).
         throwable: may be thrown with the thrown-weapon rules.
         notes: rulebook note text.
+        reload: base turns to reload after firing (crossbows; 0 = fires every
+            turn). Reduced by 1 at adjDX 14+ — see :func:`missile_reload_turns`.
     """
 
     name: str
@@ -61,6 +63,7 @@ class Weapon:
     hth_damage: DamageDice | None = None
     throwable: bool = False
     notes: str = ""
+    reload: int = 0
 
 
 # ---- Weapon Table (p.14) ----------------------------------------------------
@@ -103,11 +106,22 @@ HORSE_BOW = Weapon("Horse bow", DamageDice(1, 0), 10, kind=WeaponKind.MISSILE,
 LONGBOW = Weapon("Longbow", DamageDice(1, 2), 11, kind=WeaponKind.MISSILE,
                  two_handed=True, notes="2 shots/turn if adjDX 18+")
 LIGHT_CROSSBOW = Weapon("Light crossbow", DamageDice(2, 0), 12,
-                        kind=WeaponKind.MISSILE, two_handed=True,
+                        kind=WeaponKind.MISSILE, two_handed=True, reload=1,
                         notes="fires every other turn, or every turn if adjDX 14+")
 HEAVY_CROSSBOW = Weapon("Heavy crossbow", DamageDice(3, 0), 15,
-                        kind=WeaponKind.MISSILE, two_handed=True,
+                        kind=WeaponKind.MISSILE, two_handed=True, reload=2,
                         notes="fires every 3rd turn, or every other if adjDX 14+")
+
+
+def missile_reload_turns(weapon: Weapon | None, adj_dx: int) -> int:
+    """Turns a missile weapon needs to reload before it can fire again (p.16).
+
+    Crossbows reload one turn faster at adjDX 14+; bows reload as they fire (0).
+    """
+    if weapon is None or weapon.kind != WeaponKind.MISSILE:
+        return 0
+    return max(0, weapon.reload - (1 if adj_dx >= 14 else 0))
+
 
 WEAPONS: dict[str, Weapon] = {
     weapon.name: weapon

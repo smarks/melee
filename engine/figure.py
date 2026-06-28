@@ -83,6 +83,7 @@ class Figure:
     uid: str = ""                    # stable id for UI / occupancy
     current_option: object | None = None  # the Option chosen this turn
     dealt_st_damage_this_turn: bool = False  # for force-retreat eligibility
+    missile_cooldown: int = 0        # turns until a fired missile weapon reloads
 
     def __post_init__(self) -> None:
         if self.strength < 1 or self.dexterity < 1:

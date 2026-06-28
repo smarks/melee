@@ -139,6 +139,8 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list]:
     if option is not None and spec(option).sets_dodge:
         return [], []
     if weapon.kind == WeaponKind.MISSILE:
+        if figure.missile_cooldown > 0:
+            return [], []                       # still reloading — can't fire
         return [], [e.uid for e in state.enemies_of(figure) if e.position is not None]
     fronts = set(front_hexes(state.arena.layout, figure))
     return [e.uid for e in state.enemies_of(figure) if e.position in fronts], []

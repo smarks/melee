@@ -42,7 +42,7 @@ from .narrative import (
 )
 from .options import Option, OptionSpec, options_for, spec
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
-from .rules_data import WOUND_HITS_THRESHOLD, WeaponKind
+from .rules_data import WOUND_HITS_THRESHOLD, WeaponKind, missile_reload_turns
 
 
 class IllegalAction(Exception):
@@ -148,13 +148,14 @@ class GameState:
         if figure.posture != Posture.STANDING:
             return [Option.STAND_UP]
         weapon = figure.ready_weapon
-        has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+        can_fire = (weapon is not None and weapon.kind == WeaponKind.MISSILE
+                    and figure.missile_cooldown == 0)
         legal: list[Option] = []
         for option in options_for(engaged=self.engaged(figure)):
             if option == Option.STAND_UP:
                 continue                       # already standing — nothing to do
-            if spec(option).is_missile and not has_missile:
-                continue                       # no missile weapon ready to fire
+            if spec(option).is_missile and not can_fire:
+                continue                       # no missile ready, or still reloading
             legal.append(option)
         return legal
 
@@ -292,6 +293,8 @@ class GameState:
             raise IllegalAction(
                 f"{weapon.name} cannot be used with option {option.value}"
             )
+        if is_missile and attacker.missile_cooldown > 0:
+            raise IllegalAction(f"{weapon.name} is still reloading")
         zone = attack_zone(self.arena.layout, attacker, target)
         if is_missile:
             range_penalty = self.rules.missile_range_penalty(
@@ -363,6 +366,11 @@ class GameState:
 
     def _apply(self, attacker: Figure, target: Figure, result: AttackResult) -> None:
         attacker.attacked_this_turn = True
+        # A fired missile weapon must reload before firing again (crossbows take
+        # turns; bows reload as they fire). end_turn counts the reload down.
+        if result.weapon is not None and result.weapon.kind == WeaponKind.MISSILE:
+            attacker.missile_cooldown = missile_reload_turns(
+                result.weapon, attacker.base_adj_dx) + 1
         # A fumble's own story (dropped/shattered weapon) replaces the swing line.
         if result.dropped_weapon or result.broke_weapon:
             self.log.append(
@@ -430,6 +438,8 @@ class GameState:
             figure.dodging = False
             figure.current_option = None
             figure.dealt_st_damage_this_turn = False
+            if figure.missile_cooldown > 0:        # a turn of reloading goes by
+                figure.missile_cooldown -= 1
         self._pending.clear()
         self.first_side = None
         self.turn_number += 1

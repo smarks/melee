@@ -614,7 +614,9 @@ function tokenBadge(f) {   // the same numbered disc the board draws, for matchi
 function weaponsLine(f) {
   const ready = f.weapon || "—";
   const reserve = (f.weapons || []).filter(w => w !== f.weapon);
-  return `<div class="muted">In hand: <b>${ready}</b>`
+  const reloading = f.reloading > 0
+    ? ` <span style="color:var(--target)">— reloading (${f.reloading})</span>` : "";
+  return `<div class="muted">In hand: <b>${ready}</b>${reloading}`
     + (reserve.length ? ` · ready to switch: ${reserve.join(", ")}` : "") + `</div>`;
 }
 function statusHeader(f) {
