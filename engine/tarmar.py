@@ -57,6 +57,11 @@ SHIELD_BONUS: dict[str, int] = {"Small shield": 1, "Large shield": 2}
 
 DEFEND_TN_BONUS = 4  # dodge/defend raises your Target Number (no advantage/disadvantage)
 
+# Knockdown fires when one turn's hits reach this fraction of the target's
+# Fatigue pool. Derived from classic Melee's KNOCKDOWN_HITS (8) against its
+# ~10-point ST pool (8/10 = 0.8); see TarmarRuleset.status_after_hit.
+TARMAR_KNOCKDOWN_FATIGUE_FRACTION = KNOCKDOWN_HITS / 10
+
 
 @dataclass
 class TarmarFigure(Figure):
@@ -71,7 +76,6 @@ class TarmarFigure(Figure):
     weapon_skill: dict[str, int] = field(default_factory=dict)  # weapon -> 0..5
     fatigue_taken: int = 0
     body_taken: int = 0
-    pending_body_hit: bool = False        # set by a crit, consumed by apply_damage
 
     def __post_init__(self) -> None:
         # Tarmar lets you wield a weapon you're too weak for (with a to-hit
@@ -170,7 +174,12 @@ class TarmarRuleset(Ruleset):
                 weapon=weapon, zone=zone, note="no Tarmar weapon class")
 
         tier = ARMOUR_TIER.get(target.armor.name, "None")
-        shield = SHIELD_BONUS.get(target.shield.name, 0) if target.shield_ready else 0
+        # A shield only covers the front, so its to-hit bonus applies only to a
+        # frontal attack -- matching the damage-absorption gate (`from_front`)
+        # below. Without this, a shield would also protect the flank/rear and
+        # nullify flanking against a shielded foe.
+        shield = (SHIELD_BONUS.get(target.shield.name, 0)
+                  if target.shield_ready and zone == FRONT else 0)
         dodge = tarmar_rules.dodge_modifier(target.base_adj_dx)
         defend = DEFEND_TN_BONUS if target.dodging else 0
         target_number = tarmar_rules.target_number(
@@ -203,12 +212,12 @@ class TarmarRuleset(Ruleset):
             damage = tarmar_rules.damage_after_armour(
                 raw_damage, stops, weapon_class, tier)
             damage = max(0, damage - main_gauche_parry(target, weapon, zone))
-            target.pending_body_hit = outcome["critical"]  # crits reach Body too
 
         return AttackResult(
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
             multiplier=multiplier, raw_damage=raw_damage, damage=damage,
             dropped_weapon=False, broke_weapon=False, weapon=weapon, zone=zone,
+            body_hit=outcome["critical"],  # crit reaches Body (carried on the result, not the target)
             note=outcome["outcome"],
             to_hit_breakdown=self._breakdown(
                 attacker, weapon, weapon_class, tier, shield, target.dodging,
@@ -228,11 +237,11 @@ class TarmarRuleset(Ruleset):
         if outcome["hit"]:
             raw_damage = max(0, dice.total(hth_damage.count) + hth_damage.modifier) * multiplier
             damage = max(0, raw_damage - target.hits_stopped(from_front=(zone == FRONT)))
-            target.pending_body_hit = outcome["critical"]
         return AttackResult(
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
             multiplier=multiplier, raw_damage=raw_damage, damage=damage,
             dropped_weapon=False, broke_weapon=False, weapon=weapon, zone=zone,
+            body_hit=outcome["critical"],
             note=outcome["outcome"], to_hit_breakdown=f"grapple: d20 {bonus:+d} vs {target_number}")
 
     @staticmethod
@@ -267,18 +276,25 @@ class TarmarRuleset(Ruleset):
         roll = f"roll d20 {bonus:+d}" + (f" ({', '.join(parts)})" if parts else "")
         return f"{target}; {roll}"
 
-    def apply_damage(self, target, amount: int) -> None:
+    def apply_damage(self, target, amount: int, *, body_hit: bool = False) -> None:
         target.fatigue_taken += amount
         target.hits_this_turn += amount          # keeps knockdown / force-retreat working
-        if getattr(target, "pending_body_hit", False):
+        if body_hit:
             target.body_taken += amount          # a crit reaches Body as well as Fatigue
-            target.pending_body_hit = False
 
     def status_after_hit(self, target):
         if target.current_body <= 0:
             return DEAD
         if target.current_fatigue <= 0:
             return UNCONSCIOUS
-        if target.hits_this_turn >= KNOCKDOWN_HITS:
+        # Classic Melee knocks a figure down after KNOCKDOWN_HITS (8) hits in one
+        # turn -- a threshold tuned for that game's ~10-point ST pool. Tarmar's
+        # Fatigue pool is ~5x larger, so the flat 8 would fire knockdown on nearly
+        # any hit. Scale it to the same fraction of the target's own Fatigue pool
+        # (8/10 = 0.8), so a staggering blow is still ~80% of the fighter's stamina
+        # regardless of pool size.
+        knockdown_threshold = math.ceil(
+            target.fatigue * TARMAR_KNOCKDOWN_FATIGUE_FRACTION)
+        if target.hits_this_turn >= knockdown_threshold:
             return KNOCKDOWN
         return None
