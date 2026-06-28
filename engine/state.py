@@ -35,6 +35,7 @@ from .facing import (
     zone_toward,
 )
 from .figure import Figure, Posture, Race
+from .megahex import megahex_distance
 from .movement import reachable_moves
 from .narrative import (
     narrate_attack,
@@ -935,7 +936,11 @@ class GameState:
                 range_penalty = -distance     # -1 DX per hex of distance (p.15)
                 shots = 1
             else:
-                range_penalty = self.rules.missile_range_penalty(distance)
+                # Missile range is penalised by megahex (MH) distance, not raw
+                # hex count (p.16): the map's 7-hex flowers are the yardstick.
+                megahexes = megahex_distance(
+                    self.arena.layout, attacker.position, target.position)
+                range_penalty = self.rules.missile_range_penalty(megahexes)
                 shots = max_missile_shots(weapon, attacker.base_adj_dx)
             # zone is carried so a ready shield still stops frontal missiles,
             # but ignore_facing suppresses the to-hit facing bonus (missiles
