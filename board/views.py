@@ -554,7 +554,7 @@ def api_state(request, gid):
     if not game:
         return JsonResponse({"error": "unknown game"}, status=404)
     payload = _payload(game)
-    payload["you_control"] = sorted(_owned_sides(game, request))
+    payload.update(_ownership_fields(game, _player_id(request)))
     return JsonResponse(payload)
 
 
@@ -632,11 +632,23 @@ def _set_player_cookie(response, pid: str) -> None:
         max_age=_PLAYER_COOKIE_MAX_AGE, httponly=True, samesite="Lax")
 
 
-def _owned_sides(game: dict, request) -> set[str]:
-    pid = _player_id(request)
+def _sides_owned_by(seats: dict, pid: str | None) -> set[str]:
     if pid is None:
         return set()
-    return {side for side, owner in game.get("seats", {}).items() if owner == pid}
+    return {side for side, owner in seats.items() if owner == pid}
+
+
+def _owned_sides(game: dict, request) -> set[str]:
+    return _sides_owned_by(game.get("seats", {}), _player_id(request))
+
+
+def _ownership_fields(game: dict, pid: str | None) -> dict:
+    """Seat info the client needs: which sides are yours, which are open to join."""
+    seats = game.get("seats", {})
+    return {
+        "you_control": sorted(_sides_owned_by(seats, pid)),
+        "open_seats": sorted(side for side, owner in seats.items() if owner == "open"),
+    }
 
 
 _FIGURE_ACTIONS = {"move", "queue_attack", "force_retreat", "update_figure"}
@@ -683,10 +695,64 @@ def api_action(request, gid):
         return JsonResponse({"error": str(exc)}, status=403)
 
     payload = _payload(game)
-    payload["you_control"] = sorted(_owned_sides(game, request))
+    payload.update(_ownership_fields(game, _player_id(request)))
     if result is not None:
         payload["result"] = result
     return JsonResponse(payload)
+
+
+@csrf_exempt
+def api_seat(request, gid):
+    """Open / claim / release a seat — the multiplayer join mechanism (#85).
+
+    - ``open``    — the current owner frees their side so another player can take it
+    - ``claim``   — a player takes an open side (a fresh joiner is issued an id)
+    - ``release`` — an owner gives their side back to the open pool
+
+    Computer seats can't be reassigned. The per-figure-side authorization in
+    :func:`_authorize_action` then enforces "control only your own figures".
+    """
+    game = GAMES.get(gid)
+    if not game:
+        return JsonResponse({"error": "unknown game"}, status=404)
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    try:
+        body = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "bad JSON"}, status=400)
+    seats = game.get("seats")
+    if not seats:
+        return JsonResponse({"error": "this game has no seats"}, status=400)
+
+    action = body.get("action")
+    side = body.get("side")
+    if side not in seats:
+        return JsonResponse({"error": f"unknown side {side!r}"}, status=400)
+    if seats[side] == "computer":
+        return JsonResponse({"error": "a computer seat can't be reassigned"}, status=400)
+
+    pid = _player_id(request)
+    minted = False
+    if action == "claim":
+        if seats[side] != "open":
+            return JsonResponse({"error": "that seat is already taken"}, status=409)
+        if pid is None:
+            pid, minted = secrets.token_hex(16), True
+        seats[side] = pid
+    elif action in ("open", "release"):
+        if seats[side] != pid:
+            return JsonResponse({"error": "you don't own that seat"}, status=403)
+        seats[side] = "open"
+    else:
+        return JsonResponse({"error": f"unknown seat action {action!r}"}, status=400)
+
+    payload = _payload(game)
+    payload.update(_ownership_fields(game, pid))
+    response = JsonResponse(payload)
+    if minted:
+        _set_player_cookie(response, pid)
+    return response
 
 
 def _dispatch(game: dict, body: dict):

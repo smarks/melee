@@ -16,4 +16,5 @@ urlpatterns = [
     path("api/game/<str:gid>", views.api_state, name="api_state"),
     path("api/game/<str:gid>/options", views.api_options, name="api_options"),
     path("api/game/<str:gid>/action", views.api_action, name="api_action"),
+    path("api/game/<str:gid>/seat", views.api_seat, name="api_seat"),
 ]

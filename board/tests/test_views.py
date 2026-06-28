@@ -614,3 +614,49 @@ def test_only_the_owning_session_can_drive_the_game(client: Client) -> None:
     )
     assert ok.status_code == 200
     assert set(ok.json()["you_control"]) == {"red", "blue"}   # hot-seat: owns both
+
+
+def test_open_and_claim_a_seat_splits_control(client: Client) -> None:
+    # #85: the creator opens a side; a second browser claims it and then controls
+    # only that side. Each player may act on their own figures, not the other's.
+    creator = client
+    data = _new(creator)
+    gid = data["gid"]
+    blue_uid = next(f["uid"] for f in data["state"]["figures"] if f["side"] == "blue")
+
+    opened = creator.post(f"/api/game/{gid}/seat",
+                          data=json.dumps({"action": "open", "side": "blue"}),
+                          content_type="application/json")
+    assert opened.status_code == 200
+    assert opened.json()["open_seats"] == ["blue"]
+    assert opened.json()["you_control"] == ["red"]       # creator gave up blue
+
+    joiner = Client()
+    claimed = joiner.post(f"/api/game/{gid}/seat",
+                          data=json.dumps({"action": "claim", "side": "blue"}),
+                          content_type="application/json")
+    assert claimed.status_code == 200
+    assert claimed.json()["you_control"] == ["blue"]
+    assert claimed.json()["open_seats"] == []
+
+    def _move_blue(who: Client):
+        return who.post(f"/api/game/{gid}/action",
+                        data=json.dumps({"type": "move", "uid": blue_uid, "option": "move"}),
+                        content_type="application/json")
+    assert _move_blue(creator).status_code == 403        # no longer the creator's
+    assert _move_blue(joiner).status_code != 403         # authorized (phase handled elsewhere)
+
+
+def test_seat_action_errors(client: Client) -> None:
+    data = _new(client)
+    gid = data["gid"]
+
+    def seat(who: Client, action: str, side: str):
+        return who.post(f"/api/game/{gid}/seat",
+                        data=json.dumps({"action": action, "side": side}),
+                        content_type="application/json")
+
+    assert seat(Client(), "open", "red").status_code == 403     # not your seat to open
+    assert seat(Client(), "claim", "red").status_code == 409    # still taken, can't claim
+    assert seat(client, "open", "purple").status_code == 400    # unknown side
+    assert seat(client, "frobnicate", "red").status_code == 400  # unknown action
