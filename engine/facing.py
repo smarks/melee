@@ -34,11 +34,23 @@ def zone_of_direction(facing: int, direction_index: int) -> str:
 
 
 def front_hexes(layout: HexLayout, figure: Figure) -> list[Hex]:
-    """The three hexes in front of ``figure`` (no bounds-checking)."""
-    return [
-        layout.neighbor(figure.position, (figure.facing + delta) % 6)
-        for delta in (-1, 0, 1)
-    ]
+    """The hexes in front of ``figure`` (no bounds-checking).
+
+    For a single-hex figure these are exactly the three front hexes (the faced
+    hex and its two flanks), in the original ``(-1, 0, 1)`` order. For a
+    multi-hex figure (the giant) the front is the union of every footprint hex's
+    own three front hexes, deduped and with the figure's own footprint removed --
+    the forward edge of the whole cluster.
+    """
+    footprint = figure.footprint(layout)
+    footprint_set = set(footprint)
+    fronts: list[Hex] = []
+    for hex_position in footprint:
+        for delta in (-1, 0, 1):
+            candidate = layout.neighbor(hex_position, (figure.facing + delta) % 6)
+            if candidate not in footprint_set and candidate not in fronts:
+                fronts.append(candidate)
+    return fronts
 
 
 def side_hexes(layout: HexLayout, figure: Figure) -> list[Hex]:
@@ -62,6 +74,9 @@ def zone_toward(layout: HexLayout, observer: Figure, point: Hex) -> str | None:
     """
     if observer.position is None or point == observer.position:
         return None
+    footprint = observer.footprint(layout)
+    if len(footprint) > 1:                       # multi-hex observer (the giant)
+        return _multi_zone_toward(layout, observer, point, footprint)
     line = layout.line(observer.position, point)
     direction = layout.direction_to(observer.position, line[1])
     if direction is None:
@@ -76,39 +91,107 @@ def zone_toward(layout: HexLayout, observer: Figure, point: Hex) -> str | None:
     return zone_of_direction(observer.facing, direction)
 
 
+def _multi_zone_toward(
+    layout: HexLayout, observer: Figure, point: Hex, footprint: list[Hex]
+) -> str | None:
+    """Zone of a multi-hex observer (the giant) toward ``point``.
+
+    Front if the point lies in the cluster's front edge; otherwise the zone is
+    read from the footprint hex nearest the point, using the giant's facing -- so
+    a flank/rear attacker still earns its facing bonus against a giant.
+    """
+    if observer.all_front:
+        return FRONT
+    if observer.posture != Posture.STANDING:
+        return REAR
+    if point in set(front_hexes(layout, observer)):
+        return FRONT
+    nearest = min(footprint, key=lambda hex_position: layout.distance(hex_position, point))
+    if point == nearest:                         # standing on a footprint hex (HTH)
+        return REAR
+    line = layout.line(nearest, point)
+    if len(line) < 2:
+        return None
+    direction = layout.direction_to(nearest, line[1])
+    if direction is None:
+        return None
+    return zone_of_direction(observer.facing, direction)
+
+
+def _footprints_adjacent(layout: HexLayout, figure: Figure, other: Figure) -> bool:
+    """Whether any hex of one figure's footprint is adjacent to the other's.
+
+    For two single-hex figures this is just ``distance == 1``; it generalises
+    adjacency to a multi-hex figure (the giant) without changing the single-hex
+    answer.
+    """
+    figure_footprint = figure.footprint(layout)
+    other_footprint = other.footprint(layout)
+    return any(
+        layout.distance(here, there) == 1
+        for here in figure_footprint
+        for there in other_footprint
+    )
+
+
 def is_engaged_by(layout: HexLayout, figure: Figure, enemy: Figure) -> bool:
     """True if ``figure`` stands in ``enemy``'s front hex (so enemy engages it).
 
-    A prone enemy has no front and engages no one.
+    A prone or airborne enemy has no front and engages no one. Both figures'
+    footprints are honoured: ``figure`` is engaged if any of its footprint hexes
+    sits in the enemy's (footprint-wide) front.
     """
-    if enemy.posture == Posture.PRONE or enemy.collapsed:
+    if enemy.posture == Posture.PRONE or enemy.collapsed or enemy.flying:
         return False
     if figure.position is None or enemy.position is None:
         return False
-    if layout.distance(enemy.position, figure.position) != 1:
+    if not _footprints_adjacent(layout, figure, enemy):
         return False  # engagement requires adjacency
-    return zone_toward(layout, enemy, figure.position) == FRONT
+    return any(
+        zone_toward(layout, enemy, hex_position) == FRONT
+        for hex_position in figure.footprint(layout)
+    )
+
+
+def _engages(layout: HexLayout, figure: Figure, enemy: Figure) -> bool:
+    """Whether this one ``enemy`` is in melee contact with ``figure`` (mutual).
+
+    Contact is mutual: it holds if ``figure`` stands in the enemy's front, or a
+    standing enemy stands in the figure's own front (adjacent and facing it).
+    """
+    if enemy.posture == Posture.PRONE or enemy.collapsed or enemy.flying:
+        return False
+    if is_engaged_by(layout, figure, enemy):
+        return True  # the enemy faces the figure
+    if (figure.posture == Posture.PRONE or figure.collapsed or figure.flying
+            or figure.position is None or enemy.position is None):
+        return False
+    if not _footprints_adjacent(layout, figure, enemy):
+        return False
+    return any(
+        zone_toward(layout, figure, hex_position) == FRONT
+        for hex_position in enemy.footprint(layout)
+    )
+
+
+def engagement_count(layout: HexLayout, figure: Figure, enemies) -> int:
+    """How many distinct enemies are in melee contact with ``figure``."""
+    return sum(1 for enemy in enemies if _engages(layout, figure, enemy))
 
 
 def is_engaged(layout: HexLayout, figure: Figure, enemies) -> bool:
-    """True if ``figure`` is in melee contact with any standing enemy.
+    """True if ``figure`` is in melee contact with enough standing enemies.
 
-    Contact is mutual: a figure is engaged if it stands in an enemy's front hex
-    **or** a standing enemy stands in the figure's own front hex (i.e. it is
-    adjacent and facing the enemy). So two figures standing face-to-face both
-    count as engaged — and both may Shift & Attack.
+    Contact is mutual (see :func:`_engages`): two figures face-to-face both count
+    as engaged, and both may Shift & Attack. A normal figure is engaged by a
+    single foe; a giant needs **two** distinct foes in its front to be engaged
+    (``needs_two_to_engage``) -- one lone figure cannot pin it (p.20). An
+    airborne figure is never engaged.
     """
-    for enemy in enemies:
-        if enemy.posture == Posture.PRONE or enemy.collapsed:
-            continue
-        if is_engaged_by(layout, figure, enemy):
-            return True  # the enemy faces the figure
-        if (figure.posture != Posture.PRONE and not figure.collapsed
-                and figure.position is not None and enemy.position is not None
-                and layout.distance(figure.position, enemy.position) == 1
-                and zone_toward(layout, figure, enemy.position) == FRONT):
-            return True  # the figure faces the enemy
-    return False
+    if figure.flying:
+        return False
+    needed = 2 if figure.needs_two_to_engage else 1
+    return engagement_count(layout, figure, enemies) >= needed
 
 
 def attack_zone(layout: HexLayout, attacker: Figure, target: Figure) -> str | None:

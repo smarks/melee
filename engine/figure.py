@@ -17,20 +17,43 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from hexarena.hex import Hex
+from hexarena.hex import Hex, HexLayout
 
 from .rules_data import (
     HUMAN_MIN_ATTRIBUTE,
     HUMAN_START_TOTAL,
+    KNOCKDOWN_HITS,
     LOW_ST_DX_PENALTY,
     LOW_ST_THRESHOLD,
     WOUND_DX_PENALTY,
+    WOUND_HITS_THRESHOLD,
     Armor,
     NO_ARMOR,
     NO_SHIELD,
     Shield,
     Weapon,
 )
+
+
+def footprint_for(
+    layout: HexLayout, anchor: Hex, facing: int, size: int
+) -> list[Hex]:
+    """The hexes a figure of ``size`` occupies, anchored at ``anchor``.
+
+    A ``size`` of 1 (the default for every normal figure) is just ``[anchor]``,
+    so single-hex behaviour is unchanged. A giant (``size`` 3) holds a triangle
+    of three mutually adjacent hexes -- its anchor plus the two hexes forward of
+    it (in the ``facing`` and ``facing + 1`` directions). Those two forward hexes
+    are each adjacent to the anchor and to each other, so the cluster is a solid
+    tri-hex whose forward edge is the giant's front.
+    """
+    if size <= 1:
+        return [anchor]
+    return [
+        anchor,
+        layout.neighbor(anchor, facing % 6),
+        layout.neighbor(anchor, (facing + 1) % 6),
+    ]
 
 
 class Posture(str, Enum):
@@ -96,6 +119,15 @@ class Figure:
     # ---- nonhuman quirks (Section VIII) ----
     all_front: bool = False    # every facing is "front" (giant snake: no flank/rear)
     hard_to_hit: int = 0       # DX penalty it imposes on attackers (snake: 3)
+    # ---- size / footprint (multi-hex figures: the giant, p.20) ----
+    size: int = 1              # hexes occupied; 1 = normal, 3 = giant tri-hex
+    needs_two_to_engage: bool = False  # giant: engaged only by two foes in its front
+    # ---- flight (gargoyle, p.21) ----
+    fly_movement_allowance: int = 0    # MA when airborne; 0 = cannot fly
+    flying: bool = False               # currently airborne (lands to attack)
+    # ---- per-figure injury thresholds (the giant scales these, p.20) ----
+    wound_hits_threshold: int = WOUND_HITS_THRESHOLD      # hits/turn for -2 DX
+    knockdown_hits_threshold: int = KNOCKDOWN_HITS        # hits/turn to fall
 
     # ---- mutable fight state ----
     position: Hex | None = None
@@ -157,8 +189,38 @@ class Figure:
 
     @property
     def movement_allowance(self) -> int:
-        """Hexes per turn; set by armor (shields don't change MA)."""
+        """Hexes per turn; set by armor (shields don't change MA).
+
+        A figure that is airborne moves at its flying allowance instead (the
+        gargoyle: MA 8 on the ground, 16 in the air, p.21).
+        """
+        if self.flying and self.fly_movement_allowance:
+            return self.fly_movement_allowance
         return self.armor.movement_allowance
+
+    @property
+    def can_fly(self) -> bool:
+        """Whether this figure has a flight mode at all (gargoyle)."""
+        return self.fly_movement_allowance > 0
+
+    def footprint(self, layout: HexLayout) -> list[Hex]:
+        """The hexes this figure currently occupies (``[]`` if off the board).
+
+        Single-hex for a normal figure; a tri-hex cluster for the giant. See
+        :func:`footprint_for` for the cluster's shape.
+        """
+        if self.position is None:
+            return []
+        return footprint_for(layout, self.position, self.facing, self.size)
+
+    def take_off(self) -> None:
+        """Become airborne. A no-op for a figure that cannot fly."""
+        if self.can_fly:
+            self.flying = True
+
+    def land(self) -> None:
+        """Return to the ground (a flyer must land to attack, p.21)."""
+        self.flying = False
 
     @property
     def in_hth(self) -> bool:
