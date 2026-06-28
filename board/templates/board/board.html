@@ -547,6 +547,12 @@ function openMenu(f) {
       rows.push({label: `🛡 Shield-rush ${e ? e.name : uid}`,
                  act: () => setShieldRush(f, uid)});
     }
+    // Option (n) general disengage: a figure that chose Disengage in the
+    // movement phase steps one hex now instead of attacking (p.19).
+    for (const dest of (optInfo.disengage_dests || [])) {
+      rows.push({label: `💨 Disengage → ${dest}`,
+                 act: () => setDisengageMove(f, dest)});
+    }
     if (!grappling && !(optInfo.hth_targets || []).length)
       rows.push({label: "🤼 Grapple", reason: "no foe in reach to grapple", disabled: true});
     if (grappling)
@@ -614,6 +620,11 @@ function setShieldRush(f, target) {
                  label: `🛡 Shield-rush ${e ? e.name : target}`};
   render();
 }
+function setDisengageMove(f, dest) {
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", disengageMove: true, dest,
+                 label: `💨 Disengage → ${dest}`};
+  render();
+}
 function setAttack(f, target) {
   const e = figByUid(target);
   PLAN[f.uid] = {uid: f.uid, phase: "combat", target, label: `Attack ${e ? e.name : target}`};
@@ -641,6 +652,7 @@ async function executePlans(kind) {
   } else {
     for (const p of plans) {
       if (p.disengage) await act({type: "hth_disengage", uid: p.uid});
+      else if (p.disengageMove) await act({type: "disengage_move", uid: p.uid, dest: p.dest});
       else if (p.rush) await act({type: "shield_rush", uid: p.uid, target: p.target});
       else if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
                                     uid: p.uid, target: p.target});

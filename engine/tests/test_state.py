@@ -824,3 +824,48 @@ def test_shield_rush_requires_a_ready_shield() -> None:
         pass
     else:
         raise AssertionError("a shield-rush without a ready shield must be illegal")
+
+
+def test_general_disengage_moves_one_hex_in_combat_without_attacking() -> None:
+    """Option (n), p.19: at the attack step a disengaging figure moves one hex
+    instead of attacking, breaking engagement, and may never attack that turn."""
+    arena = Arena(cols=9, rows=15)
+    runner = create_human("Runner", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    runner.position = Hex(5, 5)
+    runner.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)         # engaged, face to face
+    foe.facing = LAYOUT.direction_to(foe.position, runner.position)
+    state = GameState(arena, [runner, foe])
+    runner.current_option = Option.DISENGAGE             # chosen in the movement phase
+    dest = LAYOUT.neighbor(Hex(5, 5), 3)                 # step away from the foe
+    assert dest in state.disengage_destinations(runner)
+    state.disengage_move(runner, dest)
+    assert runner.position == dest                       # relocated one hex
+    assert runner.attacked_this_turn                     # the move replaced its attack
+    try:
+        state.queue_attack(runner, foe)                  # cannot also attack
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a disengaging figure must not be able to attack")
+
+
+def test_a_prone_figure_cannot_disengage() -> None:
+    arena = Arena(cols=9, rows=15)
+    runner = create_human("Runner", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    runner.position = Hex(5, 5)
+    foe.position = Hex(8, 12)
+    state = GameState(arena, [runner, foe])
+    runner.current_option = Option.DISENGAGE
+    runner.posture = Posture.PRONE                       # must stand up first
+    assert state.disengage_destinations(runner) == []
+    try:
+        state.disengage_move(runner, LAYOUT.neighbor(Hex(5, 5), 3))
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a grounded figure must stand before it can disengage")

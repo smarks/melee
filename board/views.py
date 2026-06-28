@@ -224,6 +224,10 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list, list]:
     option = figure.current_option
     if option is not None and spec(option).sets_dodge:
         return [], [], []
+    # A figure that chose to disengage moves instead of attacking (option n,
+    # p.19); it may never attack the turn it disengages.
+    if option == Option.DISENGAGE:
+        return [], [], []
     # Already grappling: the only attack is the hand-to-hand strike on that foe.
     if figure.in_hth:
         return [], [], [e.uid for e in state.hth_targets(figure)]
@@ -273,6 +277,8 @@ def _ensure_attack_option(state: GameState, figure) -> None:
     option = figure.current_option
     if option is not None and spec(option).is_attack:
         return
+    if option == Option.DISENGAGE:
+        return                       # a disengaging figure moves, never attacks
     weapon = figure.ready_weapon
     if weapon is not None and weapon.kind == WeaponKind.MISSILE:
         figure.current_option = (Option.ONE_LAST_SHOT if state.engaged(figure)
@@ -575,6 +581,8 @@ def api_options(request, gid):
         "missile_targets": missile_targets,
         "hth_targets": hth_targets,
         "shield_rush_targets": [e.uid for e in state.shield_rush_targets(figure)],
+        "disengage_dests": [label_of(h.col, h.row)
+                            for h in state.disengage_destinations(figure)],
         "pickups": [w.name for w in state.dropped_in_reach(figure)],
     })
 
@@ -686,6 +694,13 @@ def _dispatch(game: dict, body: dict):
         if game["phase"] != "combat":
             raise IllegalAction("not the combat phase")
         state.attempt_hth_disengage(_figure(state, body.get("uid", "")))
+        return None
+
+    if action == "disengage_move":
+        if game["phase"] != "combat":
+            raise IllegalAction("not the combat phase")
+        figure = _figure(state, body.get("uid", ""))
+        state.disengage_move(figure, _hex_from_label(body.get("dest", "")))
         return None
 
     if action == "resolve_combat":

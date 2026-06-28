@@ -557,6 +557,50 @@ class GameState:
         self.log.append(narrate_hth_disengage(figure, True))
         return True
 
+    # ---- general disengage (option n, p.19) ----
+    def disengage_destinations(self, figure: Figure) -> list[Hex]:
+        """Adjacent free hexes a disengaging figure may step into (p.19).
+
+        Empty unless the figure chose to disengage this turn, is standing, and
+        has not yet acted — a grounded figure must stand before it can disengage.
+        """
+        if (figure.current_option != Option.DISENGAGE
+                or figure.posture != Posture.STANDING
+                or figure.attacked_this_turn
+                or figure.position is None):
+            return []
+        held = set(self.occupied(exclude=figure))
+        return [hex_position for hex_position in self.arena.neighbors(figure.position)
+                if self.arena.contains(hex_position) and hex_position not in held]
+
+    def disengage_move(self, figure: Figure, dest: Hex) -> None:
+        """Carry out option (n) general disengage in the combat phase (p.19).
+
+        A figure that chose to disengage moves one hex in any direction instead
+        of attacking, breaking engagement, and may never attack that turn. It
+        must be standing first (a kneeling/prone/fallen figure must rise before
+        it can disengage). Higher-DX enemies still get their strike this turn —
+        the engine resolves their queued attacks normally; this move simply does
+        not add one of its own.
+        """
+        if figure.current_option != Option.DISENGAGE:
+            raise IllegalAction(f"{figure.name} did not choose to disengage this turn")
+        if figure.posture != Posture.STANDING:
+            raise IllegalAction(f"{figure.name} must stand up before it can disengage")
+        if figure.attacked_this_turn:
+            raise IllegalAction(f"{figure.name} has already acted this turn")
+        if figure.position is None or dest is None:
+            raise IllegalAction("a disengage needs a destination hex")
+        if self.arena.distance(figure.position, dest) != 1:
+            raise IllegalAction("a disengage moves exactly one hex")
+        if not self.arena.contains(dest) or dest in self.occupied(exclude=figure):
+            raise IllegalAction(f"{dest} is not a free hex to disengage into")
+        figure.position = dest
+        figure.attacked_this_turn = True          # the move replaces its attack
+        line = narrate_move(figure, Option.DISENGAGE, True)
+        if line:
+            self.log.append(line)
+
     def _queue_hth_strike(self, attacker: Figure, defender: Figure) -> None:
         """Queue a grapple strike — always at the +4 'rear' adjustment (p.18)."""
         self._pending.append(PendingAttack(
