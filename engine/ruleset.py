@@ -233,17 +233,19 @@ class Ruleset:
         return _movement_budget(movement_allowance, option_cap)
 
     # ---- ranged -------------------------------------------------------------
-    def missile_range_penalty(self, hex_distance: int) -> int:
-        """DX penalty for missile range (p.16), provisional pending megahex tiling.
+    def missile_range_penalty(self, megahex_distance: int) -> int:
+        """DX penalty for missile range, by megahex (MH) distance (Melee p.16).
 
-        Stated in megahexes (MH): no penalty within 2 MH, -1 at 3-4 MH, -2 at
-        5-6 MH. A megahex spans ~3 hexes, so MH is approximated from hex
-        distance. Override to supply true megahex tiling or a different range
-        model.
+        p.16: "Missile weapon fire calls for a DX adjustment based on the number
+        of megahexes (MH) distance to the target. If the target is in the same MH
+        or is 1 or 2 MH distant, there is no DX adjustment. If the target is 3 or
+        4 MH distant, DX is -1. If the target is 5 or 6 MH distant, DX is -2."
+
+        The bands continue the stated pattern past 6 MH (two MH per further -1):
+        7-8 MH is -3, 9-10 MH is -4, and so on. ``megahex_distance`` is the true
+        megahex-tiling distance (see :mod:`engine.megahex`), not a hex count.
+        Override to supply a different range model.
         """
-        megahexes = hex_distance // 3
-        if megahexes <= 2:
+        if megahex_distance <= 2:
             return 0
-        if megahexes <= 4:
-            return -1
-        return -((megahexes - 1) // 2)
+        return -((megahex_distance - 1) // 2)

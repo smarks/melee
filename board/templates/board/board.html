@@ -89,6 +89,11 @@
   .roster .row:hover { color: #fff; }
   .roster .row.dead { opacity: .4; text-decoration: line-through; }
   polygon.hex { fill: var(--hex); stroke: var(--hex-stroke); stroke-width: 1.2; }
+  /* Megahex boundaries (Melee p.16): the seams between 7-hex flowers, drawn a
+     touch heavier and tinted so the megahex grid reads without burying the
+     hexes or tokens beneath it. */
+  line.mhborder { stroke: var(--gold); stroke-width: 2; stroke-linecap: round;
+                  opacity: .4; pointer-events: none; }
   polygon.hex.entrance { fill: #262338; }
   polygon.hex.reach { fill: var(--reach); cursor: pointer; }
   polygon.hex.reach:hover { fill: var(--reach2); }
@@ -292,6 +297,75 @@ function svgRect(x, y, w, h, fill) {
   return r;
 }
 
+// ---- megahex tiling (Melee p.16) --------------------------------------------
+// A megahex is a 7-hex flower (a centre hex + its 6 neighbours). Their centres
+// tile the plane on a sqrt(7) sublattice generated, in axial (q,r) coords, by
+// u=(2,1) and v=(-1,3) (det 7 => 7 hexes per cell). This is a faithful port of
+// engine/megahex.py so the drawn seams match the engine's range math exactly.
+// FLAT-top, odd-q offset -> cube, matching hexarena.hex.HexLayout(flat, odd).
+function hexToAxial(col, row) {
+  const zeroCol = col - 1, zeroRow = row - 1;
+  const parity = zeroCol & 1;                         // odd-q
+  const cubeX = zeroCol;
+  const cubeZ = zeroRow - ((zeroCol - parity) >> 1);
+  return [cubeX, cubeZ];                              // axial q=cube_x, r=cube_z
+}
+function axialDistance(qa, ra, qb, rb) {
+  const dq = qa - qb, dr = ra - rb;
+  return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2;
+}
+// Lattice coordinates (a,b) of the megahex containing (col,row).
+function megahexCoord(col, row) {
+  const [q, r] = hexToAxial(col, row);
+  const guessA = Math.round((3 * q + r) / 7);
+  const guessB = Math.round((-q + 2 * r) / 7);
+  let best = [guessA, guessB], bestD = Infinity;
+  for (let da = -1; da <= 1; da++)
+    for (let db = -1; db <= 1; db++) {
+      const ca = guessA + da, cb = guessB + db;
+      const cq = 2 * ca - cb, cr = ca + 3 * cb;       // flower-centre axial
+      const d = axialDistance(q, r, cq, cr);
+      if (d < bestD) { bestD = d; best = [ca, cb]; }
+    }
+  return best[0] + "," + best[1];                     // stable string id
+}
+
+// Draw the seams between adjacent hexes that belong to different megahexes.
+// Each hex carries its 6 corner points; an edge sits between consecutive
+// corners. The neighbour across an edge is the hex whose centre is the edge
+// midpoint reflected through this hex's centre, so we locate it geometrically
+// (no reliance on a direction convention). Outer board edges are left to the
+// normal hex stroke; only interior megahex seams are drawn, once each.
+function drawMegahexBorders(svg) {
+  const centerIndex = {};
+  const key = (x, y) => Math.round(x) + "," + Math.round(y);
+  for (const label in LAYOUT.hexes) {
+    const h = LAYOUT.hexes[label];
+    centerIndex[key(h.cx, h.cy)] = h;
+  }
+  const drawn = new Set();
+  for (const label in LAYOUT.hexes) {
+    const h = LAYOUT.hexes[label];
+    const myMh = megahexCoord(h.col, h.row);
+    const pts = h.points;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      const midX = (a[0] + b[0]) / 2, midY = (a[1] + b[1]) / 2;
+      const neighbor = centerIndex[key(2 * midX - h.cx, 2 * midY - h.cy)];
+      if (!neighbor) continue;                          // board boundary
+      if (megahexCoord(neighbor.col, neighbor.row) === myMh) continue;
+      const edgeKey = [key(a[0], a[1]), key(b[0], b[1])].sort().join("|");
+      if (drawn.has(edgeKey)) continue;                 // shared seam, draw once
+      drawn.add(edgeKey);
+      const seam = document.createElementNS(SVG, "line");
+      seam.setAttribute("x1", a[0]); seam.setAttribute("y1", a[1]);
+      seam.setAttribute("x2", b[0]); seam.setAttribute("y2", b[1]);
+      seam.setAttribute("class", "mhborder");
+      svg.appendChild(seam);
+    }
+  }
+}
+
 // ---- rendering --------------------------------------------------------------
 function render() {
   if (!S) return;
@@ -326,6 +400,8 @@ function drawArena() {
     if (reach.has(label)) poly.addEventListener("click", () => onReachClick(label));
     svg.appendChild(poly);
   }
+
+  drawMegahexBorders(svg);   // megahex seams, above the hexes but below tokens
 
   for (const d of (S.dropped || [])) {              // weapons lying on the ground
     const h = LAYOUT.hexes[d.label];
