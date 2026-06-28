@@ -62,6 +62,9 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
         body = f"{approach} — a crushing blow for {result.damage}!"
     else:
         body = f"{approach} — and connects for {result.damage}"
+    stopped = result.raw_damage - result.damage
+    if result.hit and result.damage > 0 and stopped > 0:
+        body += f" ({stopped} stopped by armour)"
     return _cap(f"{body} (rolled {result.rolled} vs {result.needed}).")
 
 
@@ -99,10 +102,13 @@ _MOVE_VERB = {
 }
 
 
-def narrate_move(figure: Figure, option: Option, moved: bool) -> str | None:
+def narrate_move(figure: Figure, option: Option, moved: bool,
+                 facing: Figure | None = None) -> str | None:
     """A line for a figure's movement-phase action (None if not worth narrating).
 
-    Weapon changes are narrated by :func:`narrate_ready` instead.
+    Weapon changes are narrated by :func:`narrate_ready` instead. ``facing`` is
+    the enemy the figure ends up facing, if any — recorded so the log shows where
+    each figure ended up looking (which decides flank/rear bonuses).
     """
     if option in (Option.READY_WEAPON, Option.CHANGE_WEAPONS):
         return None
@@ -111,7 +117,13 @@ def narrate_move(figure: Figure, option: Option, moved: bool) -> str | None:
         return None
     if option == Option.MOVE and not moved:
         verb = "holds position"
-    return _cap(f"{_name(figure)} {verb}.")
+    clause = f", now facing {_name(facing)}" if facing is not None else ""
+    return _cap(f"{_name(figure)} {verb}{clause}.")
+
+
+def narrate_victory(side: str) -> str:
+    """The game-ending line: one side is the last left standing."""
+    return f"🏆 The {side} hold the field — victory!"
 
 
 def narrate_ready(figure: Figure, weapon) -> str:
