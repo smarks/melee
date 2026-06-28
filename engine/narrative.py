@@ -13,6 +13,7 @@ under classic Melee or the Target Number under Tarmar, and reads naturally as
 from __future__ import annotations
 
 from .combat import AttackResult
+from .facing import REAR, SIDE
 from .figure import Figure
 from .options import Option
 from .rules_data import WeaponKind
@@ -32,17 +33,22 @@ def _cap(sentence: str) -> str:
     return sentence[0].upper() + sentence[1:] if sentence else sentence
 
 
-def _approach(attacker: Figure, target: Figure, weapon) -> str:
+def _approach(attacker: Figure, target: Figure, weapon, zone: str | None = None) -> str:
     """The wind-up, ending on the target so a ", who …" clause can follow."""
     if weapon is None:
         return f"{_name(attacker)} lunges at {_name(target)}"
     verb = "shoots" if weapon.kind == WeaponKind.MISSILE else "swings"
-    return f"{_name(attacker)} {verb} {_article(weapon.name)} at {_name(target)}"
+    # A melee blow from the side/rear is easier to land (the facing bonus); call
+    # it out so the higher to-hit number reads as deliberate, not a glitch.
+    spot = ""
+    if weapon.kind != WeaponKind.MISSILE:
+        spot = "'s flank" if zone == SIDE else "'s rear" if zone == REAR else ""
+    return f"{_name(attacker)} {verb} {_article(weapon.name)} at {_name(target)}{spot}"
 
 
 def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> str:
     """One vivid line for an attack's outcome (hit, miss, dodge, crit)."""
-    approach = _approach(attacker, target, result.weapon)
+    approach = _approach(attacker, target, result.weapon, result.zone)
     if not result.hit:
         if getattr(target, "dodging", False):
             body = f"{approach}, who dodges clear"

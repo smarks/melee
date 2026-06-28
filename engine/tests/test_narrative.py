@@ -66,6 +66,20 @@ def test_a_missile_is_shot_not_swung():
     assert line.startswith("The red Knight shoots a Longbow at the blue Knight")
 
 
+def test_a_flank_or_rear_melee_blow_is_called_out():
+    from engine.facing import REAR, SIDE
+
+    red, blue = _duo()
+    flank = narrate_attack(red, blue, _result(BROADSWORD, hit=True, damage=7, zone=SIDE))
+    assert "blue Knight's flank" in flank
+    rear = narrate_attack(red, blue, _result(BROADSWORD, hit=True, damage=7, zone=REAR))
+    assert "blue Knight's rear" in rear
+    # missiles never get a facing bonus, so no flank/rear wording even with a zone
+    rb, bl = _duo(LONGBOW)
+    shot = narrate_attack(rb, bl, _result(LONGBOW, hit=True, damage=4, zone=SIDE))
+    assert "flank" not in shot and "rear" not in shot
+
+
 def test_fumble_and_status_lines():
     red, blue = _duo()
     assert narrate_fumble(red, BROADSWORD, broke=False) == \
