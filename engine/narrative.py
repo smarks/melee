@@ -7,8 +7,10 @@ player can follow a fight without decoding raw rolls. Pure string-building; it
 reads an attack outcome and the figures, and changes no state.
 
 It works for either rules profile: ``result.needed`` is the adjusted-DX target
-under classic Melee or the Target Number under Tarmar, and reads naturally as
-``(rolled R vs N)`` either way.
+under classic Melee or the Target Number under Tarmar. The threshold reads
+naturally in both directions — classic Melee rolls 3d6 *under* the target
+(``needed N or less``) while Tarmar rolls a d20 *over* it (``needed N or
+more``) — keyed off ``result.roll_under``.
 """
 from __future__ import annotations
 
@@ -69,7 +71,9 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
     if result.hit and result.damage > 0 and stopped > 0:
         body += f" ({stopped} stopped by armour)"
     detail = f" — {result.to_hit_breakdown}" if result.to_hit_breakdown else ""
-    return _cap(f"{body} (rolled {result.rolled} vs {result.needed}{detail}).")
+    threshold = "or less" if result.roll_under else "or more"
+    return _cap(f"{body} (needed {result.needed} {threshold}, "
+                f"rolled {result.rolled}{detail}).")
 
 
 def narrate_fumble(attacker: Figure, weapon, *, broke: bool) -> str:

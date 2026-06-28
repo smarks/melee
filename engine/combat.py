@@ -73,6 +73,8 @@ class AttackResult:
     to_hit_breakdown: str = ""   # human-readable composition of `needed` / the roll
     thrown: bool = False         # this attack was a hurled weapon (for narration)
     body_hit: bool = False       # crit reaching the Body pool (Tarmar); read by apply_damage
+    roll_under: bool = True       # True: hit by rolling <= needed (classic 3d6);
+    #                              False: hit by rolling >= needed (Tarmar d20). Read by narration.
 
 
 def classify_roll(
