@@ -32,6 +32,7 @@ from engine import ai, chargen
 from engine.options import Option, spec
 from engine.profile import PROFILES
 from engine.rules_data import WEAPONS, WeaponKind
+from engine.ruleset import has_offhand_main_gauche
 from engine.state import GameState, IllegalAction
 from engine.tarmar import WEAPON_CLASS, TarmarFigure
 
@@ -599,6 +600,8 @@ def api_options(request, gid):
         "missile_targets": missile_targets,
         "hth_targets": hth_targets,
         "shield_rush_targets": [e.uid for e in state.shield_rush_targets(figure)],
+        # Whether a melee attack may add the off-hand main-gauche's -4 DX jab (p.13).
+        "main_gauche_jab": bool(melee_targets) and has_offhand_main_gauche(figure),
         "disengage_dests": [label_of(h.col, h.row)
                             for h in state.disengage_destinations(figure)],
         "pickups": [w.name for w in state.dropped_in_reach(figure)],
@@ -747,7 +750,8 @@ def _dispatch(game: dict, body: dict):
         attacker = _figure(state, body.get("uid", ""))
         target = _figure(state, body.get("target", ""))
         _ensure_attack_option(state, attacker)
-        state.queue_attack(attacker, target)
+        state.queue_attack(attacker, target,
+                           with_main_gauche=bool(body.get("main_gauche")))
         return None
 
     if action == "queue_hth":

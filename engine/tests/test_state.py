@@ -13,6 +13,16 @@ from engine.state import GameState, IllegalAction
 LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
+def _aim(figure, target) -> None:
+    """Face ``figure`` toward ``target`` (a shooter aims along the line of fire).
+
+    Works at any range: ``direction_to`` wants adjacent hexes, so take the first
+    step of the line from the figure to its target.
+    """
+    figure.facing = LAYOUT.direction_to(
+        figure.position, LAYOUT.line(figure.position, target.position)[1])
+
+
 def _rear_grapple(defense_roll):
     """An attacker poised behind a defender (rear = HTH-eligible), dice primed
     with the defender's defense roll then plenty of 3s for any strike."""
@@ -869,3 +879,60 @@ def test_a_prone_figure_cannot_disengage() -> None:
         pass
     else:
         raise AssertionError("a grounded figure must stand before it can disengage")
+
+
+def test_main_gauche_adds_a_separate_minus_four_jab() -> None:
+    """A figure wielding a main weapon plus a ready off-hand main-gauche may add a
+    second attack on the same foe, rolled at -4 DX (from #7, p.13)."""
+    from engine.rules_data import MAIN_GAUCHE, SHORTSWORD as SWORD
+
+    arena = Arena(cols=9, rows=15)
+    duelist = create_human("Duelist", 12, 12, "a",
+                           weapons=[SWORD, MAIN_GAUCHE], ready_weapon=SWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SWORD], ready_weapon=SWORD)
+    duelist.position = Hex(5, 5)
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    _aim(duelist, foe)
+    _aim(foe, duelist)
+    state = GameState(arena, [duelist, foe], dice=Dice(scripted=[3] * 24))
+
+    duelist.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(duelist, foe, with_main_gauche=True)
+    # Two pending attacks on the SAME foe: the main blow, then the off-hand jab.
+    assert len(state._pending) == 2
+    main, jab = state._pending
+    assert main.target is foe and jab.target is foe
+    assert jab.weapon is not None and jab.weapon.name == "Main-Gauche"
+    assert jab.situational == -4
+
+    results = state.resolve_combat()
+    assert len(results) == 2                              # the second attack was rolled
+    assert results[1].weapon.name == "Main-Gauche"
+    assert "main-gauche" in results[1].to_hit_breakdown
+    assert results[1].needed == results[0].needed - 4    # the jab is 4 harder to land
+
+
+def test_main_gauche_jab_needs_a_ready_off_hand_dagger() -> None:
+    """No off-hand main-gauche (a two-handed weapon fills both hands) -> the jab is
+    rejected rather than silently dropped."""
+    from engine.rules_data import TWO_HANDED_SWORD
+
+    arena = Arena(cols=9, rows=15)
+    fighter = create_human("Fighter", 14, 10, "a",
+                           weapons=[TWO_HANDED_SWORD], ready_weapon=TWO_HANDED_SWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    fighter.position = Hex(5, 5)
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    _aim(fighter, foe)
+    _aim(foe, fighter)
+    state = GameState(arena, [fighter, foe])
+
+    fighter.current_option = Option.SHIFT_ATTACK
+    try:
+        state.queue_attack(fighter, foe, with_main_gauche=True)
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a main-gauche jab without a ready off-hand dagger must be rejected")
+
+

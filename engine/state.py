@@ -25,7 +25,15 @@ from hexarena.pathfinding import Reach
 
 from .arena import Arena
 from .combat import AttackResult
-from .facing import FRONT, REAR, attack_zone, front_hexes, is_engaged, zone_toward
+from .facing import (
+    FRONT,
+    REAR,
+    attack_zone,
+    front_hexes,
+    is_engaged,
+    zone_of_direction,
+    zone_toward,
+)
 from .figure import Figure, Posture
 from .movement import reachable_moves
 from .narrative import (
@@ -44,7 +52,7 @@ from .narrative import (
     narrate_victory,
 )
 from .options import Option, OptionSpec, options_for, spec
-from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
+from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset, has_offhand_main_gauche
 from .rules_data import (
     DAGGER,
     MAIN_GAUCHE,
@@ -74,6 +82,7 @@ class PendingAttack:
     damage_dice_bonus: int = 0  # extra damage dice (pole weapon in/against a charge)
     thrown: bool = False        # a hurled weapon — it leaves the thrower's hand
     hth_damage: object | None = None  # DamageDice override for a grapple (HTH) attack
+    weapon: object | None = None  # Weapon override (off-hand main-gauche jab); else ready
 
 
 class GameState:
@@ -828,8 +837,32 @@ class GameState:
             previous = step
 
     # ---- combat ----
-    def queue_attack(self, attacker: Figure, target: Figure) -> None:
-        """Declare ``attacker``'s attack on ``target`` (resolved later)."""
+    def in_front_arc(self, attacker: Figure, point: Hex) -> bool:
+        """Whether ``point`` lies in ``attacker``'s front arc, ignoring posture.
+
+        A missile or thrown attack is legal only against a target in front of the
+        attacker (p.15-16). Unlike :func:`zone_toward` (which treats a non-standing
+        figure as having no front), this classifies the bearing purely against the
+        attacker's facing — a prone crossbowman still aims along the way it points,
+        so it may fire at a foe ahead of it (p.16).
+        """
+        if attacker.position is None or point == attacker.position:
+            return False
+        layout = self.arena.layout
+        line = layout.line(attacker.position, point)
+        direction = layout.direction_to(attacker.position, line[1])
+        if direction is None:
+            return False
+        return zone_of_direction(attacker.facing, direction) == FRONT
+
+    def queue_attack(self, attacker: Figure, target: Figure,
+                     *, with_main_gauche: bool = False) -> None:
+        """Declare ``attacker``'s attack on ``target`` (resolved later).
+
+        ``with_main_gauche`` also queues a separate off-hand main-gauche jab at
+        the same foe, rolled at -4 DX (p.13) — legal only when the off-hand holds
+        a ready main-gauche and the foe is within the dagger's reach.
+        """
         option = attacker.current_option
         if option is None or not spec(option).is_attack:
             raise IllegalAction(
@@ -903,6 +936,32 @@ class GameState:
                               damage_dice_bonus=self._pole_charge_dice(
                                   attacker, target, weapon, adjacent))
             )
+        if with_main_gauche:
+            self._queue_main_gauche_jab(attacker, target)
+
+    def _queue_main_gauche_jab(self, attacker: Figure, target: Figure) -> None:
+        """Queue the off-hand main-gauche's separate -4 DX jab (p.13).
+
+        A figure attacking with its main weapon may also stab the same foe with a
+        ready main-gauche, rolled at -4 DX. Legal only when the off-hand actually
+        holds a main-gauche and the foe is within the dagger's reach (adjacent).
+        """
+        if not has_offhand_main_gauche(attacker):
+            raise IllegalAction(
+                f"{attacker.name} has no ready main-gauche to jab with"
+            )
+        if (attacker.position is None or target.position is None
+                or self.arena.distance(attacker.position, target.position) != 1):
+            raise IllegalAction(
+                f"{target.name} is not within {attacker.name}'s main-gauche reach"
+            )
+        main_gauche = next(w for w in attacker.weapons if w.name == "Main-Gauche")
+        zone = attack_zone(self.arena.layout, attacker, target)
+        self._pending.append(
+            PendingAttack(attacker, target, zone=zone, ignore_facing=False,
+                          range_penalty=0, situational=-4,
+                          situational_note="-4 main-gauche", weapon=main_gauche)
+        )
 
     def resolve_combat(self) -> list[AttackResult]:
         """Resolve all queued attacks, highest adjDX first (Section VII).
@@ -938,7 +997,9 @@ class GameState:
             # weapons are single-shot; a high-adjDX bow looses two arrows, each
             # arrow tracing its own flight. Don't waste a second arrow on a foe the
             # first already dropped.
-            weapon = attacker.ready_weapon
+            # ``pending.weapon`` overrides the ready weapon for an off-hand
+            # main-gauche jab; every other attack strikes with the ready weapon.
+            weapon = pending.weapon or attacker.ready_weapon
             is_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
             if pending.thrown or is_missile:
                 for shot in range(max(1, pending.shots)):
@@ -963,7 +1024,7 @@ class GameState:
                     break
                 result = self.rules.resolve_attack(
                     self.dice, attacker, pending.target,
-                    zone=zone,
+                    zone=zone, weapon=weapon,
                     dice_count=self.rules.attack_dice_count(pending.target),
                     ignore_facing=pending.ignore_facing,
                     range_penalty=pending.range_penalty,

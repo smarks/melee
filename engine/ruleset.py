@@ -42,6 +42,22 @@ UNCONSCIOUS = "unconscious"
 KNOCKDOWN = "knockdown"
 
 
+def has_offhand_main_gauche(figure: Figure) -> bool:
+    """Whether ``figure`` has a Main-Gauche ready in a free off-hand (p.13).
+
+    The off-hand is free to hold the dagger only when the main hand wields a
+    one-handed weapon that is not itself the main-gauche, and no real shield
+    fills the other hand. This single check gates both the main-gauche's parry
+    and its separate -4 DX jab.
+    """
+    ready = figure.ready_weapon
+    if ready is None or ready.two_handed or ready.name == "Main-Gauche":
+        return False
+    if figure.shield_ready and figure.shield.name != "None":
+        return False          # a real shield already fills the off-hand
+    return any(carried.name == "Main-Gauche" for carried in figure.weapons)
+
+
 def main_gauche_parry(target: Figure, attacker_weapon, zone: str | None) -> int:
     """Hits a ready main-gauche turns aside (p.13).
 
@@ -53,14 +69,7 @@ def main_gauche_parry(target: Figure, attacker_weapon, zone: str | None) -> int:
         return 0
     if attacker_weapon.kind == WeaponKind.MISSILE or attacker_weapon.two_handed:
         return 0
-    ready = target.ready_weapon
-    if ready is None or ready.two_handed or ready.name == "Main-Gauche":
-        return 0
-    if target.shield_ready and target.shield.name != "None":
-        return 0          # a real shield already fills the off-hand
-    if not any(carried.name == "Main-Gauche" for carried in target.weapons):
-        return 0
-    return 1
+    return 1 if has_offhand_main_gauche(target) else 0
 
 
 class Ruleset:
