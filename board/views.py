@@ -593,8 +593,16 @@ def _dispatch(game: dict, body: dict):
 
 
 def _update_figure(game: dict, uid: str, spec: dict) -> None:
-    """Rebuild a live figure from an edited spec, in place — same board position,
-    facing, posture, current option and carried-over damage. Side is fixed."""
+    """Rebuild a live figure from an edited spec, in place.
+
+    The new stats and gear take effect immediately, while the figure keeps its
+    identity and its *entire* running-fight state, so an edit never resets or
+    corrupts the rest of the match. Carried over: board position, facing and
+    posture; the option chosen this turn and the per-turn movement/attack flags;
+    accumulated wounds and the injury flags that drive DX penalties; an unspent
+    missile reload; and any hand-to-hand grapple the figure is locked in. Side
+    is fixed.
+    """
     state: GameState = game["state"]
     figure = _figure(state, uid)
     spec = dict(spec)
@@ -604,14 +612,34 @@ def _update_figure(game: dict, uid: str, spec: dict) -> None:
         rebuilt = chargen.build(game["profile"], spec)
     except (ValueError, KeyError) as exc:
         raise IllegalAction(str(exc))
+
+    # Identity and where it stands on the board.
     rebuilt.uid = figure.uid
     rebuilt.position = figure.position
     rebuilt.facing = figure.facing
     rebuilt.posture = figure.posture
+    # A shield voluntarily un-readied (e.g. to grapple) stays un-readied; the new
+    # gear is otherwise readied as built.
+    rebuilt.shield_ready = figure.shield_ready
+    # This turn's declared action and the per-turn movement/attack flags.
     rebuilt.current_option = figure.current_option
     rebuilt.attacked_this_turn = figure.attacked_this_turn
+    rebuilt.moved_this_turn = figure.moved_this_turn
     rebuilt.dodging = figure.dodging
+    rebuilt.dealt_st_damage_this_turn = figure.dealt_st_damage_this_turn
+    # Injury carried into the rest of the fight (wounds + the DX-penalty flags).
     rebuilt.damage_taken = min(figure.damage_taken, rebuilt.strength)
+    rebuilt.hits_this_turn = figure.hits_this_turn
+    rebuilt.wounded_last_turn = figure.wounded_last_turn
+    rebuilt.unconscious = figure.unconscious
+    rebuilt.dead = figure.dead
+    # A reloading missile weapon stays spent, and an active grapple stays linked
+    # (hth_opponents are uids, and the uid is preserved, so the foe's reciprocal
+    # link still points here).
+    rebuilt.missile_cooldown = figure.missile_cooldown
+    rebuilt.hth_opponents = list(figure.hth_opponents)
+    rebuilt.hth_drew_dagger = figure.hth_drew_dagger
+
     if isinstance(rebuilt, TarmarFigure) and isinstance(figure, TarmarFigure):
         rebuilt.fatigue_roll = figure.fatigue_roll
         rebuilt.fatigue_taken = min(figure.fatigue_taken, rebuilt.fatigue)
