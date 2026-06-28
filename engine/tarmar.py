@@ -31,7 +31,7 @@ import tarmar_rules
 from .combat import AttackResult
 from .facing import FRONT, REAR, facing_bonus
 from .figure import Figure
-from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
+from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset, main_gauche_parry
 from .rules_data import KNOCKDOWN_HITS
 
 # ---- Melee catalog -> Tarmar tags (the data mapping from the spec) ----------
@@ -197,6 +197,7 @@ class TarmarRuleset(Ruleset):
             stops = target.hits_stopped(from_front=(zone == FRONT))
             damage = tarmar_rules.damage_after_armour(
                 raw_damage, stops, weapon_class, tier)
+            damage = max(0, damage - main_gauche_parry(target, weapon, zone))
             target.pending_body_hit = outcome["critical"]  # crits reach Body too
 
         return AttackResult(

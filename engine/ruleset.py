@@ -34,12 +34,33 @@ from .combat import AttackResult, classify_roll, roll_weapon_damage
 from .facing import FRONT, REAR, facing_bonus
 from .figure import Figure
 from .movement import movement_budget as _movement_budget
-from .rules_data import KNOCKDOWN_HITS, THREE_DICE, Weapon
+from .rules_data import KNOCKDOWN_HITS, THREE_DICE, Weapon, WeaponKind
 
 # Status outcomes returned by :meth:`Ruleset.status_after_hit`.
 DEAD = "dead"
 UNCONSCIOUS = "unconscious"
 KNOCKDOWN = "knockdown"
+
+
+def main_gauche_parry(target: Figure, attacker_weapon, zone: str | None) -> int:
+    """Hits a ready main-gauche turns aside (p.13).
+
+    The left-hand dagger parries one hit per attack — but only a frontal blow
+    from a non-missile, one-handed weapon, and only when the off-hand is free to
+    hold it (no shield, and the main hand not on a two-handed weapon).
+    """
+    if zone != FRONT or attacker_weapon is None:
+        return 0
+    if attacker_weapon.kind == WeaponKind.MISSILE or attacker_weapon.two_handed:
+        return 0
+    ready = target.ready_weapon
+    if ready is None or ready.two_handed or ready.name == "Main-Gauche":
+        return 0
+    if target.shield_ready and target.shield.name != "None":
+        return 0          # a real shield already fills the off-hand
+    if not any(carried.name == "Main-Gauche" for carried in target.weapons):
+        return 0
+    return 1
 
 
 class Ruleset:
@@ -141,7 +162,9 @@ class Ruleset:
             raw_damage = self.weapon_damage(dice, weapon, multiplier)
             if extra_dice:                      # pole weapon in/against a charge
                 raw_damage += dice.total(extra_dice)
-            damage = max(0, raw_damage - self.absorbed(target, zone=zone))
+            stopped = self.absorbed(target, zone=zone) + main_gauche_parry(
+                target, weapon, zone)
+            damage = max(0, raw_damage - stopped)
 
         return AttackResult(
             hit=hit,
