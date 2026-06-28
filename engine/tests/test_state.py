@@ -721,3 +721,51 @@ def test_crawl_is_not_offered_to_a_standing_figure() -> None:
     assert Option.CRAWL not in state.legal_options(figure)
     availability = dict(state.option_availability(figure))
     assert availability[Option.CRAWL] == "already standing"
+
+
+def test_missile_strikes_a_bystander_blocking_its_lane() -> None:
+    """Missiles follow the thrown line-of-flight rules (p.16): a standing figure
+    in the lane must be rolled to miss, and may be hit instead of the target."""
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 11, 13, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    target = create_human("Target", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    blocker = create_human("Blocker", 12, 12, "c",
+                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(5, 5)
+    blocker.position = Hex(5, 6)                          # standing in the lane
+    target.position = Hex(5, 8)
+    # roll-to-miss the blocker needs <= adjDX(13) - 1; a scripted 18 fails -> hit
+    state = GameState(arena, [archer, target, blocker],
+                      dice=Dice(scripted=[6, 6, 6] + [3] * 12))
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, target)
+    state.resolve_combat()
+    assert blocker.damage_taken > 0                       # the bystander took it
+    assert target.damage_taken == 0                       # intended target untouched
+    # a fired arrow is expendable — nothing is added to the ground-pickup pile
+    assert state.dropped == []
+
+
+def test_missile_that_misses_flies_on_and_is_never_picked_up() -> None:
+    """A clean miss flies on (p.15) but a spent arrow is consumed, not dropped."""
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 11, 13, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    target = create_human("Target", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(5, 5)
+    target.position = Hex(5, 8)
+    # a scripted 15 (6+6+3) cleanly misses adjDX 13 — not a 16/17/18 fumble — and
+    # with no figure beyond the target the arrow flies off the field, spent
+    state = GameState(arena, [archer, target],
+                      dice=Dice(scripted=[6, 6, 3] * 12))
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, target)
+    results = state.resolve_combat()
+    assert results[0].hit is False                        # a clean miss
+    assert state.dropped == []                            # arrows are not recoverable
+    assert archer.ready_weapon == SMALL_BOW               # the bow itself is kept

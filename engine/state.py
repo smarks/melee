@@ -302,9 +302,16 @@ class GameState:
         if weapon is not None and hex_position is not None and weapon.name != "Thrown rock":
             self.dropped.append((hex_position, weapon))
 
-    def _resolve_thrown(self, pending, results: list) -> None:
-        """A hurled weapon's flight (p.15): roll to miss anyone in the way, strike
-        the intended target, then fly on if it misses. It lands where it strikes."""
+    def _resolve_flight(self, pending, results: list) -> None:
+        """A flying weapon's line-of-flight (p.15-16): roll to miss anyone in the
+        way, strike the intended target, then fly on if it misses.
+
+        Thrown and missile weapons share these rules — the target must be in the
+        attacker's front, every standing figure in the way is rolled to miss, and
+        a stray shot flies on until it hits a figure or leaves the field. The one
+        difference is what's left behind: a hurled weapon leaves the hand and
+        lands where it strikes (recoverable, ``pending.thrown``); a fired missile
+        (arrow, bolt, sling stone) is expendable and drops nothing to pick up."""
         attacker, target = pending.attacker, pending.target
         layout = self.arena.layout
         held = self.occupied(exclude=attacker)
@@ -317,18 +324,20 @@ class GameState:
             dist = layout.distance(attacker.position, hex_pos)
             if self.dice.total(3) <= adjdx - dist:
                 continue                                  # flew past this one
-            self._thrown_strike(attacker, blocker, dist, results)
+            self._flight_strike(pending, blocker, dist, results)
             return
-        # 2) the intended target — a normal thrown attack.
+        # 2) the intended target — a normal thrown/missile attack.
         result = self.rules.resolve_attack(
             self.dice, attacker, target, zone=pending.zone, ignore_facing=True,
             dice_count=self.rules.attack_dice_count(target),
-            range_penalty=pending.range_penalty)
-        result.thrown = True
+            range_penalty=pending.range_penalty,
+            situational=pending.situational,
+            situational_note=pending.situational_note)
+        result.thrown = pending.thrown
         self._apply(attacker, target, result)
         results.append(result)
         if result.hit:
-            self._discard_thrown(attacker, target.position)
+            self._land_flight(pending, target.position)
             return
         # 3) a clean miss — the weapon flies on up to ten hexes (p.15).
         direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
@@ -342,20 +351,27 @@ class GameState:
                 continue
             dist = layout.distance(attacker.position, current)
             if self.dice.total(3) <= adjdx - dist:        # the stray weapon strikes
-                self._thrown_strike(attacker, figure, dist, results)
+                self._flight_strike(pending, figure, dist, results)
                 return
-        self._discard_thrown(attacker, target.position)   # spent; lands by the target
+        self._land_flight(pending, target.position)   # spent; lands by the target
 
-    def _thrown_strike(self, attacker, victim, dist, results: list) -> None:
-        """A thrown weapon that connected mid-flight: apply its damage, drop it."""
+    def _flight_strike(self, pending, victim, dist, results: list) -> None:
+        """A flying weapon that connected mid-flight: apply its damage, then land."""
+        attacker = pending.attacker
         result = self.rules.resolve_attack(
             self.dice, attacker, victim,
             zone=attack_zone(self.arena.layout, attacker, victim),
             ignore_facing=True, range_penalty=-dist, force_hit=True)
-        result.thrown = True
+        result.thrown = pending.thrown
         self._apply(attacker, victim, result)
         results.append(result)
-        self._discard_thrown(attacker, victim.position)
+        self._land_flight(pending, victim.position)
+
+    def _land_flight(self, pending, landing_hex=None) -> None:
+        """Where a spent flying weapon comes to rest. A hurled weapon drops to the
+        field (pick-up-able); a fired missile is expendable and leaves nothing."""
+        if pending.thrown:
+            self._discard_thrown(pending.attacker, landing_hex)
 
     def dropped_in_reach(self, figure: Figure) -> list:
         """Dropped weapons in ``figure``'s hex or an adjacent one (option q)."""
@@ -741,6 +757,16 @@ class GameState:
             # zone is carried so a ready shield still stops frontal missiles,
             # but ignore_facing suppresses the to-hit facing bonus (missiles
             # and thrown weapons never get a facing add, p.16).
+            #
+            # The rulebook also requires the target be in the attacker's front
+            # arc (p.16). We deliberately do NOT enforce that here: the combat
+            # phase model lets a figure fire at any enemy without managing its
+            # facing (see ``_attack_targets`` and the board UI / ``ai`` callers,
+            # which never re-aim an archer in the combat phase). Enforcing the
+            # front arc would need facing to be a managed combat-phase choice —
+            # a larger change tracked separately. The line-of-flight itself is
+            # still traced from attacker to target, so intervening figures and
+            # fly-on are resolved directionally regardless.
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
                               ignore_facing=True, range_penalty=range_penalty,
@@ -790,13 +816,21 @@ class GameState:
                         and attacker.ready_weapon.reload > 0)
             if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
                 continue
-            # A hurled weapon traces a flight path — anyone in the way may be hit,
-            # and a miss flies on (p.15).
-            if pending.thrown:
-                self._resolve_thrown(pending, results)
+            # A flying weapon — hurled or fired — traces a line-of-flight: anyone
+            # in the way may be hit, and a clean miss flies on (p.15-16). Thrown
+            # weapons are single-shot; a high-adjDX bow looses two arrows, each
+            # arrow tracing its own flight. Don't waste a second arrow on a foe the
+            # first already dropped.
+            weapon = attacker.ready_weapon
+            is_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+            if pending.thrown or is_missile:
+                for shot in range(max(1, pending.shots)):
+                    if shot > 0 and (not attacker.can_act()
+                                     or pending.target.is_dead
+                                     or pending.target.collapsed):
+                        break
+                    self._resolve_flight(pending, results)
                 continue
-            # A high-adjDX bow looses two arrows; don't waste the second on a
-            # foe the first already dropped.
             # Recompute the facing zone against the target's CURRENT posture and
             # facing: an earlier attacker this phase may have knocked the target
             # prone (so it now has no front, scoring the +4 rear adjustment) or
