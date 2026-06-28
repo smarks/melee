@@ -616,6 +616,12 @@ class GameState:
                 f"{option.value}, not {len(path)}"
             )
         self._validate_path(figure, path)
+        # Validate a weapon SWITCH before mutating the board, so a rejected ready
+        # (unknown weapon, or a missile readied while engaged) leaves position,
+        # facing, and posture untouched (#77). Pick-up's reach check intentionally
+        # runs after the move — you grab from the hex you end on.
+        if ready is not None and option != Option.PICK_UP:
+            self._validate_ready(figure, option, ready)
         if path:
             figure.position = path[-1]
             figure.moved_this_turn = len(path)
@@ -638,8 +644,9 @@ class GameState:
         if line:
             self.log.append(line)
 
-    def _ready_weapon(self, figure: Figure, option: Option, weapon_name: str) -> None:
-        """Switch ``figure``'s ready weapon to a carried one (Section IV e/m)."""
+    def _validate_ready(self, figure: Figure, option: Option, weapon_name: str) -> None:
+        """Check a weapon switch is legal, mutating nothing. Called both up front
+        (before the board is touched, #77) and again inside :meth:`_ready_weapon`."""
         if option not in (Option.READY_WEAPON, Option.CHANGE_WEAPONS):
             raise IllegalAction(f"{option.value} cannot change weapons")
         weapon = next((w for w in figure.weapons if w.name == weapon_name), None)
@@ -647,6 +654,11 @@ class GameState:
             raise IllegalAction(f"{figure.name} is not carrying {weapon_name}")
         if option == Option.CHANGE_WEAPONS and weapon.kind == WeaponKind.MISSILE:
             raise IllegalAction("cannot ready a missile weapon while engaged")
+
+    def _ready_weapon(self, figure: Figure, option: Option, weapon_name: str) -> None:
+        """Switch ``figure``'s ready weapon to a carried one (Section IV e/m)."""
+        self._validate_ready(figure, option, weapon_name)
+        weapon = next(w for w in figure.weapons if w.name == weapon_name)
         figure.ready_weapon = weapon
         if weapon.two_handed and figure.shield_ready:
             figure.shield_ready = False   # a two-handed weapon needs both hands
