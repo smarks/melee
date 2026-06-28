@@ -183,6 +183,36 @@ class GameState:
             legal.append(option)
         return legal
 
+    def option_availability(self, figure: Figure) -> list[tuple[Option, str | None]]:
+        """The full candidate option set for ``figure`` this phase, each tagged with
+        whether it is currently available and, if not, a short reason.
+
+        Companion to :meth:`legal_options` (which returns only the legal subset, a
+        contract many tests rely on). The UI uses this to show unavailable options
+        disabled — greyed with a why — instead of silently hiding them. The set of
+        options whose reason is ``None`` is exactly :meth:`legal_options`.
+        """
+        standing = figure.posture == Posture.STANDING
+        weapon = figure.ready_weapon
+        has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+        can_fire = has_missile and figure.missile_cooldown == 0
+        result: list[tuple[Option, str | None]] = []
+        for option in options_for(engaged=self.engaged(figure)):
+            reason: str | None = None
+            if option == Option.STAND_UP:
+                if standing:
+                    reason = "already standing"
+            elif not standing:
+                reason = "must stand up first"
+            elif spec(option).is_missile and not can_fire:
+                reason = "still reloading" if has_missile else "no missile weapon ready"
+            elif option == Option.PICK_UP and not self.dropped_in_reach(figure):
+                reason = "nothing on the ground in reach"
+            elif option in (Option.GO_PRONE, Option.KNEEL) and not has_missile:
+                reason = "only when firing a missile weapon"
+            result.append((option, reason))
+        return result
+
     def reach_for(self, figure: Figure, option: Option) -> Reach:
         """The reachability (with paths) of ``figure`` under ``option``.
 

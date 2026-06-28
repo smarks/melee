@@ -495,6 +495,32 @@ def test_legal_options_hide_illegal_choices() -> None:
     assert state.legal_options(swordsman) == [Option.STAND_UP]
 
 
+def test_option_availability_surfaces_full_set_with_reasons() -> None:
+    from engine.rules_data import LONGBOW
+
+    arena = Arena(cols=9, rows=15)
+    swordsman = create_human("S", 12, 12, "a", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    archer = create_human("A", 12, 12, "b", weapons=[LONGBOW], ready_weapon=LONGBOW)
+    swordsman.position = Hex(5, 5)
+    archer.position = Hex(1, 1)                      # far apart -> both disengaged
+    state = GameState(arena, [swordsman, archer])
+
+    avail = dict(state.option_availability(swordsman))
+    # The available subset is exactly legal_options; nothing is silently dropped.
+    legal = state.legal_options(swordsman)
+    assert [opt for opt, reason in avail.items() if reason is None] == legal
+    # Unavailable options are present with a reason rather than hidden.
+    assert Option.STAND_UP in avail and avail[Option.STAND_UP] == "already standing"
+    assert avail[Option.MISSILE_ATTACK] == "no missile weapon ready"
+
+    # A prone figure: every move option but Stand Up is shown disabled with a why.
+    swordsman.posture = Posture.PRONE
+    prone = dict(state.option_availability(swordsman))
+    assert prone[Option.STAND_UP] is None
+    assert all(reason == "must stand up first"
+               for opt, reason in prone.items() if opt != Option.STAND_UP)
+
+
 def test_attack_ordering_is_highest_adjdx_first() -> None:
     # Both declared, but 'a' has higher adjDX and lands a lethal triple before
     # 'b' (lower adjDX) gets to strike, so 'b''s attack never resolves.

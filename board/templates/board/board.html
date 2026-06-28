@@ -42,6 +42,12 @@
   .menu .row { padding: 7px 10px; border-radius: 5px; cursor: pointer; font-size: 13px; }
   .menu .row:hover { background: var(--accent); color: #fff; }
   .menu .row.muted { color: var(--muted); }
+  .menu .row.disabled { color: var(--muted); opacity: .55; cursor: not-allowed; }
+  .menu .row.disabled:hover { background: none; color: var(--muted); }
+  .menu .row .why { font-size: 11px; opacity: .8; font-style: italic; }
+  .menu .row.clear { color: var(--target); }
+  .menu .commit { padding: 2px 10px 6px; font-size: 12px; }
+  .menu .commit.muted { color: var(--muted); }
   .menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
   aside { width: 420px; border-left: 1px solid var(--line); background: var(--panel);
           display: flex; flex-direction: column; overflow: auto; }
@@ -217,6 +223,7 @@ function postJSON(path, body) {
 async function startGame(query) {
   const data = await api(`/api/game/new?${query}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
+  optCache = {};
   resetSelection(); ensureGameCatalog(); render();
 }
 function bootGame() { startGame("teams=2&per_team=2&mode=pxai"); }  // default on load
@@ -230,7 +237,7 @@ async function startSetup() {
 }
 async function refresh() {
   const data = await api(`/api/game/${GID}`);
-  LAYOUT = data.layout; S = data.state; render();
+  LAYOUT = data.layout; S = data.state; optCache = {}; render();
 }
 async function act(body) {
   const data = await api(`/api/game/${GID}/action`, {
@@ -238,7 +245,7 @@ async function act(body) {
     body: JSON.stringify(body)
   });
   if (data.error) { flash(data.error); return null; }
-  S = data.state; LAYOUT = data.layout;
+  S = data.state; LAYOUT = data.layout; optCache = {};
   return data;
 }
 function flash(msg) { $("hint").textContent = msg; }
@@ -395,6 +402,8 @@ function drawArena() {
     }
 
     g.addEventListener("click", (ev) => { ev.stopPropagation(); onFigureClick(f); });
+    g.addEventListener("mouseenter", () => onFigureHover(f));
+    g.addEventListener("mouseleave", scheduleHoverClose);
     svg.appendChild(g);
   }
 }
@@ -455,11 +464,14 @@ function drawControls() {
       + ` <b>${set}/${actors.length}</b> set.`;
     c.appendChild(span);
     drawContinue(c, "combat", actors.length - set);
-    addBtn(c, "End turn", () => { resetAll(); act({type:"end_turn"}).then(after); });
+    // "anyway" only when figures are still uncommitted this phase (issue #70).
+    addBtn(c, "End turn" + ((actors.length - set) > 0 ? " anyway" : ""),
+      () => { resetAll(); act({type:"end_turn"}).then(after); });
   }
 }
 
-// The Continue button, gated by a "not everyone has an action" warning.
+// The Continue button, gated by a "not everyone has an action" warning. The word
+// "anyway" appears only while some figures are still uncommitted (issue #70).
 function drawContinue(c, kind, missing) {
   if (warnKind === kind) {
     const w = document.createElement("div"); w.style.marginTop = "6px";
@@ -470,7 +482,7 @@ function drawContinue(c, kind, missing) {
     addBtn(c, "Go back", () => { warnKind = null; render(); });
     return;
   }
-  addBtn(c, kind === "move" ? "Continue ▸ execute moves" : "Continue ▸ resolve combat",
+  addBtn(c, "Continue" + (missing > 0 ? " anyway" : ""),
     () => { if (missing > 0) { warnKind = kind; render(); } else executePlans(kind); }, true);
 }
 
@@ -506,26 +518,48 @@ function closeMenu() { $("tokenMenu").style.display = "none"; }
 function openMenu(f) {
   const rows = [];
   if (S.phase === "move") {
-    for (const o of (optInfo.options || []))
-      rows.push({label: optLabel(o.option), act: () => chooseMoveOption(f, o.option)});
+    // The full option set: available ones are clickable, unavailable ones are
+    // shown disabled with their reason (issue #73), never hidden.
+    for (const o of (optInfo.options || [])) {
+      if (o.available === false)
+        rows.push({label: optLabel(o.option), reason: o.reason, disabled: true});
+      else
+        rows.push({label: optLabel(o.option), act: () => chooseMoveOption(f, o.option)});
+    }
     if (!rows.length) rows.push({label: "No moves available", muted: true});
   } else if (S.phase === "combat") {
+    const grappling = (f.hth_opponents || []).length > 0;
     for (const uid of (optInfo._targets || [])) {
       const e = figByUid(uid);
       rows.push({label: `Attack ${e ? e.name : uid}`, act: () => setAttack(f, uid)});
     }
     for (const uid of (optInfo.hth_targets || [])) {
       const e = figByUid(uid);
-      rows.push({label: `🤼 Grapple ${e ? e.name : uid}`, act: () => setHth(f, uid)});
+      rows.push({label: `🤼 ${grappling ? "Strike" : "Grapple"} ${e ? e.name : uid}`,
+                 act: () => setHth(f, uid)});
     }
-    if ((f.hth_opponents || []).length)
+    if (!grappling && !(optInfo.hth_targets || []).length)
+      rows.push({label: "🤼 Grapple", reason: "no foe in reach to grapple", disabled: true});
+    if (grappling)
       rows.push({label: "💨 Break free (roll)", act: () => setDisengage(f)});
+    else
+      rows.push({label: "💨 Break free", reason: "not in hand-to-hand", disabled: true});
     rows.push({label: "Do nothing", act: () => setDoNothing(f)});
   } else return;
   const menu = $("tokenMenu");
-  let html = `<div class="head">${f.name}</div>`;
-  rows.forEach((r, i) => html += `<div class="row ${r.muted ? "muted" : ""}" data-i="${i}">${r.label}</div>`);
-  html += `<div class="sep"></div><div class="row muted" data-clear>Clear</div>`;
+  const plan = PLAN[f.uid];
+  // Header reflects commit state for this phase (issue #72): committed shows what
+  // it committed to (+ Clear); uncommitted invites a choice from the options.
+  let html = `<div class="head">${f.name} <span class="chip ${f.side}">${f.side}</span></div>`;
+  html += plan
+    ? `<div class="commit">Committed: <b>${plan.label}</b>${plan.dest ? " → " + plan.dest : ""}</div>`
+    : `<div class="commit muted">Uncommitted — choose an action:</div>`;
+  rows.forEach((r, i) => {
+    const cls = "row" + (r.muted ? " muted" : "") + (r.disabled ? " disabled" : "");
+    const why = r.reason ? ` <span class="why">${r.reason}</span>` : "";
+    html += `<div class="${cls}" data-i="${i}">${r.label}${why}</div>`;
+  });
+  if (plan) html += `<div class="sep"></div><div class="row clear" data-clear>Clear action</div>`;
   menu.innerHTML = html;
   menu.style.display = "block";
   const rect = $("svg").getBoundingClientRect(), hx = LAYOUT.hexes[f.label];
@@ -535,9 +569,10 @@ function openMenu(f) {
   menu.style.top = Math.min(Math.max(8, py), window.innerHeight - menu.offsetHeight - 8) + "px";
   menu.querySelectorAll(".row[data-i]").forEach(el => {
     const r = rows[+el.dataset.i];
-    if (!r.muted) el.addEventListener("click", () => { closeMenu(); r.act(); });
+    if (r.act && !r.disabled) el.addEventListener("click", () => { closeMenu(); r.act(); });
   });
-  menu.querySelector("[data-clear]").addEventListener("click", () => { closeMenu(); clearPlan(f); });
+  const clearRow = menu.querySelector("[data-clear]");
+  if (clearRow) clearRow.addEventListener("click", () => { closeMenu(); clearPlan(f); });
 }
 
 function chooseMoveOption(f, option) {
@@ -606,27 +641,68 @@ function bannerFor(phase) {
 }
 
 // ---- interaction ------------------------------------------------------------
+// Options for a figure, cached for the life of the current state so hovering
+// across counters doesn't refetch on every pixel of movement. The cache is
+// cleared whenever the state changes (see act/refresh/startGame).
+let optCache = {};
+async function loadOptions(f) {
+  if (optCache[f.uid]) return optCache[f.uid];
+  const info = await api(`/api/game/${GID}/options?uid=${f.uid}`);
+  // In combat, the relevant ranged-vs-melee target list rides ._targets.
+  info._targets = (f.weapon && missileReady(f, info))
+    ? info.missile_targets : info.melee_targets;
+  optCache[f.uid] = info;
+  return info;
+}
+
 async function onFigureClick(f) {
   flash("");
   if (S.phase === "move") {
     if (f.side !== S.moving_side) { flash(`${f.name} is on another side.`); return; }
     if (!f.can_act) { flash(`${f.name} can't move this turn.`); return; }
     sel = f.uid; chosenOption = null; pendingDest = null; pendingFacing = f.facing; pendingReady = null;
-    optInfo = await api(`/api/game/${GID}/options?uid=${f.uid}`);
+    optInfo = await loadOptions(f);
     render(); openMenu(f);
   } else if (S.phase === "combat") {
     if (!myControlled(f)) { flash(`${f.name} isn't yours to command.`); return; }
     sel = f.uid; pendingFacing = f.facing;
-    optInfo = await api(`/api/game/${GID}/options?uid=${f.uid}`);
-    optInfo._targets = (f.weapon && missileReady(f))
-      ? optInfo.missile_targets : optInfo.melee_targets;
+    optInfo = await loadOptions(f);
     render(); openMenu(f);
   } else {
     sel = f.uid; render();
   }
 }
-function missileReady(f) {
-  return optInfo && optInfo.missile_targets && optInfo.missile_targets.length >= 0
+
+// ---- hover popup (issue #72) -----------------------------------------------
+// Hovering an actionable counter surfaces its action popup, reflecting commit
+// state, without a click. A short grace timer keeps it from flickering as the
+// pointer travels from the token to the popup.
+let hoverCloseTimer = null;
+function cancelHoverClose() {
+  if (hoverCloseTimer) { clearTimeout(hoverCloseTimer); hoverCloseTimer = null; }
+}
+function scheduleHoverClose() {
+  cancelHoverClose();
+  hoverCloseTimer = setTimeout(closeMenu, 220);
+}
+function hoverActionable(f) {
+  if (!S || S.victory || chosenOption) return false;   // not mid-placement
+  if (S.phase === "move") return f.side === S.moving_side && !!f.can_act && myControlled(f);
+  if (S.phase === "combat") return myControlled(f) && !!f.can_act;
+  return false;
+}
+async function onFigureHover(f) {
+  cancelHoverClose();
+  if (!hoverActionable(f)) return;
+  const info = await loadOptions(f);
+  if (!hoverActionable(f)) return;     // state may have changed during the await
+  optInfo = info; sel = f.uid; pendingFacing = f.facing;
+  openMenu(f);
+}
+
+function missileReady(f, info) {
+  info = info || optInfo;
+  return info && info.missile_targets && info.missile_targets.length >= 0
     && f.weapon && ["Longbow","Small bow","Horse bow","Sling","Thrown rock",
                     "Light crossbow","Heavy crossbow"].includes(f.weapon);
 }
@@ -640,6 +716,11 @@ document.addEventListener("click", (e) => {
   const menu = $("tokenMenu");
   if (menu.style.display === "block" && !menu.contains(e.target)) closeMenu();
 });
+
+// Keep the hover popup open while the pointer is over it; close shortly after
+// the pointer leaves both the token and the popup (issue #72).
+$("tokenMenu").addEventListener("mouseenter", cancelHoverClose);
+$("tokenMenu").addEventListener("mouseleave", scheduleHoverClose);
 
 // ---- side panels ------------------------------------------------------------
 function drawSelInfo() {
