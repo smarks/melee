@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 import tarmar_rules
 
 from .combat import AttackResult
-from .facing import FRONT, facing_bonus
+from .facing import FRONT, REAR, facing_bonus
 from .figure import Figure
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
 from .rules_data import KNOCKDOWN_HITS
@@ -199,7 +199,39 @@ class TarmarRuleset(Ruleset):
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
             multiplier=multiplier, raw_damage=raw_damage, damage=damage,
             dropped_weapon=False, broke_weapon=False, weapon=weapon, zone=zone,
-            note=outcome["outcome"])
+            note=outcome["outcome"],
+            to_hit_breakdown=self._breakdown(
+                attacker, weapon, weapon_class, tier, shield, target.dodging,
+                target_number, skill, zone, ignore_facing, range_penalty, bonus))
+
+    @staticmethod
+    def _breakdown(attacker, weapon, weapon_class, tier, shield, defending,
+                   target_number, skill, zone, ignore_facing, range_penalty, bonus) -> str:
+        """How the d20 to-hit was reached: the target number it needed, and the
+        bonus added to the die (with its parts)."""
+        target = f"need {target_number} ({weapon_class} vs {tier}"
+        if shield:
+            target += f", shield +{shield}"
+        if defending:
+            target += ", defending"
+        target += ")"
+        parts = []
+        dex = tarmar_rules.dex_modifier(attacker.base_adj_dx)
+        if dex:
+            parts.append(f"{dex:+d} DX")
+        skill_b = tarmar_rules.skill_bonus(skill)
+        if skill_b:
+            parts.append(f"{skill_b:+d} skill")
+        str_pen = tarmar_rules.strength_fit_penalty(
+            attacker.strength, weapon.min_strength or None)
+        if str_pen:
+            parts.append(f"{str_pen:+d} str")
+        if not ignore_facing and facing_bonus(zone):
+            parts.append(f"+{facing_bonus(zone)} {'rear' if zone == REAR else 'flank'}")
+        if range_penalty:
+            parts.append(f"{range_penalty:+d} range")
+        roll = f"roll d20 {bonus:+d}" + (f" ({', '.join(parts)})" if parts else "")
+        return f"{target}; {roll}"
 
     def apply_damage(self, target, amount: int) -> None:
         target.fatigue_taken += amount

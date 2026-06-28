@@ -70,6 +70,7 @@ class AttackResult:
     weapon: Weapon | None
     zone: str | None
     note: str = ""
+    to_hit_breakdown: str = ""   # human-readable composition of `needed` / the roll
 
 
 def classify_roll(
