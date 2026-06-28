@@ -31,7 +31,7 @@ from __future__ import annotations
 from hexarena.dice import Dice
 
 from .combat import AttackResult, classify_roll, roll_weapon_damage
-from .facing import FRONT, facing_bonus
+from .facing import FRONT, REAR, facing_bonus
 from .figure import Figure
 from .movement import movement_budget as _movement_budget
 from .rules_data import KNOCKDOWN_HITS, THREE_DICE, Weapon
@@ -63,6 +63,21 @@ class Ruleset:
         if not ignore_facing:
             needed += facing_bonus(zone)
         return needed + range_penalty
+
+    def to_hit_breakdown(
+        self, attacker: Figure, *, zone: str | None,
+        ignore_facing: bool = False, range_penalty: int = 0,
+    ) -> str:
+        """How ``to_hit_number`` was reached, e.g. 'DX 7 +2 flank'."""
+        parts = [f"DX {attacker.base_adj_dx}"]
+        wound = self.wound_penalty(attacker)
+        if wound:
+            parts.append(f"{wound:+d} wounded")
+        if not ignore_facing and facing_bonus(zone):
+            parts.append(f"+{facing_bonus(zone)} {'rear' if zone == REAR else 'flank'}")
+        if range_penalty:
+            parts.append(f"{range_penalty:+d} range")
+        return " ".join(parts)
 
     def order_dx(
         self, attacker: Figure, *, zone: str | None, ignore_facing: bool = False
@@ -131,6 +146,9 @@ class Ruleset:
             broke_weapon=broke,
             weapon=weapon,
             zone=zone,
+            to_hit_breakdown=self.to_hit_breakdown(
+                attacker, zone=zone, ignore_facing=ignore_facing,
+                range_penalty=range_penalty),
         )
 
     # ---- injury / status ----------------------------------------------------

@@ -66,10 +66,29 @@ def test_a_missile_is_shot_not_swung():
     assert line.startswith("The red Knight shoots a Longbow at the blue Knight")
 
 
+def test_to_hit_breakdown_is_appended_to_the_line():
+    red, blue = _duo()
+    line = narrate_attack(red, blue, _result(
+        BROADSWORD, hit=False, rolled=9, needed=8, to_hit_breakdown="DX 6 +2 flank"))
+    assert "(rolled 9 vs 8 — DX 6 +2 flank)" in line
+
+
 def test_armour_partly_absorbing_a_hit_is_recorded():
     red, blue = _duo()
     line = narrate_attack(red, blue, _result(BROADSWORD, hit=True, damage=4, raw_damage=10))
     assert "connects for 4 (6 stopped by armour)" in line
+
+
+def test_classic_to_hit_breakdown_shows_each_component():
+    from engine.facing import FRONT, REAR, SIDE
+    from engine.ruleset import Ruleset
+
+    red, _ = _duo()
+    rules = Ruleset()
+    assert rules.to_hit_breakdown(red, zone=FRONT) == f"DX {red.base_adj_dx}"
+    assert "+2 flank" in rules.to_hit_breakdown(red, zone=SIDE)
+    assert "+4 rear" in rules.to_hit_breakdown(red, zone=REAR)
+    assert "-1 range" in rules.to_hit_breakdown(red, zone=FRONT, range_penalty=-1)
 
 
 def test_move_line_records_who_a_figure_ends_up_facing():

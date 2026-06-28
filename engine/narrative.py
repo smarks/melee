@@ -65,7 +65,8 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
     stopped = result.raw_damage - result.damage
     if result.hit and result.damage > 0 and stopped > 0:
         body += f" ({stopped} stopped by armour)"
-    return _cap(f"{body} (rolled {result.rolled} vs {result.needed}).")
+    detail = f" — {result.to_hit_breakdown}" if result.to_hit_breakdown else ""
+    return _cap(f"{body} (rolled {result.rolled} vs {result.needed}{detail}).")
 
 
 def narrate_fumble(attacker: Figure, weapon, *, broke: bool) -> str:
