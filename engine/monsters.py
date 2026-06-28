@@ -18,25 +18,34 @@ no special-casing:
   with no strength requirement, set as the monster's ready weapon, so the normal
   to-hit / damage path resolves it.
 
-Implemented quirk: the giant snake's *side = front* (``all_front``) and its
-*very hard to hit* -3 (``hard_to_hit``).
+Implemented quirks:
 
-DEFERRED (need core-engine changes beyond this pass — see the PR):
+* the giant snake's *side = front* (``all_front``) and its *very hard to hit* -3
+  (``hard_to_hit``);
+* the **giant** occupies **three hexes** (``size`` 3), is engaged only by **two**
+  foes in its front (``needs_two_to_engage``), and is sturdier than a normal
+  figure -- it loses 2 DX only at 9 hits/turn and falls only at 16/turn (its own
+  ``wound_hits_threshold`` / ``knockdown_hits_threshold``);
+* the **gargoyle** flies (``fly_movement_allowance`` 16; ground MA 8) and must
+  land to attack.
 
-* The **giant occupies three hexes**. The engine assumes one figure per hex for
-  occupancy, movement, and facing, so a 3-hex figure is a substantial change.
-  The giant is catalogued here as a single-hex figure with its stats.
-* **Gargoyle flight** (a second, airborne MA and land-to-attack) and the
-  **giant's "engaged only by two foes"** rule both touch the movement /
-  engagement model and are not wired this pass. The gargoyle's ground MA (8) is
-  used; its flying MA (16) is recorded in ``notes`` only.
+All of these ride on plain :class:`~engine.figure.Figure` fields that default to
+single-hex / grounded behaviour, so the rest of the engine is unchanged for
+ordinary figures.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from .figure import Figure
-from .rules_data import Armor, DamageDice, Weapon, WeaponKind
+from .rules_data import (
+    KNOCKDOWN_HITS,
+    WOUND_HITS_THRESHOLD,
+    Armor,
+    DamageDice,
+    Weapon,
+    WeaponKind,
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +59,11 @@ class Monster:
     attack: Weapon           # natural bite / claws / weapon
     all_front: bool = False  # every facing is "front" (giant snake)
     hard_to_hit: int = 0     # DX penalty imposed on attackers (giant snake: 3)
+    size: int = 1            # hexes occupied (giant: 3)
+    needs_two_to_engage: bool = False         # giant: two foes needed to engage it
+    fly_movement_allowance: int = 0           # airborne MA (gargoyle: 16)
+    wound_hits_threshold: int = WOUND_HITS_THRESHOLD   # hits/turn for -2 DX
+    knockdown_hits_threshold: int = KNOCKDOWN_HITS     # hits/turn to fall
     notes: str = ""
 
 
@@ -85,25 +99,30 @@ GIANT_SNAKE = Monster(
 )
 
 # A GARGOYLE: ST 20, DX 11, stony flesh stops 3/attack, rocklike hands 2 dice
-# (regular or HTH). MA 8 on the ground (16 flying -- flight deferred this pass).
+# (regular or HTH). MA 8 on the ground, 16 flying; it lands to attack.
 GARGOYLE = Monster(
     species="Gargoyle", strength=20, dexterity=11,
     hide=_hide("Gargoyle", 3, 8),
     attack=Weapon("Gargoyle hands", DamageDice(2, 0), 0,
                   hth_damage=DamageDice(2, 0)),
-    notes="MA 16 when flying (flight deferred; ground MA 8 used)",
+    fly_movement_allowance=16,
+    notes="MA 8 on the ground, 16 flying; lands to attack",
 )
 
-# A GIANT (9-12 ft): occupies 3 hexes (deferred -- single-hex here). MA 10,
-# ST 30 example, DX 9. Spiked club does 1d+1 per full 10 starting ST -> 3d+3 at
-# ST 30; 2d-1 in HTH. Engaged only when in two foes' fronts (deferred).
+# A GIANT (9-12 ft): occupies 3 hexes (a tri-hex cluster). MA 10, ST 30 example,
+# DX 9. Spiked club does 1d+1 per full 10 starting ST -> 3d+3 at ST 30; 2d-1 in
+# HTH. Engaged only when two foes are in its front; loses 2 DX at 9 hits/turn and
+# falls at 16 hits/turn (not the normal 8).
 GIANT = Monster(
     species="Giant", strength=30, dexterity=9,
     hide=_hide("Giant", 0, 10),
     attack=Weapon("Spiked club", DamageDice(3, 3), 0,
                   hth_damage=DamageDice(2, -1),
                   notes="1d+1 per full 10 starting ST"),
-    notes="3-hex occupancy and two-foe engagement deferred; single-hex here",
+    size=3, needs_two_to_engage=True,
+    wound_hits_threshold=9, knockdown_hits_threshold=16,
+    notes="occupies 3 hexes; engaged only by two foes; -2 DX at 9 hits, "
+          "falls at 16 hits/turn",
 )
 
 MONSTERS: dict[str, Monster] = {
@@ -128,5 +147,9 @@ def create_monster(species: str, name: str, side: str, **state) -> Figure:
         side=side, armor=template.hide,
         weapons=[template.attack], ready_weapon=template.attack,
         all_front=template.all_front, hard_to_hit=template.hard_to_hit,
+        size=template.size, needs_two_to_engage=template.needs_two_to_engage,
+        fly_movement_allowance=template.fly_movement_allowance,
+        wound_hits_threshold=template.wound_hits_threshold,
+        knockdown_hits_threshold=template.knockdown_hits_threshold,
         **state,
     )
