@@ -530,6 +530,61 @@ def test_force_retreat_is_rejected_outside_the_combat_phase(client: Client) -> N
     assert out["error"] == "not the combat phase"
 
 
+def test_force_retreat_options_and_action_push_an_eligible_target(client: Client) -> None:
+    """End-to-end: an attacker that dealt ST damage and took none is offered as a
+    force-retreat option and the action shoves the foe back (advance follows)."""
+    from board.views import GAMES
+
+    red, blue = _combat_duel()
+    try:
+        # Red dealt ST damage and took none this turn, adjacent to a living blue.
+        red.dealt_st_damage_this_turn = True
+        red.hits_this_turn = 0
+
+        state = client.get("/api/game/duel-test").json()["state"]
+        assert {"attacker": red.uid, "target": blue.uid} in state["force_retreat_options"]
+        blue_before = next(f for f in state["figures"] if f["uid"] == blue.uid)["label"]
+
+        out = client.post(
+            "/api/game/duel-test/action",
+            data=json.dumps({"type": "force_retreat", "uid": red.uid,
+                             "target": blue.uid, "advance": True}),
+            content_type="application/json",
+        )
+        assert out.status_code == 200
+        figures = out.json()["state"]["figures"]
+        blue_after = next(f for f in figures if f["uid"] == blue.uid)["label"]
+        red_after = next(f for f in figures if f["uid"] == red.uid)["label"]
+        assert blue_after != blue_before          # the foe was pushed back a hex
+        assert red_after == blue_before            # advance: red followed into the vacated hex
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_force_retreat_rejects_an_ineligible_attacker(client: Client) -> None:
+    """An attacker that dealt no ST damage this turn is neither offered nor
+    allowed to force a retreat."""
+    from board.views import GAMES
+
+    red, blue = _combat_duel()
+    try:
+        red.dealt_st_damage_this_turn = False     # nothing landed -> not eligible
+
+        state = client.get("/api/game/duel-test").json()["state"]
+        assert state["force_retreat_options"] == []
+
+        out = client.post(
+            "/api/game/duel-test/action",
+            data=json.dumps({"type": "force_retreat", "uid": red.uid,
+                             "target": blue.uid, "advance": False}),
+            content_type="application/json",
+        )
+        assert out.status_code == 400
+        assert "error" in out.json()
+    finally:
+        del GAMES["duel-test"]
+
+
 def test_bad_or_missing_option_is_a_clean_400(client: Client) -> None:
     # Malformed client input should be a 400, not an uncaught 500 (#82).
     data = _new(client)
