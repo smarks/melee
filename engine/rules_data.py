@@ -64,6 +64,7 @@ class Weapon:
     throwable: bool = False
     notes: str = ""
     reload: int = 0
+    double_shot_dx: int = 0   # adjDX at/above which a bow fires twice/turn (0 = never)
 
 
 # ---- Weapon Table (p.14) ----------------------------------------------------
@@ -100,17 +101,25 @@ THROWN_ROCK = Weapon("Thrown rock", DamageDice(1, -4), 0, kind=WeaponKind.MISSIL
 SLING = Weapon("Sling", DamageDice(1, -2), 0, kind=WeaponKind.MISSILE,
                two_handed=True)
 SMALL_BOW = Weapon("Small bow", DamageDice(1, -1), 9, kind=WeaponKind.MISSILE,
-                   two_handed=True, notes="2 shots/turn if adjDX 15+")
+                   two_handed=True, double_shot_dx=15, notes="2 shots/turn if adjDX 15+")
 HORSE_BOW = Weapon("Horse bow", DamageDice(1, 0), 10, kind=WeaponKind.MISSILE,
-                   two_handed=True, notes="2 shots/turn if adjDX 16+")
+                   two_handed=True, double_shot_dx=16, notes="2 shots/turn if adjDX 16+")
 LONGBOW = Weapon("Longbow", DamageDice(1, 2), 11, kind=WeaponKind.MISSILE,
-                 two_handed=True, notes="2 shots/turn if adjDX 18+")
+                 two_handed=True, double_shot_dx=18, notes="2 shots/turn if adjDX 18+")
 LIGHT_CROSSBOW = Weapon("Light crossbow", DamageDice(2, 0), 12,
                         kind=WeaponKind.MISSILE, two_handed=True, reload=1,
                         notes="fires every other turn, or every turn if adjDX 14+")
 HEAVY_CROSSBOW = Weapon("Heavy crossbow", DamageDice(3, 0), 15,
                         kind=WeaponKind.MISSILE, two_handed=True, reload=2,
                         notes="fires every 3rd turn, or every other if adjDX 14+")
+
+
+def max_missile_shots(weapon: Weapon | None, adj_dx: int) -> int:
+    """Shots a missile weapon may fire in one turn — bows fire twice at a high
+    enough adjDX (p.14); everything else fires once."""
+    if weapon is None or weapon.kind != WeaponKind.MISSILE:
+        return 0
+    return 2 if weapon.double_shot_dx and adj_dx >= weapon.double_shot_dx else 1
 
 
 def missile_reload_turns(weapon: Weapon | None, adj_dx: int) -> int:
