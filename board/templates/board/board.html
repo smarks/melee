@@ -280,7 +280,9 @@ const OPTION_LABEL = {
   hth_attack: "🤼 Grapple", pick_up: "Pick up weapon",
   go_prone: "Drop prone", kneel: "Kneel",
 };
-const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage", "crawl"]);
+// missile_attack is here so its optional 1-hex move (option f: "move up to 1 hex
+// and/or fire") gets a destination picker, not forced to hold position (#117).
+const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage", "crawl", "missile_attack"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
 const TEAM_FILL = {red: "#d0524f", blue: "#4f86d0", green: "#57b894", gold: "#e0b13c", violet: "#b07ad8"};
 const fillFor = side => TEAM_FILL[side] || "#888";
@@ -600,7 +602,11 @@ function drawControls() {
     if (sel && chosenOption) drawPlacement(c);
     else drawContinue(c, "move", movers.length - set);
   } else if (phase === "combat") {
-    const actors = S.figures.filter(f => f.label && f.can_act && myControlled(f));
+    // Only count figures that actually HAVE an action (a target, grapple,
+    // shield-rush, or a disengage step). One with nothing to do is already
+    // doing nothing — it shouldn't drive the "anyway" warning (issue #117).
+    const actionable = new Set(S.combat_actionable || []);
+    const actors = S.figures.filter(f => f.label && myControlled(f) && actionable.has(f.uid));
     const set = actors.filter(f => PLAN[f.uid]).length;
     const span = document.createElement("div");
     span.innerHTML = `Click a counter to choose its attack or Do nothing.`
@@ -742,9 +748,14 @@ function openMenu(f) {
   // Header reflects commit state for this phase (issue #72): committed shows what
   // it committed to (+ Clear); uncommitted invites a choice from the options.
   let html = `<div class="head">${f.name} <span class="chip ${f.side}">${f.side}</span></div>`;
+  // A figure with no real choice (only "Do nothing" / disabled rows) is already
+  // doing nothing — don't nag it as "uncommitted" (issue #117).
+  const hasRealAction = rows.some(r => r.act && r.label !== "Do nothing");
   html += plan
     ? `<div class="commit">Committed: <b>${plan.label}</b>${plan.dest ? " → " + plan.dest : ""}</div>`
-    : `<div class="commit muted">Uncommitted — choose an action:</div>`;
+    : hasRealAction
+      ? `<div class="commit muted">Uncommitted — choose an action:</div>`
+      : `<div class="commit muted">No action available — will do nothing.</div>`;
   rows.forEach((r, i) => {
     const cls = "row" + (r.muted ? " muted" : "") + (r.disabled ? " disabled" : "");
     const why = r.reason ? ` <span class="why">${r.reason}</span>` : "";
