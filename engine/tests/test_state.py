@@ -33,6 +33,61 @@ def test_initiative_winner_chooses_order() -> None:
     assert state.move_order() == ["b", "a"]
 
 
+def test_situational_to_hit_modifiers() -> None:
+    from engine.rules_data import LIGHT_CROSSBOW, SPEAR
+
+    arena = Arena(cols=9, rows=15)
+    grid = arena.layout
+
+    # a braced pole weapon vs a charging foe: +2
+    spear = create_human("Spear", 13, 11, "a", weapons=[SPEAR], ready_weapon=SPEAR)
+    charger = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    spear.position = Hex(5, 5)
+    charger.position = grid.neighbor(Hex(5, 5), 0)
+    charger.current_option = Option.CHARGE_ATTACK
+    mods, note = GameState(arena, [spear, charger])._situational_mods(
+        spear, charger, SPEAR, False)
+    assert mods == 2 and "vs charge" in note
+
+    # a foe standing in a fallen body's hex: -2
+    corpse = create_human("Corpse", 12, 12, "c", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    corpse.position = charger.position
+    corpse.damage_taken = corpse.strength + 5
+    _, note2 = GameState(arena, [spear, charger, corpse])._situational_mods(
+        spear, charger, SPEAR, False)
+    assert "-2 over body" in note2
+
+    # a missile shot at a foe sheltering behind a body: -4
+    shooter = create_human("Bow", 12, 12, "a", weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    hidden = create_human("Hidden", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    shooter.position = Hex(5, 5)
+    hidden.position = Hex(5, 9)
+    blocker = create_human("Body", 12, 12, "c", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blocker.position = grid.line(hidden.position, shooter.position)[1]
+    blocker.damage_taken = blocker.strength + 5
+    _, note3 = GameState(arena, [shooter, hidden, blocker])._situational_mods(
+        shooter, hidden, LIGHT_CROSSBOW, True)
+    assert "-4 sheltered" in note3
+
+
+def test_prone_crossbowman_may_fire_at_plus_one() -> None:
+    from engine.rules_data import LIGHT_CROSSBOW
+
+    arena = Arena(cols=9, rows=15)
+    shooter = create_human("Bow", 12, 12, "a", weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    shooter.position = Hex(5, 5)
+    foe.position = Hex(5, 9)
+    shooter.posture = Posture.PRONE
+    state = GameState(arena, [shooter, foe])
+
+    shooter.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(shooter, foe)
+    results = state.resolve_combat()
+    assert len(results) == 1                       # a prone figure still fired
+    assert "+1 prone" in results[0].to_hit_breakdown
+
+
 def test_high_adjdx_bow_fires_twice() -> None:
     from engine.rules_data import SMALL_BOW, max_missile_shots
 

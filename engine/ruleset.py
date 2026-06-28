@@ -57,18 +57,19 @@ class Ruleset:
         zone: str | None,
         ignore_facing: bool = False,
         range_penalty: int = 0,
+        situational: int = 0,
     ) -> int:
-        """adjDX the attacker must roll at or under (armor, wounds, facing, range)."""
+        """adjDX to roll at or under (armor, wounds, facing, range, situation)."""
         needed = attacker.base_adj_dx + self.wound_penalty(attacker)
         if not ignore_facing:
             needed += facing_bonus(zone)
-        return needed + range_penalty
+        return needed + range_penalty + situational
 
     def to_hit_breakdown(
         self, attacker: Figure, *, zone: str | None,
-        ignore_facing: bool = False, range_penalty: int = 0,
+        ignore_facing: bool = False, range_penalty: int = 0, situational_note: str = "",
     ) -> str:
-        """How ``to_hit_number`` was reached, e.g. 'DX 7 +2 flank'."""
+        """How ``to_hit_number`` was reached, e.g. 'DX 7 +2 flank +2 vs charge'."""
         parts = [f"DX {attacker.base_adj_dx}"]
         wound = self.wound_penalty(attacker)
         if wound:
@@ -77,6 +78,8 @@ class Ruleset:
             parts.append(f"+{facing_bonus(zone)} {'rear' if zone == REAR else 'flank'}")
         if range_penalty:
             parts.append(f"{range_penalty:+d} range")
+        if situational_note:
+            parts.append(situational_note)
         return " ".join(parts)
 
     def order_dx(
@@ -116,6 +119,8 @@ class Ruleset:
         dice_count: int = THREE_DICE,
         ignore_facing: bool = False,
         range_penalty: int = 0,
+        situational: int = 0,
+        situational_note: str = "",
     ) -> AttackResult:
         """Roll one attack and return its result (no state is mutated).
 
@@ -123,7 +128,8 @@ class Ruleset:
         """
         weapon = weapon or attacker.ready_weapon
         needed = self.to_hit_number(
-            attacker, zone=zone, ignore_facing=ignore_facing, range_penalty=range_penalty
+            attacker, zone=zone, ignore_facing=ignore_facing,
+            range_penalty=range_penalty, situational=situational,
         )
         rolled = dice.total(dice_count)
         hit, multiplier, dropped, broke = self.classify_roll(rolled, dice_count, needed)
@@ -148,7 +154,7 @@ class Ruleset:
             zone=zone,
             to_hit_breakdown=self.to_hit_breakdown(
                 attacker, zone=zone, ignore_facing=ignore_facing,
-                range_penalty=range_penalty),
+                range_penalty=range_penalty, situational_note=situational_note),
         )
 
     # ---- injury / status ----------------------------------------------------

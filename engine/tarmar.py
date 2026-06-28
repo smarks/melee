@@ -156,6 +156,7 @@ class TarmarRuleset(Ruleset):
     def resolve_attack(
         self, dice, attacker, target, *, zone, weapon=None,
         dice_count=1, ignore_facing=False, range_penalty=0,
+        situational=0, situational_note="",
     ) -> AttackResult:
         weapon = weapon or attacker.ready_weapon
         weapon_class = WEAPON_CLASS.get(weapon.name) if weapon else None
@@ -173,7 +174,8 @@ class TarmarRuleset(Ruleset):
             weapon_class, tier, shield_bonus=shield, defender_dodge=dodge) + defend
 
         skill = attacker.weapon_skill.get(weapon.name, 0)
-        situational = (0 if ignore_facing else facing_bonus(zone)) + range_penalty
+        situational = ((0 if ignore_facing else facing_bonus(zone))
+                       + range_penalty + situational)
         bonus = tarmar_rules.to_hit_bonus(
             effective_dexterity=attacker.base_adj_dx,   # armour drags your aim
             skill_level=skill,
@@ -202,11 +204,13 @@ class TarmarRuleset(Ruleset):
             note=outcome["outcome"],
             to_hit_breakdown=self._breakdown(
                 attacker, weapon, weapon_class, tier, shield, target.dodging,
-                target_number, skill, zone, ignore_facing, range_penalty, bonus))
+                target_number, skill, zone, ignore_facing, range_penalty, bonus,
+                situational_note))
 
     @staticmethod
     def _breakdown(attacker, weapon, weapon_class, tier, shield, defending,
-                   target_number, skill, zone, ignore_facing, range_penalty, bonus) -> str:
+                   target_number, skill, zone, ignore_facing, range_penalty, bonus,
+                   situational_note="") -> str:
         """How the d20 to-hit was reached: the target number it needed, and the
         bonus added to the die (with its parts)."""
         target = f"need {target_number} ({weapon_class} vs {tier}"
@@ -230,6 +234,8 @@ class TarmarRuleset(Ruleset):
             parts.append(f"+{facing_bonus(zone)} {'rear' if zone == REAR else 'flank'}")
         if range_penalty:
             parts.append(f"{range_penalty:+d} range")
+        if situational_note:
+            parts.append(situational_note)
         roll = f"roll d20 {bonus:+d}" + (f" ({', '.join(parts)})" if parts else "")
         return f"{target}; {roll}"
 
