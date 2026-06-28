@@ -32,6 +32,7 @@ from .narrative import (
     narrate_attack,
     narrate_fumble,
     narrate_hth,
+    narrate_hth_disengage,
     narrate_initiative,
     narrate_move,
     narrate_move_order,
@@ -371,6 +372,33 @@ class GameState:
                                     "join" if len(defender.hth_opponents) > 1 else "grapple"))
         self._queue_hth_strike(attacker, defender)
         return "grappled"
+
+    def attempt_hth_disengage(self, figure: Figure) -> bool:
+        """Try to break out of a grapple (option v, p.19) instead of striking.
+
+        Rolls 1d6: a figure whose DX beats its lone foe's needs 1-3; against an
+        equal/superior foe, or more than one, it needs a 1. On success it stands
+        and slips to an adjacent empty hex. Either way it forgoes its attack.
+        """
+        if not figure.in_hth:
+            raise IllegalAction(f"{figure.name} is not in hand-to-hand")
+        figure.attacked_this_turn = True            # the attempt replaces an attack
+        foes = [self._by_uid(uid) for uid in figure.hth_opponents]
+        foes = [f for f in foes if f is not None]
+        superior = len(foes) == 1 and figure.base_adj_dx > foes[0].base_adj_dx
+        needed = 3 if superior else 1
+        if self.dice.dn(6) > needed:
+            self.log.append(narrate_hth_disengage(figure, False))
+            return False
+        self._clear_hth(figure)
+        figure.posture = Posture.STANDING
+        held = set(self.occupied(exclude=figure))
+        dest = next((h for h in self.arena.neighbors(figure.position)
+                     if self.arena.contains(h) and h not in held), None)
+        if dest is not None:
+            figure.position = dest
+        self.log.append(narrate_hth_disengage(figure, True))
+        return True
 
     def _queue_hth_strike(self, attacker: Figure, defender: Figure) -> None:
         """Queue a grapple strike — always at the +4 'rear' adjustment (p.18)."""
