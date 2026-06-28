@@ -66,6 +66,21 @@ def test_a_missile_is_shot_not_swung():
     assert line.startswith("The red Knight shoots a Longbow at the blue Knight")
 
 
+def test_armour_partly_absorbing_a_hit_is_recorded():
+    red, blue = _duo()
+    line = narrate_attack(red, blue, _result(BROADSWORD, hit=True, damage=4, raw_damage=10))
+    assert "connects for 4 (6 stopped by armour)" in line
+
+
+def test_move_line_records_who_a_figure_ends_up_facing():
+    from engine.narrative import narrate_victory
+
+    red, blue = _duo()
+    assert "now facing the blue Knight" in narrate_move(red, Option.CHARGE_ATTACK, True, blue)
+    assert "facing" not in narrate_move(red, Option.MOVE, True)
+    assert "victory" in narrate_victory("red").lower()
+
+
 def test_a_flank_or_rear_melee_blow_is_called_out():
     from engine.facing import REAR, SIDE
 

@@ -33,6 +33,16 @@ def test_initiative_winner_chooses_order() -> None:
     assert state.move_order() == ["b", "a"]
 
 
+def test_victory_is_logged_once_one_side_is_left_standing() -> None:
+    state, a, b = _duel()
+    b.damage_taken = b.strength + 5          # blue is down
+    state.resolve_combat()                   # no pending attacks; victory check still runs
+    assert any("victory" in line.lower() for line in state.log)
+    before = len(state.log)
+    state.resolve_combat()                   # not announced twice
+    assert len(state.log) == before
+
+
 def test_engaged_figure_gets_engaged_options() -> None:
     state, a, b = _duel()
     assert state.engaged(a) and state.engaged(b)

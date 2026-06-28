@@ -38,6 +38,7 @@ from .narrative import (
     narrate_retreat,
     narrate_status,
     narrate_turn,
+    narrate_victory,
 )
 from .options import Option, OptionSpec, options_for, spec
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
@@ -187,6 +188,14 @@ class GameState:
             fronts.update(front_hexes(self.arena.layout, enemy))
         return fronts
 
+    def _faced_enemy(self, figure: Figure) -> Figure | None:
+        """An enemy standing in ``figure``'s front arc, if any (for the log)."""
+        if figure.position is None:
+            return None
+        fronts = set(front_hexes(self.arena.layout, figure))
+        return next((enemy for enemy in self.enemies_of(figure)
+                     if enemy.position in fronts), None)
+
     def move(
         self,
         figure: Figure,
@@ -228,7 +237,7 @@ class GameState:
             figure.posture = Posture.STANDING
         if ready is not None:
             self._ready_weapon(figure, option, ready)
-        line = narrate_move(figure, option, bool(path))
+        line = narrate_move(figure, option, bool(path), self._faced_enemy(figure))
         if line:
             self.log.append(line)
 
@@ -339,7 +348,18 @@ class GameState:
             self._apply(attacker, pending.target, result)
             results.append(result)
         self._pending.clear()
+        self._announce_victory()
         return results
+
+    def _announce_victory(self) -> None:
+        """Log the win once a single side is left standing."""
+        if getattr(self, "_victory_announced", False):
+            return
+        standing = {f.side for f in self.figures
+                    if not f.collapsed and not f.is_dead}
+        if len(self.sides) >= 2 and len(standing) == 1:
+            self._victory_announced = True
+            self.log.append(narrate_victory(next(iter(standing))))
 
     def _apply(self, attacker: Figure, target: Figure, result: AttackResult) -> None:
         attacker.attacked_this_turn = True
