@@ -240,15 +240,20 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list, list]:
     if weapon.kind == WeaponKind.MISSILE:
         if figure.missile_cooldown > 0:
             return [], [], hth                  # still reloading — can't fire
-        return [], [e.uid for e in state.enemies_of(figure) if e.position is not None], hth
+        # A missile may only be fired at a foe in the attacker's front arc (p.16).
+        return [], [e.uid for e in state.enemies_of(figure)
+                    if e.position is not None
+                    and state.in_front_arc(figure, e.position)], hth
     melee = [e.uid for e in state.melee_targets(figure, weapon)]
-    # A throwable weapon can be hurled at any foe out of melee reach (p.15);
-    # those throw targets ride the missile slot so the UI treats them as ranged.
+    # A throwable weapon can be hurled at any foe out of melee reach (p.15) that
+    # lies in the attacker's front arc; those throw targets ride the missile slot
+    # so the UI treats them as ranged.
     throw: list = []
     if weapon.throwable:
         in_reach = set(melee)
         throw = [e.uid for e in state.enemies_of(figure)
-                 if e.position is not None and e.uid not in in_reach]
+                 if e.position is not None and e.uid not in in_reach
+                 and state.in_front_arc(figure, e.position)]
     return melee, throw, hth
 
 

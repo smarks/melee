@@ -898,6 +898,13 @@ class GameState:
         situational, situational_note = self._situational_mods(
             attacker, target, weapon, ranged)
         if ranged:
+            # The target must lie in the attacker's front arc (p.15-16): you fire
+            # where you face. (Posture-independent, so a prone crossbowman may
+            # still shoot along its facing.)
+            if not self.in_front_arc(attacker, target.position):
+                raise IllegalAction(
+                    f"{target.name} is not in {attacker.name}'s front arc"
+                )
             if is_throw:
                 range_penalty = -distance     # -1 DX per hex of distance (p.15)
                 shots = 1
@@ -906,17 +913,9 @@ class GameState:
                 shots = max_missile_shots(weapon, attacker.base_adj_dx)
             # zone is carried so a ready shield still stops frontal missiles,
             # but ignore_facing suppresses the to-hit facing bonus (missiles
-            # and thrown weapons never get a facing add, p.16).
-            #
-            # The rulebook also requires the target be in the attacker's front
-            # arc (p.16). We deliberately do NOT enforce that here: the combat
-            # phase model lets a figure fire at any enemy without managing its
-            # facing (see ``_attack_targets`` and the board UI / ``ai`` callers,
-            # which never re-aim an archer in the combat phase). Enforcing the
-            # front arc would need facing to be a managed combat-phase choice —
-            # a larger change tracked separately. The line-of-flight itself is
-            # still traced from attacker to target, so intervening figures and
-            # fly-on are resolved directionally regardless.
+            # and thrown weapons never get a facing add, p.16). The line-of-flight
+            # is traced from attacker to target, so intervening figures and fly-on
+            # are resolved directionally regardless.
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
                               ignore_facing=True, range_penalty=range_penalty,
