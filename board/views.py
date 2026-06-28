@@ -180,7 +180,21 @@ def _meta(game: dict) -> dict:
         "controllers": game.get("controllers", {}),
         "queued": len(state._pending),
         "force_retreat_options": retreat_options,
+        "combat_actionable": _combat_actionable(state) if game["phase"] == "combat" else [],
     }
+
+
+def _combat_actionable(state: GameState) -> list:
+    """uids of figures with a real combat action (a target to attack/grapple/
+    shield-rush, or a disengage step). A figure with none is already doing
+    nothing, so it shouldn't drive the 'anyway' warning (#117)."""
+    actionable = []
+    for figure in state.figures:
+        melee, missile, hth = _attack_targets(state, figure)
+        if (melee or missile or hth or state.shield_rush_targets(figure)
+                or figure.current_option == Option.DISENGAGE):
+            actionable.append(figure.uid)
+    return actionable
 
 
 def _advance_computer(game: dict) -> None:
@@ -262,20 +276,19 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list, list]:
     if weapon.kind == WeaponKind.MISSILE:
         if figure.missile_cooldown > 0:
             return [], [], hth                  # still reloading — can't fire
-        # A missile may only be fired at a foe in the attacker's front arc (p.16).
+        # Any foe may be targeted — the shooter turns to aim (queue_attack faces
+        # it), satisfying the p.16 front-arc rule; missiles get no facing bonus
+        # so turning costs nothing. (#117 — was silently dropping un-faced foes.)
         return [], [e.uid for e in state.enemies_of(figure)
-                    if e.position is not None
-                    and state.in_front_arc(figure, e.position)], hth
+                    if e.position is not None], hth
     melee = [e.uid for e in state.melee_targets(figure, weapon)]
-    # A throwable weapon can be hurled at any foe out of melee reach (p.15) that
-    # lies in the attacker's front arc; those throw targets ride the missile slot
-    # so the UI treats them as ranged.
+    # A throwable weapon can be hurled at any foe out of melee reach (p.15); the
+    # thrower turns to aim (queue_attack faces it), so the front arc is satisfied.
     throw: list = []
     if weapon.throwable:
         in_reach = set(melee)
         throw = [e.uid for e in state.enemies_of(figure)
-                 if e.position is not None and e.uid not in in_reach
-                 and state.in_front_arc(figure, e.position)]
+                 if e.position is not None and e.uid not in in_reach]
     return melee, throw, hth
 
 
@@ -298,6 +311,23 @@ def _auto_facing(state: GameState, figure, final_hex, path=None):
     prev = path[-2] if path and len(path) >= 2 else figure.position
     travelled = layout.direction_to(prev, final_hex)
     return travelled if travelled is not None else figure.facing
+
+
+def _aim(state: GameState, attacker, target) -> None:
+    """Turn a ranged attacker to face its target before it fires (#117).
+
+    Option (f) lets a missile attacker change facing, and missiles get no facing
+    bonus, so aiming is free and satisfies the front-arc rule (p.16) — without it
+    a shot the player deliberately chose at an un-faced foe would silently not
+    fire.
+    """
+    if attacker.position is None or target.position is None:
+        return
+    line = state.arena.layout.line(attacker.position, target.position)
+    if len(line) >= 2:
+        direction = state.arena.layout.direction_to(attacker.position, line[1])
+        if direction is not None:
+            attacker.facing = direction
 
 
 def _ensure_attack_option(state: GameState, figure) -> None:
@@ -994,6 +1024,12 @@ def _dispatch(game: dict, body: dict):
             raise IllegalAction("not the combat phase")
         attacker = _figure(state, body.get("uid", ""))
         target = _figure(state, body.get("target", ""))
+        weapon = attacker.ready_weapon
+        if (weapon is not None and attacker.position is not None
+                and target.position is not None):
+            distance = state.arena.distance(attacker.position, target.position)
+            if weapon.kind == WeaponKind.MISSILE or (weapon.throwable and distance > 1):
+                _aim(state, attacker, target)      # turn to aim the shot (#117)
         _ensure_attack_option(state, attacker)
         state.queue_attack(attacker, target,
                            with_main_gauche=bool(body.get("main_gauche")))

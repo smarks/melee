@@ -831,3 +831,51 @@ def test_advance_endpoint_enforces_eight_point_cap(client: Client) -> None:
         assert "maximum" in out.json()["error"]
     finally:
         del GAMES["cap-test"]
+
+
+def _two_fig_combat_state():
+    """A minimal GameState for unit-testing combat view helpers."""
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import LONGBOW, SHORTSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+    arena = Arena(cols=9, rows=15)
+    shooter = create_human("Archer", 11, 13, "a", weapons=[LONGBOW], ready_weapon=LONGBOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    shooter.position = Hex(5, 5)
+    foe.position = Hex(5, 9)
+    return GameState(arena, [shooter, foe]), shooter, foe
+
+
+def test_aim_lets_a_missile_fire_at_a_foe_outside_the_front_arc() -> None:
+    # #117: a shooter turns to aim, so a deliberately-chosen missile target that
+    # wasn't being faced still fires (engine rejects it un-aimed; _aim fixes that).
+    from board.views import _aim
+    from engine.options import Option
+    from engine.state import IllegalAction
+    state, shooter, foe = _two_fig_combat_state()
+    layout = state.arena.layout
+    toward = layout.direction_to(shooter.position, layout.line(shooter.position, foe.position)[1])
+    shooter.facing = (toward + 3) % 6                  # face away from the foe
+    shooter.current_option = Option.MISSILE_ATTACK
+    with pytest.raises(IllegalAction):                 # un-aimed: outside front arc
+        state.queue_attack(shooter, foe)
+    _aim(state, shooter, foe)                          # turn to aim
+    state.queue_attack(shooter, foe)                   # now it fires
+    assert len(state._pending) == 1
+
+
+def test_combat_actionable_excludes_a_figure_with_no_action() -> None:
+    # #117: a figure with no available action isn't counted as needing a decision.
+    from board.views import _combat_actionable
+    from engine.figure import create_human
+    from engine.rules_data import SHORTSWORD
+    from hexarena.hex import Hex
+    state, shooter, foe = _two_fig_combat_state()
+    loner = create_human("Loner", 12, 12, "a", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    loner.position = Hex(1, 1)                          # nowhere near a foe
+    state.figures.append(loner)
+    actionable = _combat_actionable(state)
+    assert shooter.uid in actionable                   # has a missile target
+    assert loner.uid not in actionable                 # nothing to do -> auto do-nothing
