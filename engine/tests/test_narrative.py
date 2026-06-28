@@ -38,7 +38,7 @@ def test_a_clean_hit_reads_as_a_swing_that_connects():
     red, blue = _duo()
     line = narrate_attack(red, blue, _result(BROADSWORD, hit=True, damage=7, rolled=9))
     assert line == ("The red Knight swings a Broadsword at the blue Knight "
-                    "— and connects for 7 (rolled 9 vs 12).")
+                    "— and connects for 7 (needed 12 or less, rolled 9).")
 
 
 def test_a_defended_miss_reads_as_a_dodge():
@@ -70,7 +70,15 @@ def test_to_hit_breakdown_is_appended_to_the_line():
     red, blue = _duo()
     line = narrate_attack(red, blue, _result(
         BROADSWORD, hit=False, rolled=9, needed=8, to_hit_breakdown="DX 6 +2 flank"))
-    assert "(rolled 9 vs 8 — DX 6 +2 flank)" in line
+    assert "(needed 8 or less, rolled 9 — DX 6 +2 flank)" in line
+
+
+def test_tarmar_roll_over_reads_as_needed_n_or_more():
+    # Tarmar rolls a d20 *over* the Target Number, so the threshold must invert.
+    red, blue = _duo(LONGBOW)
+    line = narrate_attack(red, blue, _result(
+        LONGBOW, hit=True, damage=4, rolled=15, needed=11, roll_under=False))
+    assert "(needed 11 or more, rolled 15)" in line
 
 
 def test_armour_partly_absorbing_a_hit_is_recorded():

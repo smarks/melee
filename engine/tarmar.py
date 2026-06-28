@@ -171,7 +171,8 @@ class TarmarRuleset(Ruleset):
             return AttackResult(
                 hit=False, rolled=0, needed=0, dice_count=1, multiplier=1,
                 raw_damage=0, damage=0, dropped_weapon=False, broke_weapon=False,
-                weapon=weapon, zone=zone, note="no Tarmar weapon class")
+                weapon=weapon, zone=zone, note="no Tarmar weapon class",
+                roll_under=False)
 
         tier = ARMOUR_TIER.get(target.armor.name, "None")
         # A shield only covers the front, so its to-hit bonus applies only to a
@@ -219,6 +220,7 @@ class TarmarRuleset(Ruleset):
             dropped_weapon=False, broke_weapon=False, weapon=weapon, zone=zone,
             body_hit=outcome["critical"],  # crit reaches Body (carried on the result, not the target)
             note=outcome["outcome"],
+            roll_under=False,
             to_hit_breakdown=self._breakdown(
                 attacker, weapon, weapon_class, tier, shield, target.dodging,
                 target_number, skill, zone, ignore_facing, range_penalty, bonus,
@@ -241,7 +243,7 @@ class TarmarRuleset(Ruleset):
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
             multiplier=multiplier, raw_damage=raw_damage, damage=damage,
             dropped_weapon=False, broke_weapon=False, weapon=weapon, zone=zone,
-            body_hit=outcome["critical"],
+            body_hit=outcome["critical"], roll_under=False,
             note=outcome["outcome"], to_hit_breakdown=f"grapple: d20 {bonus:+d} vs {target_number}")
 
     @staticmethod
