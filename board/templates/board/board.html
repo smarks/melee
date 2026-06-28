@@ -317,6 +317,10 @@ function drawArena() {
     if (f.dodging) cls += " dodge";
     g.setAttribute("class", cls);
 
+    const tip = document.createElementNS(SVG, "title");   // native hover tooltip
+    tip.textContent = `${f.name} (${f.side})`;
+    g.appendChild(tip);
+
     const body = document.createElementNS(SVG, "circle");
     body.setAttribute("class", "body");
     body.setAttribute("cx", h.cx); body.setAttribute("cy", h.cy);
