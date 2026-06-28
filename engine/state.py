@@ -62,6 +62,8 @@ class PendingAttack:
     ignore_facing: bool
     range_penalty: int
     shots: int = 1            # >1 for a high-adjDX bow firing twice in a turn
+    situational: int = 0      # circumstantial DX mod (prone, pole-vs-charge, bodies)
+    situational_note: str = ""
 
 
 class GameState:
@@ -203,6 +205,39 @@ class GameState:
         return next((enemy for enemy in self.enemies_of(figure)
                      if enemy.position in fronts), None)
 
+    def _body_in_hex(self, hex_position: Hex, *, exclude: Figure | None = None) -> bool:
+        """A fallen body (dead/collapsed figure) lies in ``hex_position``."""
+        return any(f is not exclude and f.position == hex_position
+                   and (f.is_dead or f.collapsed) for f in self.figures)
+
+    def _situational_mods(self, attacker: Figure, target: Figure,
+                          weapon, is_missile: bool) -> tuple[int, str]:
+        """Circumstantial to-hit modifiers (Section: DX Adjustments, p.16).
+
+        Positive = easier to hit, matching the facing convention.
+        """
+        mods, notes = 0, []
+        layout = self.arena.layout
+        # A prone crossbowman fires steadied: +1 (p.16).
+        if (attacker.posture == Posture.PRONE and is_missile
+                and weapon is not None and weapon.reload > 0):
+            mods += 1; notes.append("+1 prone")
+        # A braced pole weapon punishes a charging foe: +2.
+        if (weapon is not None and weapon.kind == WeaponKind.POLE
+                and target.current_option == Option.CHARGE_ATTACK
+                and attacker.current_option != Option.CHARGE_ATTACK):
+            mods += 2; notes.append("+2 vs charge")
+        # The target standing in a fallen body's hex fights awkwardly: -2.
+        if target.position is not None and self._body_in_hex(target.position, exclude=target):
+            mods -= 2; notes.append("-2 over body")
+        # A missile shot at a foe sheltering behind a body: -4.
+        if (is_missile and attacker.position is not None
+                and target.position is not None):
+            line = layout.line(target.position, attacker.position)
+            if len(line) >= 2 and self._body_in_hex(line[1]):
+                mods -= 4; notes.append("-4 sheltered")
+        return mods, " ".join(notes)
+
     def move(
         self,
         figure: Figure,
@@ -302,6 +337,8 @@ class GameState:
         if is_missile and attacker.missile_cooldown > 0:
             raise IllegalAction(f"{weapon.name} is still reloading")
         zone = attack_zone(self.arena.layout, attacker, target)
+        situational, situational_note = self._situational_mods(
+            attacker, target, weapon, is_missile)
         if is_missile:
             range_penalty = self.rules.missile_range_penalty(
                 self.arena.distance(attacker.position, target.position)
@@ -312,7 +349,8 @@ class GameState:
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
                               ignore_facing=True, range_penalty=range_penalty,
-                              shots=max_missile_shots(weapon, attacker.base_adj_dx))
+                              shots=max_missile_shots(weapon, attacker.base_adj_dx),
+                              situational=situational, situational_note=situational_note)
             )
         else:
             if zone is None:
@@ -325,7 +363,8 @@ class GameState:
                 )
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
-                              ignore_facing=False, range_penalty=0)
+                              ignore_facing=False, range_penalty=0,
+                              situational=situational, situational_note=situational_note)
             )
 
     def resolve_combat(self) -> list[AttackResult]:
@@ -345,8 +384,13 @@ class GameState:
         results: list[AttackResult] = []
         for pending in sorted(self._pending, key=ordering_key):
             attacker = pending.attacker
-            # killed or knocked down before its turn to strike -> no attack
-            if not attacker.can_act() or attacker.posture == Posture.PRONE:
+            if not attacker.can_act():
+                continue        # killed/knocked out before its turn to strike
+            # Prone figures can't fight — except a prone crossbowman, who may fire.
+            crossbow = (attacker.ready_weapon is not None
+                        and attacker.ready_weapon.kind == WeaponKind.MISSILE
+                        and attacker.ready_weapon.reload > 0)
+            if attacker.posture == Posture.PRONE and not crossbow:
                 continue
             # A high-adjDX bow looses two arrows; don't waste the second on a
             # foe the first already dropped.
@@ -360,6 +404,8 @@ class GameState:
                     dice_count=self.rules.attack_dice_count(pending.target),
                     ignore_facing=pending.ignore_facing,
                     range_penalty=pending.range_penalty,
+                    situational=pending.situational,
+                    situational_note=pending.situational_note,
                 )
                 self._apply(attacker, pending.target, result)
                 results.append(result)
