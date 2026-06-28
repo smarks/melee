@@ -49,6 +49,32 @@ class Race(str, Enum):
     HOBGOBLIN = "hobgoblin"
 
 
+@dataclass(frozen=True)
+class RaceSpread:
+    """A race's starting ST/DX limits (Section VIII, p.21).
+
+    A fresh figure of the race must keep ST and DX at or above the listed
+    minimums and spend exactly ``total`` points across the two.
+    """
+
+    min_strength: int
+    min_dexterity: int
+    total: int
+
+
+# Section VIII "Fantasy Fighters" (p.21). Humans are the Section III baseline
+# (min 8/8, 24 points); each race shifts the floors and the point total.
+RACE_SPREADS: dict[Race, RaceSpread] = {
+    Race.HUMAN: RaceSpread(HUMAN_MIN_ATTRIBUTE, HUMAN_MIN_ATTRIBUTE, HUMAN_START_TOTAL),
+    Race.ORC: RaceSpread(8, 8, 24),       # "just like a human figure"
+    Race.ELF: RaceSpread(6, 10, 24),      # min ST 6, min DX 10, total 24
+    Race.DWARF: RaceSpread(10, 6, 24),    # min ST 10, min DX 6, total 24
+    Race.HALFLING: RaceSpread(4, 12, 22), # min ST 4, min DX 12, only 6 added -> total 22
+    Race.GOBLIN: RaceSpread(6, 8, 22),    # min ST 6, min DX 8, total 22
+    Race.HOBGOBLIN: RaceSpread(7, 6, 20), # min ST 7, min DX 6, total 20
+}
+
+
 @dataclass
 class Figure:
     """One counter in the arena.
@@ -67,6 +93,9 @@ class Figure:
     ready_weapon: Weapon | None = None
     shield_ready: bool = True
     race: Race = Race.HUMAN
+    # ---- nonhuman quirks (Section VIII) ----
+    all_front: bool = False    # every facing is "front" (giant snake: no flank/rear)
+    hard_to_hit: int = 0       # DX penalty it imposes on attackers (snake: 3)
 
     # ---- mutable fight state ----
     position: Hex | None = None
@@ -161,6 +190,36 @@ class Figure:
         return not self.collapsed and not self.dead
 
 
+def create_fighter(
+    name: str,
+    strength: int,
+    dexterity: int,
+    side: str,
+    race: Race = Race.HUMAN,
+    **gear,
+) -> Figure:
+    """Create a fighter of ``race``, enforcing its ST/DX spread (Sections III, VIII).
+
+    Every race floors ST and DX at its own minimums and spends exactly its own
+    point total across the two (the human 24-point / min-8 spread is just one row
+    of :data:`RACE_SPREADS`).
+    """
+    spread = RACE_SPREADS[race]
+    if strength < spread.min_strength or dexterity < spread.min_dexterity:
+        raise ValueError(
+            f"a {race.value}'s ST may not begin below {spread.min_strength} "
+            f"nor its DX below {spread.min_dexterity} "
+            f"(got ST {strength}, DX {dexterity})"
+        )
+    if strength + dexterity != spread.total:
+        raise ValueError(
+            f"a fresh {race.value} spends exactly {spread.total} points on ST+DX "
+            f"(got {strength + dexterity})"
+        )
+    return Figure(name=name, strength=strength, dexterity=dexterity,
+                  side=side, race=race, **gear)
+
+
 def create_human(
     name: str,
     strength: int,
@@ -169,14 +228,4 @@ def create_human(
     **gear,
 ) -> Figure:
     """Create a human figure, enforcing the 24-point / min-8 spread (Section III)."""
-    if strength < HUMAN_MIN_ATTRIBUTE or dexterity < HUMAN_MIN_ATTRIBUTE:
-        raise ValueError(
-            f"a human's ST and DX may not begin below {HUMAN_MIN_ATTRIBUTE}"
-        )
-    if strength + dexterity != HUMAN_START_TOTAL:
-        raise ValueError(
-            f"a fresh human spends exactly {HUMAN_START_TOTAL} points on ST+DX "
-            f"(got {strength + dexterity})"
-        )
-    return Figure(name=name, strength=strength, dexterity=dexterity,
-                  side=side, race=Race.HUMAN, **gear)
+    return create_fighter(name, strength, dexterity, side, race=Race.HUMAN, **gear)
