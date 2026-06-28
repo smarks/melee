@@ -76,3 +76,19 @@ def test_a_non_change_option_cannot_ready_a_weapon():
     state = GameState(arena, [fighter])
     with pytest.raises(IllegalAction):
         state.move(fighter, Option.MOVE, ready="Mace")
+
+
+def test_rejected_ready_leaves_the_board_untouched():
+    # A rejected weapon switch must not partially mutate the figure (#77): the
+    # ready is validated before facing / option / posture are committed.
+    arena = Arena(cols=7, rows=7)
+    fighter = create_human("F", 14, 10, "red", weapons=[BROADSWORD, MACE, DAGGER],
+                           ready_weapon=BROADSWORD)
+    fighter.position = Hex(3, 3)
+    fighter.facing = 0
+    state = GameState(arena, [fighter])
+    with pytest.raises(IllegalAction):
+        state.move(fighter, Option.READY_WEAPON, facing=3, ready="Longbow")  # not carried
+    assert fighter.facing == 0                          # facing not rotated
+    assert fighter.ready_weapon.name == "Broadsword"    # still the original weapon
+    assert fighter.current_option is not Option.READY_WEAPON  # option not committed
