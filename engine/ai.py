@@ -132,7 +132,11 @@ def queue_attacks(state: GameState, side: str) -> None:
         if weapon.kind == WeaponKind.MISSILE:
             if figure.missile_cooldown > 0:
                 continue                        # still reloading
-            candidates = [e for e in state.enemies_of(figure) if e.position is not None]
+            # Only fire at a foe in the front arc (p.16); the AI faces the nearest
+            # enemy in its movement, so the lane is normally clear.
+            candidates = [e for e in state.enemies_of(figure)
+                          if e.position is not None
+                          and state.in_front_arc(figure, e.position)]
         else:
             candidates = state.melee_targets(figure, weapon)   # front hexes + pole jab
         if candidates:

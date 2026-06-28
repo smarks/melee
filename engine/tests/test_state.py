@@ -13,6 +13,16 @@ from engine.state import GameState, IllegalAction
 LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
+def _aim(figure, target) -> None:
+    """Face ``figure`` toward ``target`` (a shooter aims along the line of fire).
+
+    Works at any range: ``direction_to`` wants adjacent hexes, so take the first
+    step of the line from the figure to its target.
+    """
+    figure.facing = LAYOUT.direction_to(
+        figure.position, LAYOUT.line(figure.position, target.position)[1])
+
+
 def _rear_grapple(defense_roll):
     """An attacker poised behind a defender (rear = HTH-eligible), dice primed
     with the defender's defense roll then plenty of 3s for any strike."""
@@ -37,6 +47,7 @@ def test_drop_prone_to_fire_a_crossbow_at_plus_one() -> None:
     foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
     shooter.position = Hex(5, 5)
     foe.position = Hex(5, 9)
+    _aim(shooter, foe)  # aim along the line of fire
     state = GameState(arena, [shooter, foe])
     assert Option.GO_PRONE in state.legal_options(shooter)   # offered to a missile holder
     state.move(shooter, Option.GO_PRONE)
@@ -68,6 +79,7 @@ def test_thrown_weapon_strikes_a_figure_in_its_flight_path() -> None:
     thrower.position = Hex(5, 5)
     blocker.position = Hex(5, 6)                          # standing in the way
     target.position = Hex(5, 8)
+    _aim(thrower, target)  # aim along the line of fire
     # roll-to-miss the blocker needs <= adjDX(13) - 1; a scripted 18 fails -> it hits
     state = GameState(arena, [thrower, target, blocker],
                       dice=Dice(scripted=[6, 6, 6] + [3] * 12))
@@ -264,6 +276,7 @@ def test_throwing_a_weapon_hurls_it_and_takes_a_range_penalty() -> None:
     foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
     thrower.position = Hex(5, 5)
     foe.position = Hex(5, 8)                          # three hexes away — a throw
+    _aim(thrower, foe)  # aim along the line of fire
     state = GameState(arena, [thrower, foe], dice=Dice(scripted=[3] * 12))
 
     thrower.current_option = Option.CHARGE_ATTACK     # throw detected from distance
@@ -280,6 +293,7 @@ def test_throwing_a_weapon_hurls_it_and_takes_a_range_penalty() -> None:
     enemy = create_human("Enemy", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
     rocker.position = Hex(2, 2)
     enemy.position = Hex(2, 5)
+    _aim(rocker, enemy)  # aim along the line of fire
     rock_game = GameState(arena, [rocker, enemy], dice=Dice(scripted=[3] * 12))
     rocker.current_option = Option.MISSILE_ATTACK      # a rock is a missile weapon
     rock_game.queue_attack(rocker, enemy)
@@ -380,6 +394,7 @@ def test_prone_crossbowman_may_fire_at_plus_one() -> None:
     foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     shooter.position = Hex(5, 5)
     foe.position = Hex(5, 9)
+    _aim(shooter, foe)  # aim along the line of fire
     shooter.posture = Posture.PRONE
     state = GameState(arena, [shooter, foe])
 
@@ -402,6 +417,7 @@ def test_high_adjdx_bow_fires_twice() -> None:
     foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     archer.position = Hex(5, 5)
     foe.position = Hex(5, 9)
+    _aim(archer, foe)  # aim along the line of fire
     # Scripted dice keep this deterministic: a random triple-damage first arrow
     # could otherwise drop the foe and cancel the second shot.
     state = GameState(arena, [archer, foe], dice=Dice(scripted=[3] * 16))
@@ -447,6 +463,7 @@ def test_crossbow_must_reload_between_shots() -> None:
     foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     shooter.position = Hex(5, 5)
     foe.position = Hex(5, 9)                      # well apart — a missile shot
+    _aim(shooter, foe)  # aim along the line of fire
     # Scripted dice keep this deterministic — an unseeded natural-16+ fumble would
     # drop the crossbow and change legal_options out from under the assertions.
     state = GameState(arena, [shooter, foe], dice=Dice(scripted=[3] * 12))
@@ -676,8 +693,8 @@ def test_missile_shot_gains_no_rear_bonus_when_target_falls_mid_phase() -> None:
     target = create_human("Foe", 12, 12, "b",
                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
     archer.position = Hex(5, 5)
-    archer.facing = 0
     target.position = Hex(5, 9)
+    _aim(archer, target)  # aim along the line of fire
     state = GameState(arena, [archer, target], dice=Dice(scripted=[3] * 12))
     archer.current_option = Option.MISSILE_ATTACK
     state.queue_attack(archer, target)
@@ -737,6 +754,7 @@ def test_missile_strikes_a_bystander_blocking_its_lane() -> None:
     archer.position = Hex(5, 5)
     blocker.position = Hex(5, 6)                          # standing in the lane
     target.position = Hex(5, 8)
+    _aim(archer, target)  # aim along the line of fire
     # roll-to-miss the blocker needs <= adjDX(13) - 1; a scripted 18 fails -> hit
     state = GameState(arena, [archer, target, blocker],
                       dice=Dice(scripted=[6, 6, 6] + [3] * 12))
@@ -759,6 +777,7 @@ def test_missile_that_misses_flies_on_and_is_never_picked_up() -> None:
                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
     archer.position = Hex(5, 5)
     target.position = Hex(5, 8)
+    _aim(archer, target)  # aim along the line of fire
     # a scripted 15 (6+6+3) cleanly misses adjDX 13 — not a 16/17/18 fumble — and
     # with no figure beyond the target the arrow flies off the field, spent
     state = GameState(arena, [archer, target],
@@ -869,3 +888,108 @@ def test_a_prone_figure_cannot_disengage() -> None:
         pass
     else:
         raise AssertionError("a grounded figure must stand before it can disengage")
+
+
+def test_main_gauche_adds_a_separate_minus_four_jab() -> None:
+    """A figure wielding a main weapon plus a ready off-hand main-gauche may add a
+    second attack on the same foe, rolled at -4 DX (from #7, p.13)."""
+    from engine.rules_data import MAIN_GAUCHE, SHORTSWORD as SWORD
+
+    arena = Arena(cols=9, rows=15)
+    duelist = create_human("Duelist", 12, 12, "a",
+                           weapons=[SWORD, MAIN_GAUCHE], ready_weapon=SWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SWORD], ready_weapon=SWORD)
+    duelist.position = Hex(5, 5)
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    _aim(duelist, foe)
+    _aim(foe, duelist)
+    state = GameState(arena, [duelist, foe], dice=Dice(scripted=[3] * 24))
+
+    duelist.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(duelist, foe, with_main_gauche=True)
+    # Two pending attacks on the SAME foe: the main blow, then the off-hand jab.
+    assert len(state._pending) == 2
+    main, jab = state._pending
+    assert main.target is foe and jab.target is foe
+    assert jab.weapon is not None and jab.weapon.name == "Main-Gauche"
+    assert jab.situational == -4
+
+    results = state.resolve_combat()
+    assert len(results) == 2                              # the second attack was rolled
+    assert results[1].weapon.name == "Main-Gauche"
+    assert "main-gauche" in results[1].to_hit_breakdown
+    assert results[1].needed == results[0].needed - 4    # the jab is 4 harder to land
+
+
+def test_main_gauche_jab_needs_a_ready_off_hand_dagger() -> None:
+    """No off-hand main-gauche (a two-handed weapon fills both hands) -> the jab is
+    rejected rather than silently dropped."""
+    from engine.rules_data import TWO_HANDED_SWORD
+
+    arena = Arena(cols=9, rows=15)
+    fighter = create_human("Fighter", 14, 10, "a",
+                           weapons=[TWO_HANDED_SWORD], ready_weapon=TWO_HANDED_SWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    fighter.position = Hex(5, 5)
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    _aim(fighter, foe)
+    _aim(foe, fighter)
+    state = GameState(arena, [fighter, foe])
+
+    fighter.current_option = Option.SHIFT_ATTACK
+    try:
+        state.queue_attack(fighter, foe, with_main_gauche=True)
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a main-gauche jab without a ready off-hand dagger must be rejected")
+
+
+def test_missile_outside_the_front_arc_is_rejected() -> None:
+    """A missile (or thrown) attack is legal only against a target in the
+    attacker's front arc (from #3, p.16)."""
+    from engine.rules_data import SMALL_BOW
+
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 12, 12, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(5, 5)
+    foe.position = Hex(5, 9)                          # straight to the archer's rear
+    archer.facing = 0                                # back turned to the foe
+    state = GameState(arena, [archer, foe], dice=Dice(scripted=[3] * 12))
+
+    archer.current_option = Option.MISSILE_ATTACK
+    try:
+        state.queue_attack(archer, foe)
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a missile at a target outside the front arc must be rejected")
+
+    _aim(archer, foe)                                # turn to aim -> now legal
+    state.queue_attack(archer, foe)
+    assert state._pending
+
+
+def test_disengage_can_step_into_a_grapple() -> None:
+    """General disengage may move onto an eligible adjacent enemy to start
+    hand-to-hand combat that same turn (from #6, p.19)."""
+    arena = Arena(cols=9, rows=15)
+    runner = create_human("Runner", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe.position = Hex(5, 5)
+    foe.facing = 0                                       # rear hex is direction 3
+    runner.position = LAYOUT.neighbor(Hex(5, 5), 3)      # standing at the foe's rear
+    runner.facing = LAYOUT.direction_to(runner.position, foe.position)  # faces -> engaged
+    # The defender's fresh-grapple roll of 2 lets the hold take; 3s for any strike.
+    state = GameState(arena, [runner, foe], dice=Dice(scripted=[2] + [3] * 12))
+    assert state.engaged(runner)
+
+    runner.current_option = Option.DISENGAGE
+    assert foe.position in state.disengage_destinations(runner)   # offered as a grapple step
+    state.disengage_move(runner, foe.position)
+    assert runner.in_hth and foe.uid in runner.hth_opponents      # locked together
+    assert runner.position == foe.position                        # moved onto the foe
+    assert runner.posture == Posture.PRONE and foe.posture == Posture.PRONE
