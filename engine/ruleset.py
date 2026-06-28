@@ -34,7 +34,7 @@ from .combat import AttackResult, classify_roll, roll_weapon_damage
 from .facing import FRONT, REAR, facing_bonus
 from .figure import Figure
 from .movement import movement_budget as _movement_budget
-from .rules_data import KNOCKDOWN_HITS, THREE_DICE, Weapon, WeaponKind
+from .rules_data import THREE_DICE, Weapon, WeaponKind
 
 # Status outcomes returned by :meth:`Ruleset.status_after_hit`.
 DEAD = "dead"
@@ -223,7 +223,9 @@ class Ruleset:
             return DEAD
         if target.current_st <= 0:
             return UNCONSCIOUS
-        if target.hits_this_turn >= KNOCKDOWN_HITS:
+        # Most figures fall after KNOCKDOWN_HITS (8) hits in one turn; the giant
+        # is far sturdier and only falls at 16 (it carries its own threshold).
+        if target.hits_this_turn >= target.knockdown_hits_threshold:
             return KNOCKDOWN
         return None
 

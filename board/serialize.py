@@ -45,6 +45,11 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
     if figure.position is not None:
         faced = state.arena.layout.neighbor(figure.position, figure.facing)
         front_label = label_of(faced.col, faced.row)
+    footprint_labels = (
+        [label_of(hex_position.col, hex_position.row)
+         for hex_position in figure.footprint(state.arena.layout)]
+        if figure.position else []
+    )
     data = {
         "uid": figure.uid,
         "side": figure.side,
@@ -53,6 +58,9 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         if figure.position else None,
         "facing": figure.facing,
         "front_label": front_label,
+        "size": figure.size,
+        "flying": figure.flying,
+        "footprint": footprint_labels,
         "st": figure.current_st,
         "max_st": figure.strength,
         "dx": figure.base_adj_dx,

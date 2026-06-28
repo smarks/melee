@@ -438,8 +438,36 @@ function drawArena() {
     }
 
     const tip = document.createElementNS(SVG, "title");   // native hover tooltip
-    tip.textContent = `${f.name} (${f.side})`;
+    tip.textContent = `${f.name} (${f.side})`
+      + (f.flying ? " — flying" : "")
+      + ((f.size > 1) ? ` — ${f.size} hexes` : "");
     g.appendChild(tip);
+
+    // A multi-hex figure (the giant) fills its whole footprint with a tinted
+    // cluster; the token + label still sit on its anchor hex.
+    if (f.footprint && f.footprint.length > 1) {
+      for (const fpLabel of f.footprint) {
+        const fh = LAYOUT.hexes[fpLabel];
+        if (!fh) continue;
+        const cell = document.createElementNS(SVG, "polygon");
+        cell.setAttribute("points", fh.points.map(p => p.join(",")).join(" "));
+        cell.setAttribute("fill", f.dead ? "#555" : fillFor(f.side));
+        cell.setAttribute("fill-opacity", "0.35");
+        cell.setAttribute("stroke", fillFor(f.side));
+        cell.setAttribute("stroke-width", "2");
+        g.appendChild(cell);
+      }
+    }
+
+    // A flying figure casts a soft "shadow" ring so it reads as airborne.
+    if (f.flying && !f.dead) {
+      const shadow = document.createElementNS(SVG, "circle");
+      shadow.setAttribute("cx", h.cx); shadow.setAttribute("cy", h.cy + LAYOUT.size * 0.3);
+      shadow.setAttribute("rx", LAYOUT.size * 0.6);
+      shadow.setAttribute("r", LAYOUT.size * 0.55);
+      shadow.setAttribute("fill", "#0006");
+      g.appendChild(shadow);
+    }
 
     const body = document.createElementNS(SVG, "circle");
     body.setAttribute("class", "body");
@@ -504,6 +532,16 @@ function drawArena() {
       shield.setAttribute("class", "guard");
       shield.textContent = "🛡";
       g.appendChild(shield);
+    }
+
+    if (f.flying && !f.dead) {                       // airborne badge (wings)
+      const wings = document.createElementNS(SVG, "text");
+      wings.setAttribute("x", h.cx + LAYOUT.size * 0.55);
+      wings.setAttribute("y", h.cy - LAYOUT.size * 0.5);
+      wings.setAttribute("font-size", LAYOUT.size * 0.7);
+      wings.setAttribute("text-anchor", "middle");
+      wings.textContent = "🕊";
+      g.appendChild(wings);
     }
 
     g.addEventListener("click", (ev) => { ev.stopPropagation(); onFigureClick(f); });

@@ -34,7 +34,7 @@ from .facing import (
     zone_of_direction,
     zone_toward,
 )
-from .figure import Figure, Posture, Race
+from .figure import Figure, Posture, Race, footprint_for
 from .megahex import megahex_distance
 from .movement import reachable_moves
 from .narrative import (
@@ -58,7 +58,6 @@ from .rules_data import (
     DAGGER,
     MAIN_GAUCHE,
     NO_SHIELD,
-    WOUND_HITS_THRESHOLD,
     DamageDice,
     WeaponKind,
     max_missile_shots,
@@ -127,19 +126,28 @@ class GameState:
         return [f for f in self.living() if f.side != figure.side and not f.collapsed]
 
     def occupied(self, *, exclude: Figure | None = None) -> dict[Hex, Figure]:
-        """Hexes held by standing (non-prone, conscious) figures."""
+        """Hexes held by conscious figures (each figure holds its whole footprint).
+
+        A single-hex figure holds just its position (unchanged); a giant holds
+        all three of its footprint hexes, so none of them can be moved into.
+        """
         held: dict[Hex, Figure] = {}
+        layout = self.arena.layout
         for figure in self.figures:
             if figure is exclude or figure.position is None:
                 continue
             if figure.is_dead or figure.collapsed:
                 continue
-            held[figure.position] = figure
+            for hex_position in figure.footprint(layout):
+                held[hex_position] = figure
         return held
 
     def figure_at(self, hex_position: Hex) -> Figure | None:
+        layout = self.arena.layout
         for figure in self.figures:
-            if figure.position == hex_position and not figure.is_dead:
+            if figure.is_dead:
+                continue
+            if hex_position in figure.footprint(layout):
                 return figure
         return None
 
@@ -247,12 +255,42 @@ class GameState:
         )
         if budget == 0 or figure.position is None:
             return Reach(cost={})
-        blocked = set(self.occupied(exclude=figure))
+        occupied = self.occupied(exclude=figure)
+        if figure.flying:
+            # Flight ignores ground obstacles: it explores freely (passing over
+            # anyone), then any occupied destination is dropped -- a flyer may
+            # pass over a figure but not finish on one (p.21). Enemy front hexes
+            # don't stop an airborne mover.
+            reach = reachable_moves(
+                self.arena, figure.position, budget, blocked=set(), stop_hexes=set()
+            )
+            self._drop_unfittable(figure, reach, occupied)
+            return reach
+        blocked = set(occupied)
         stop_hexes = self._enemy_front_hexes(figure)
-        return reachable_moves(
+        reach = reachable_moves(
             self.arena, figure.position, budget,
             blocked=blocked, stop_hexes=stop_hexes,
         )
+        if figure.size > 1:
+            # A multi-hex figure can only finish where its whole footprint fits.
+            self._drop_unfittable(figure, reach, occupied)
+        return reach
+
+    def _drop_unfittable(
+        self, figure: Figure, reach: Reach, occupied: dict[Hex, Figure]
+    ) -> None:
+        """Remove from ``reach`` any destination whose footprint won't fit there.
+
+        A flyer cannot end on an occupied hex; a multi-hex figure needs every one
+        of its footprint hexes in-bounds and unoccupied. Mutates ``reach``.
+        """
+        layout = self.arena.layout
+        for hex_position in list(reach.cost):
+            footprint = footprint_for(layout, hex_position, figure.facing, figure.size)
+            if any(h in occupied or not self.arena.contains(h) for h in footprint):
+                reach.cost.pop(hex_position, None)
+                reach.came_from.pop(hex_position, None)
 
     def reachable(self, figure: Figure, option: Option) -> list[Hex]:
         """Hexes ``figure`` may finish on this turn under ``option``."""
@@ -294,11 +332,16 @@ class GameState:
         for enemy in self.enemies_of(attacker):
             if enemy.position is None:
                 continue
-            if enemy.position in fronts:                         # reach 1
+            # An attacker reaches a multi-hex foe (the giant) if it reaches any
+            # hex of the foe's footprint.
+            enemy_hexes = enemy.footprint(layout)
+            if any(hex_position in fronts for hex_position in enemy_hexes):   # reach 1
                 reachable.append(enemy)
-            elif (can_jab and layout.distance(attacker.position, enemy.position) == 2
-                    and zone_toward(layout, attacker, enemy.position) == FRONT):
-                if enemy.position == straight2 and x_blocked:
+            elif can_jab and any(
+                    layout.distance(attacker.position, hex_position) == 2
+                    and zone_toward(layout, attacker, hex_position) == FRONT
+                    for hex_position in enemy_hexes):
+                if enemy_hexes == [straight2] and x_blocked:
                     continue                                     # straight jab blocked
                 reachable.append(enemy)
         return reachable
@@ -436,6 +479,8 @@ class GameState:
         """
         if attacker.position is None or defender.position is None:
             return False
+        if attacker.flying:
+            return False          # must land to grapple (p.21)
         if attacker.in_hth:
             return False          # already grappling — fight who you're locked with
         if self.arena.distance(attacker.position, defender.position) != 1:
@@ -651,6 +696,7 @@ class GameState:
         return (attacker.can_act()
                 and not attacker.attacked_this_turn
                 and not attacker.in_hth
+                and not attacker.flying
                 and attacker.posture == Posture.STANDING
                 and attacker.shield_ready
                 and attacker.shield.name != "None")
@@ -797,6 +843,8 @@ class GameState:
                 f"{option.value}, not {len(path)}"
             )
         self._validate_path(figure, path)
+        if figure.size > 1:
+            self._validate_multihex_turn(figure, path, facing)
         # Validate a weapon SWITCH before mutating the board, so a rejected ready
         # (unknown weapon, or a missile readied while engaged) leaves position,
         # facing, and posture untouched (#77). Pick-up's reach check intentionally
@@ -825,6 +873,36 @@ class GameState:
         if line:
             self.log.append(line)
 
+    def _validate_multihex_turn(
+        self, figure: Figure, path: list[Hex], facing: int | None
+    ) -> None:
+        """Gate the giant's facing changes (footprint rotation is deferred).
+
+        A multi-hex figure may **translate** freely (footprint validated by
+        :meth:`_validate_path`) or **turn in place** when stationary (the rotated
+        footprint must fit). Turning *while* moving -- combined rotation and
+        translation -- is the hard case and is deferred, so it's rejected.
+        """
+        if facing is None or facing % 6 == figure.facing:
+            return
+        if path:
+            raise IllegalAction(
+                f"{figure.name} cannot turn while moving "
+                f"(footprint rotation deferred)"
+            )
+        anchor = figure.position if not path else path[-1]
+        rotated = footprint_for(self.arena.layout, anchor, facing % 6, figure.size)
+        blocked = set(self.occupied(exclude=figure))
+        for hex_position in rotated:
+            if not self.arena.contains(hex_position):
+                raise IllegalAction(
+                    f"{figure.name} cannot turn: {hex_position} is off the arena"
+                )
+            if hex_position in blocked:
+                raise IllegalAction(
+                    f"{figure.name} cannot turn: {hex_position} is occupied"
+                )
+
     def _validate_ready(self, figure: Figure, option: Option, weapon_name: str) -> None:
         """Check a weapon switch is legal, mutating nothing. Called both up front
         (before the board is touched, #77) and again inside :meth:`_ready_weapon`."""
@@ -846,21 +924,42 @@ class GameState:
         self.log.append(narrate_ready(figure, weapon))
 
     def _validate_path(self, figure: Figure, path: list[Hex]) -> None:
+        """Validate each step of ``figure``'s move.
+
+        For a single-hex figure each step must be in-bounds, adjacent, and
+        unoccupied, stopping on an enemy front hex. A multi-hex figure
+        **translates** -- the whole footprint slides one hex per step keeping its
+        facing -- so every footprint hex of every step is checked. A flyer passes
+        over ground obstacles (and over enemy fronts), so only its final
+        destination must be clear.
+        """
+        layout = self.arena.layout
         blocked = set(self.occupied(exclude=figure))
         stop_hexes = self._enemy_front_hexes(figure)
         previous = figure.position
         for index, step in enumerate(path):
-            if not self.arena.contains(step):
-                raise IllegalAction(f"{step} is off the arena")
-            if self.arena.layout.distance(previous, step) != 1:
+            is_last = index == len(path) - 1
+            footprint = footprint_for(layout, step, figure.facing, figure.size)
+            for hex_position in footprint:
+                if not self.arena.contains(hex_position):
+                    raise IllegalAction(f"{hex_position} is off the arena")
+            if layout.distance(previous, step) != 1:
                 raise IllegalAction(f"path step to {step} is not adjacent")
-            if step in blocked:
-                raise IllegalAction(f"{step} is occupied; cannot move through it")
-            # must stop on entering an enemy front hex
-            if step in stop_hexes and index != len(path) - 1:
-                raise IllegalAction(
-                    f"{figure.name} must stop on entering {step} (enemy front)"
-                )
+            if figure.flying:
+                # Airborne: ignore obstacles in transit, but never finish on one.
+                if is_last and any(hex_position in blocked for hex_position in footprint):
+                    raise IllegalAction(f"{step} is occupied; cannot land there")
+            else:
+                blocking = next((h for h in footprint if h in blocked), None)
+                if blocking is not None:
+                    raise IllegalAction(
+                        f"{blocking} is occupied; cannot move through it"
+                    )
+                # must stop on entering an enemy front hex
+                if step in stop_hexes and not is_last:
+                    raise IllegalAction(
+                        f"{figure.name} must stop on entering {step} (enemy front)"
+                    )
             previous = step
 
     # ---- combat ----
@@ -897,6 +996,8 @@ class GameState:
             )
         if not attacker.can_act():
             raise IllegalAction(f"{attacker.name} cannot attack")
+        if attacker.flying:                       # a flyer lands to attack (p.21)
+            raise IllegalAction(f"{attacker.name} must land before it can attack")
         # One attack per turn (Section VII): reject a second declaration, whether
         # the figure already has an attack queued this combat phase or already
         # resolved one. A multi-shot missile is a single PendingAttack with
@@ -1152,7 +1253,9 @@ class GameState:
     def end_turn(self) -> None:
         """Settle injury flags and reset per-turn state, then advance the turn."""
         for figure in self.figures:
-            figure.wounded_last_turn = figure.hits_this_turn >= WOUND_HITS_THRESHOLD
+            figure.wounded_last_turn = (
+                figure.hits_this_turn >= figure.wound_hits_threshold
+            )
             figure.hits_this_turn = 0
             figure.attacked_this_turn = False
             figure.moved_this_turn = 0
