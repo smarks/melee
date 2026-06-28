@@ -650,6 +650,14 @@ class GameState:
             )
         if not attacker.can_act():
             raise IllegalAction(f"{attacker.name} cannot attack")
+        # One attack per turn (Section VII): reject a second declaration, whether
+        # the figure already has an attack queued this combat phase or already
+        # resolved one. A multi-shot missile is a single PendingAttack with
+        # shots>1 (not repeated queue_attack calls), so this does not affect it.
+        if attacker.attacked_this_turn or any(
+            pending.attacker is attacker for pending in self._pending
+        ):
+            raise IllegalAction(f"{attacker.name} has already attacked this turn")
         option_spec = spec(option)
         weapon = attacker.ready_weapon
         if weapon is None:

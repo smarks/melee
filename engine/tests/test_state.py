@@ -8,7 +8,7 @@ from engine.arena import Arena
 from engine.figure import Posture, create_human
 from engine.options import Option
 from engine.rules_data import BROADSWORD, NO_ARMOR, SHORTSWORD
-from engine.state import GameState
+from engine.state import GameState, IllegalAction
 
 LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
@@ -542,3 +542,26 @@ def test_end_turn_rolls_wound_flag_forward() -> None:
     state.end_turn()
     assert b.wounded_last_turn  # 5+ hits last turn -> -2 next turn
     assert b.hits_this_turn == 0
+
+
+def test_one_attack_per_turn_rejects_a_second_declaration() -> None:
+    # Section VII: a figure attacks once per turn. A second declaration — whether
+    # queued in the same combat phase or attempted after resolving — is illegal.
+    state, a, b = _duel(Dice(scripted=[3] * 12))
+    a.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(a, b)
+
+    try:
+        state.queue_attack(a, b)                  # already queued this phase
+        raise AssertionError("a second queue_attack should raise IllegalAction")
+    except IllegalAction:
+        pass
+
+    assert len(state.resolve_combat()) == 1       # exactly one swing resolves
+    assert a.attacked_this_turn
+
+    try:
+        state.queue_attack(a, b)                  # already attacked this turn
+        raise AssertionError("re-attacking after resolving should raise IllegalAction")
+    except IllegalAction:
+        pass
