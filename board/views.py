@@ -35,9 +35,9 @@ from engine.rules_data import WEAPONS, WeaponKind
 from engine.state import GameState, IllegalAction
 from engine.tarmar import WEAPON_CLASS, TarmarFigure
 
-from . import scenario
+from . import persistence, scenario
 from .geometry import label_of, layout
-from .models import SavedCharacter
+from .models import SavedCharacter, SavedGame
 from .serialize import dump_game
 
 # In-memory games are bounded so the registry can't grow without limit (a DoS)
@@ -335,6 +335,33 @@ def _payload(game: dict) -> dict:
     }
 
 
+# ---- persistence (save / load-on-demand, #12) -------------------------------
+def _resident_game(gid: str) -> dict | None:
+    """The game for ``gid``: resident in memory, else reconstructed from a saved
+    snapshot (load-on-demand) and re-registered in :data:`GAMES`. ``None`` if no
+    such game exists anywhere. Lets a match outlive a restart or registry eviction.
+    """
+    game = GAMES.get(gid)
+    if game is not None:
+        return game
+    try:
+        saved = SavedGame.objects.get(gid=gid)
+    except SavedGame.DoesNotExist:
+        return None
+    game = persistence.game_from_json(saved.data)
+    GAMES[gid] = game
+    return game
+
+
+def _persist_game(gid: str, game: dict) -> None:
+    """Write (or overwrite) the saved snapshot for ``gid``."""
+    SavedGame.objects.update_or_create(
+        gid=gid,
+        defaults={"data": persistence.game_to_json(game),
+                  "profile": game.get("profile", "")},
+    )
+
+
 # ---- views ------------------------------------------------------------------
 @ensure_csrf_cookie
 def index(request):
@@ -550,7 +577,7 @@ def api_new_custom(request):
 
 
 def api_state(request, gid):
-    game = GAMES.get(gid)
+    game = _resident_game(gid)
     if not game:
         return JsonResponse({"error": "unknown game"}, status=404)
     payload = _payload(game)
@@ -559,8 +586,31 @@ def api_state(request, gid):
     return JsonResponse(payload)
 
 
-def api_options(request, gid):
+@csrf_exempt
+def api_game_save(request, gid):
+    """Persist a resident game so it survives a server restart (#12)."""
+    if request.method != "POST":
+        return HttpResponse(status=405)
     game = GAMES.get(gid)
+    if not game:
+        return JsonResponse({"error": "unknown game"}, status=404)
+    _persist_game(gid, game)
+    return JsonResponse({"ok": True, "gid": gid})
+
+
+def api_game_load(request, gid):
+    """Load a saved game on demand, reconstructing it into the live registry."""
+    game = _resident_game(gid)
+    if not game:
+        return JsonResponse({"error": "unknown game"}, status=404)
+    payload = _payload(game)
+    payload["gid"] = gid
+    payload["you_control"] = sorted(_owned_sides(game, request))
+    return JsonResponse(payload)
+
+
+def api_options(request, gid):
+    game = _resident_game(gid)
     if not game:
         return JsonResponse({"error": "unknown game"}, status=404)
     state: GameState = game["state"]
@@ -686,7 +736,7 @@ def _authorize_action(game: dict, request, body: dict) -> None:
 
 @csrf_exempt
 def api_action(request, gid):
-    game = GAMES.get(gid)
+    game = _resident_game(gid)
     if not game:
         return JsonResponse({"error": "unknown game"}, status=404)
     if request.method != "POST":
