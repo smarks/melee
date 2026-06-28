@@ -19,7 +19,6 @@ The board calls :func:`take_movement` during a computer side's movement turn and
 """
 from __future__ import annotations
 
-from .facing import front_hexes
 from .figure import Figure, Posture
 from .options import Option, spec
 from .rules_data import WeaponKind
@@ -121,13 +120,11 @@ def queue_attacks(state: GameState, side: str) -> None:
         weapon = figure.ready_weapon
         if weapon is None:
             continue
-        enemies = [e for e in state.enemies_of(figure) if e.position is not None]
         if weapon.kind == WeaponKind.MISSILE:
             if figure.missile_cooldown > 0:
                 continue                        # still reloading
-            candidates = enemies
+            candidates = [e for e in state.enemies_of(figure) if e.position is not None]
         else:
-            fronts = set(front_hexes(layout, figure))
-            candidates = [e for e in enemies if e.position in fronts]
+            candidates = state.melee_targets(figure, weapon)   # front hexes + pole jab
         if candidates:
             state.queue_attack(figure, _best_target(state, figure, candidates))

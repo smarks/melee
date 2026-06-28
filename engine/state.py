@@ -25,7 +25,7 @@ from hexarena.pathfinding import Reach
 
 from .arena import Arena
 from .combat import AttackResult
-from .facing import attack_zone, front_hexes, is_engaged
+from .facing import FRONT, attack_zone, front_hexes, is_engaged, zone_toward
 from .figure import Figure, Posture
 from .movement import reachable_moves
 from .narrative import (
@@ -64,6 +64,7 @@ class PendingAttack:
     shots: int = 1            # >1 for a high-adjDX bow firing twice in a turn
     situational: int = 0      # circumstantial DX mod (prone, pole-vs-charge, bodies)
     situational_note: str = ""
+    damage_dice_bonus: int = 0  # extra damage dice (pole weapon in/against a charge)
 
 
 class GameState:
@@ -205,10 +206,53 @@ class GameState:
         return next((enemy for enemy in self.enemies_of(figure)
                      if enemy.position in fronts), None)
 
+    def melee_targets(self, attacker: Figure, weapon=None) -> list[Figure]:
+        """Enemies ``attacker`` can reach with a melee/pole weapon this turn.
+
+        Reach 1 = the three front hexes. A pole weapon (reach 2) also *jabs* the
+        front hexes two away (p.12); the straight-ahead jab is blocked by anyone
+        standing in the hex between, the diagonal jabs are not.
+        """
+        layout = self.arena.layout
+        weapon = weapon or attacker.ready_weapon
+        if attacker.position is None:
+            return []
+        fronts = set(front_hexes(layout, attacker))
+        can_jab = weapon is not None and weapon.reach >= 2
+        straight1 = layout.neighbor(attacker.position, attacker.facing)
+        straight2 = layout.neighbor(straight1, attacker.facing)
+        x_blocked = straight1 in self.occupied(exclude=attacker)
+        reachable: list[Figure] = []
+        for enemy in self.enemies_of(attacker):
+            if enemy.position is None:
+                continue
+            if enemy.position in fronts:                         # reach 1
+                reachable.append(enemy)
+            elif (can_jab and layout.distance(attacker.position, enemy.position) == 2
+                    and zone_toward(layout, attacker, enemy.position) == FRONT):
+                if enemy.position == straight2 and x_blocked:
+                    continue                                     # straight jab blocked
+                reachable.append(enemy)
+        return reachable
+
     def _body_in_hex(self, hex_position: Hex, *, exclude: Figure | None = None) -> bool:
         """A fallen body (dead/collapsed figure) lies in ``hex_position``."""
         return any(f is not exclude and f.position == hex_position
                    and (f.is_dead or f.collapsed) for f in self.figures)
+
+    def _pole_charge_dice(self, attacker: Figure, target: Figure,
+                          weapon, adjacent: bool) -> int:
+        """Extra damage dice for a pole weapon in/against a charge (p.12).
+
+        A pole used against a charging foe — or in a charge of three-plus hexes —
+        does one extra die. A jab (non-adjacent strike) never earns it.
+        """
+        if weapon is None or weapon.kind != WeaponKind.POLE or not adjacent:
+            return 0
+        against_charge = target.current_option == Option.CHARGE_ATTACK
+        in_charge = (attacker.current_option == Option.CHARGE_ATTACK
+                     and attacker.moved_this_turn >= 3)
+        return 1 if (against_charge or in_charge) else 0
 
     def _situational_mods(self, attacker: Figure, target: Figure,
                           weapon, is_missile: bool) -> tuple[int, str]:
@@ -222,8 +266,10 @@ class GameState:
         if (attacker.posture == Posture.PRONE and is_missile
                 and weapon is not None and weapon.reload > 0):
             mods += 1; notes.append("+1 prone")
-        # A braced pole weapon punishes a charging foe: +2.
-        if (weapon is not None and weapon.kind == WeaponKind.POLE
+        # A braced pole weapon punishes a charging foe: +2 (not on a 2-hex jab).
+        adjacent = (attacker.position is not None and target.position is not None
+                    and layout.distance(attacker.position, target.position) == 1)
+        if (weapon is not None and weapon.kind == WeaponKind.POLE and adjacent
                 and target.current_option == Option.CHARGE_ATTACK
                 and attacker.current_option != Option.CHARGE_ATTACK):
             mods += 2; notes.append("+2 vs charge")
@@ -353,18 +399,17 @@ class GameState:
                               situational=situational, situational_note=situational_note)
             )
         else:
-            if zone is None:
+            if target not in self.melee_targets(attacker, weapon):
                 raise IllegalAction(
-                    f"{target.name} is not adjacent to {attacker.name}"
+                    f"{target.name} is not within {attacker.name}'s reach"
                 )
-            if target.position not in front_hexes(self.arena.layout, attacker):
-                raise IllegalAction(
-                    f"{target.name} is not in {attacker.name}'s front hexes"
-                )
+            adjacent = self.arena.distance(attacker.position, target.position) == 1
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
                               ignore_facing=False, range_penalty=0,
-                              situational=situational, situational_note=situational_note)
+                              situational=situational, situational_note=situational_note,
+                              damage_dice_bonus=self._pole_charge_dice(
+                                  attacker, target, weapon, adjacent))
             )
 
     def resolve_combat(self) -> list[AttackResult]:
@@ -376,10 +421,13 @@ class GameState:
         the dice stream clean for deterministic resolution.
         """
         def ordering_key(pending: PendingAttack) -> int:
-            return -self.rules.order_dx(
+            # Pole weapons used in/against a charge strike first, then by adjDX
+            # (p.12) — so a polearm can drop a charger before it lands its blow.
+            charge_first = 0 if pending.damage_dice_bonus > 0 else 1
+            return (charge_first, -self.rules.order_dx(
                 pending.attacker, zone=pending.zone,
                 ignore_facing=pending.ignore_facing,
-            )
+            ))
 
         results: list[AttackResult] = []
         for pending in sorted(self._pending, key=ordering_key):
@@ -406,6 +454,7 @@ class GameState:
                     range_penalty=pending.range_penalty,
                     situational=pending.situational,
                     situational_note=pending.situational_note,
+                    extra_dice=pending.damage_dice_bonus,
                 )
                 self._apply(attacker, pending.target, result)
                 results.append(result)
