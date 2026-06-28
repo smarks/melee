@@ -6,6 +6,18 @@ import pytest
 from board import scenario
 
 
+@pytest.mark.parametrize("profile", ["Classic Melee", "Tarmar"])
+def test_default_fighters_carry_a_melee_and_a_missile_weapon(profile):
+    from engine.rules_data import WeaponKind
+
+    _, figures = scenario.build_game(profile, 2, 3)
+    for figure in figures:
+        carried = [w for w in figure.weapons if w.name != "Dagger"]
+        assert len(carried) >= 2, f"{figure.name} has no second weapon"
+        assert any(w.kind == WeaponKind.MISSILE for w in carried), \
+            f"{figure.name} has no missile weapon"
+
+
 @pytest.mark.parametrize("teams", [2, 3, 4, 5])
 @pytest.mark.parametrize("per_team", [1, 2, 3])
 def test_build_game_shapes_and_placement(teams, per_team):
