@@ -99,6 +99,7 @@ _MOVE_VERB = {
     Option.DODGE: "darts, dodging",
     Option.MISSILE_ATTACK: "takes aim",
     Option.STAND_UP: "rises to their feet",
+    Option.CRAWL: "crawls",
     Option.SHIFT_ATTACK: "shifts in to attack",
     Option.SHIFT_DEFEND: "raises a guard",
     Option.ONE_LAST_SHOT: "looses a parting shot",
@@ -146,6 +147,21 @@ def narrate_hth_disengage(figure: Figure, broke_free: bool) -> str:
     if broke_free:
         return _cap(f"{_name(figure)} wrenches free of the grapple and scrambles up!")
     return _cap(f"{_name(figure)} struggles to break free, but can't.")
+
+
+def narrate_shield_rush(attacker: Figure, target: Figure, outcome: str) -> str:
+    """A shield-rush attempt (p.13): a miss, a no-effect bounce, or a knockdown."""
+    if outcome == "miss":
+        return _cap(f"{_name(attacker)} rushes with a shield, but {_name(target)} "
+                    f"slips aside.")
+    if outcome == "no_effect":
+        return _cap(f"{_name(attacker)} slams a shield into {_name(target)}, far too "
+                    f"massive to budge.")
+    if outcome == "fall":
+        return _cap(f"{_name(attacker)} slams a shield into {_name(target)}, who "
+                    f"crashes to the ground!")
+    return _cap(f"{_name(attacker)} slams a shield into {_name(target)}, who keeps "
+                f"their feet.")
 
 
 def narrate_victory(side: str) -> str:

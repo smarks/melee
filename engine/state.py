@@ -38,6 +38,7 @@ from .narrative import (
     narrate_move_order,
     narrate_ready,
     narrate_retreat,
+    narrate_shield_rush,
     narrate_status,
     narrate_turn,
     narrate_victory,
@@ -165,14 +166,19 @@ class GameState:
     # ---- movement ----
     def legal_options(self, figure: Figure) -> list[Option]:
         if figure.posture != Posture.STANDING:
-            return [Option.STAND_UP]
+            # A grounded figure may rise (g) or, instead, crawl up to two hexes
+            # (g, p.7) — but only if there is somewhere to crawl to.
+            grounded = [Option.STAND_UP]
+            if self.reachable(figure, Option.CRAWL):
+                grounded.append(Option.CRAWL)
+            return grounded
         weapon = figure.ready_weapon
         has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
         can_fire = has_missile and figure.missile_cooldown == 0
         legal: list[Option] = []
         for option in options_for(engaged=self.engaged(figure)):
             option_spec = spec(option)
-            if option == Option.STAND_UP:
+            if option in (Option.STAND_UP, Option.CRAWL):
                 continue                       # already standing — nothing to do
             if option_spec.is_missile and not can_fire:
                 continue                       # no missile ready, or still reloading
@@ -204,6 +210,11 @@ class GameState:
             if option == Option.STAND_UP:
                 if standing:
                     reason = "already standing"
+            elif option == Option.CRAWL:
+                if standing:
+                    reason = "already standing"
+                elif not self.reachable(figure, Option.CRAWL):
+                    reason = "nowhere to crawl"
             elif not standing:
                 reason = "must stand up first"
             elif spec(option).is_missile and not can_fire:
@@ -292,9 +303,16 @@ class GameState:
         if weapon is not None and hex_position is not None and weapon.name != "Thrown rock":
             self.dropped.append((hex_position, weapon))
 
-    def _resolve_thrown(self, pending, results: list) -> None:
-        """A hurled weapon's flight (p.15): roll to miss anyone in the way, strike
-        the intended target, then fly on if it misses. It lands where it strikes."""
+    def _resolve_flight(self, pending, results: list) -> None:
+        """A flying weapon's line-of-flight (p.15-16): roll to miss anyone in the
+        way, strike the intended target, then fly on if it misses.
+
+        Thrown and missile weapons share these rules — the target must be in the
+        attacker's front, every standing figure in the way is rolled to miss, and
+        a stray shot flies on until it hits a figure or leaves the field. The one
+        difference is what's left behind: a hurled weapon leaves the hand and
+        lands where it strikes (recoverable, ``pending.thrown``); a fired missile
+        (arrow, bolt, sling stone) is expendable and drops nothing to pick up."""
         attacker, target = pending.attacker, pending.target
         layout = self.arena.layout
         held = self.occupied(exclude=attacker)
@@ -307,18 +325,20 @@ class GameState:
             dist = layout.distance(attacker.position, hex_pos)
             if self.dice.total(3) <= adjdx - dist:
                 continue                                  # flew past this one
-            self._thrown_strike(attacker, blocker, dist, results)
+            self._flight_strike(pending, blocker, dist, results)
             return
-        # 2) the intended target — a normal thrown attack.
+        # 2) the intended target — a normal thrown/missile attack.
         result = self.rules.resolve_attack(
             self.dice, attacker, target, zone=pending.zone, ignore_facing=True,
             dice_count=self.rules.attack_dice_count(target),
-            range_penalty=pending.range_penalty)
-        result.thrown = True
+            range_penalty=pending.range_penalty,
+            situational=pending.situational,
+            situational_note=pending.situational_note)
+        result.thrown = pending.thrown
         self._apply(attacker, target, result)
         results.append(result)
         if result.hit:
-            self._discard_thrown(attacker, target.position)
+            self._land_flight(pending, target.position)
             return
         # 3) a clean miss — the weapon flies on up to ten hexes (p.15).
         direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
@@ -332,20 +352,27 @@ class GameState:
                 continue
             dist = layout.distance(attacker.position, current)
             if self.dice.total(3) <= adjdx - dist:        # the stray weapon strikes
-                self._thrown_strike(attacker, figure, dist, results)
+                self._flight_strike(pending, figure, dist, results)
                 return
-        self._discard_thrown(attacker, target.position)   # spent; lands by the target
+        self._land_flight(pending, target.position)   # spent; lands by the target
 
-    def _thrown_strike(self, attacker, victim, dist, results: list) -> None:
-        """A thrown weapon that connected mid-flight: apply its damage, drop it."""
+    def _flight_strike(self, pending, victim, dist, results: list) -> None:
+        """A flying weapon that connected mid-flight: apply its damage, then land."""
+        attacker = pending.attacker
         result = self.rules.resolve_attack(
             self.dice, attacker, victim,
             zone=attack_zone(self.arena.layout, attacker, victim),
             ignore_facing=True, range_penalty=-dist, force_hit=True)
-        result.thrown = True
+        result.thrown = pending.thrown
         self._apply(attacker, victim, result)
         results.append(result)
-        self._discard_thrown(attacker, victim.position)
+        self._land_flight(pending, victim.position)
+
+    def _land_flight(self, pending, landing_hex=None) -> None:
+        """Where a spent flying weapon comes to rest. A hurled weapon drops to the
+        field (pick-up-able); a fired missile is expendable and leaves nothing."""
+        if pending.thrown:
+            self._discard_thrown(pending.attacker, landing_hex)
 
     def dropped_in_reach(self, figure: Figure) -> list:
         """Dropped weapons in ``figure``'s hex or an adjacent one (option q)."""
@@ -530,6 +557,50 @@ class GameState:
         self.log.append(narrate_hth_disengage(figure, True))
         return True
 
+    # ---- general disengage (option n, p.19) ----
+    def disengage_destinations(self, figure: Figure) -> list[Hex]:
+        """Adjacent free hexes a disengaging figure may step into (p.19).
+
+        Empty unless the figure chose to disengage this turn, is standing, and
+        has not yet acted — a grounded figure must stand before it can disengage.
+        """
+        if (figure.current_option != Option.DISENGAGE
+                or figure.posture != Posture.STANDING
+                or figure.attacked_this_turn
+                or figure.position is None):
+            return []
+        held = set(self.occupied(exclude=figure))
+        return [hex_position for hex_position in self.arena.neighbors(figure.position)
+                if self.arena.contains(hex_position) and hex_position not in held]
+
+    def disengage_move(self, figure: Figure, dest: Hex) -> None:
+        """Carry out option (n) general disengage in the combat phase (p.19).
+
+        A figure that chose to disengage moves one hex in any direction instead
+        of attacking, breaking engagement, and may never attack that turn. It
+        must be standing first (a kneeling/prone/fallen figure must rise before
+        it can disengage). Higher-DX enemies still get their strike this turn —
+        the engine resolves their queued attacks normally; this move simply does
+        not add one of its own.
+        """
+        if figure.current_option != Option.DISENGAGE:
+            raise IllegalAction(f"{figure.name} did not choose to disengage this turn")
+        if figure.posture != Posture.STANDING:
+            raise IllegalAction(f"{figure.name} must stand up before it can disengage")
+        if figure.attacked_this_turn:
+            raise IllegalAction(f"{figure.name} has already acted this turn")
+        if figure.position is None or dest is None:
+            raise IllegalAction("a disengage needs a destination hex")
+        if self.arena.distance(figure.position, dest) != 1:
+            raise IllegalAction("a disengage moves exactly one hex")
+        if not self.arena.contains(dest) or dest in self.occupied(exclude=figure):
+            raise IllegalAction(f"{dest} is not a free hex to disengage into")
+        figure.position = dest
+        figure.attacked_this_turn = True          # the move replaces its attack
+        line = narrate_move(figure, Option.DISENGAGE, True)
+        if line:
+            self.log.append(line)
+
     def _queue_hth_strike(self, attacker: Figure, defender: Figure) -> None:
         """Queue a grapple strike — always at the +4 'rear' adjustment (p.18)."""
         self._pending.append(PendingAttack(
@@ -543,6 +614,78 @@ class GameState:
             if foe is not None and figure.uid in foe.hth_opponents:
                 foe.hth_opponents.remove(figure.uid)
         figure.hth_opponents = []
+
+    # ---- shield-rush (p.13) ----
+    def _can_shield_rush(self, attacker: Figure) -> bool:
+        """Whether ``attacker`` could shield-rush this combat phase (p.13).
+
+        Needs a ready shield (large or small) and a free hand for the rush — so a
+        standing, un-grappled figure that has not yet attacked this turn.
+        """
+        return (attacker.can_act()
+                and not attacker.attacked_this_turn
+                and not attacker.in_hth
+                and attacker.posture == Posture.STANDING
+                and attacker.shield_ready
+                and attacker.shield.name != "None")
+
+    def shield_rush_targets(self, attacker: Figure) -> list[Figure]:
+        """Adjacent enemies in ``attacker``'s front it could shield-rush (p.13)."""
+        if not self._can_shield_rush(attacker) or attacker.position is None:
+            return []
+        fronts = set(front_hexes(self.arena.layout, attacker))
+        return [enemy for enemy in self.enemies_of(attacker)
+                if enemy.position in fronts]
+
+    def shield_rush(self, attacker: Figure, target: Figure) -> str:
+        """Strike with a ready shield to floor a foe (p.13).
+
+        Instead of a weapon attack, a figure with a ready shield rushes an
+        adjacent front enemy. Roll to hit as usual; a miss does nothing. On a hit
+        the target makes a saving roll against its adjDX or falls prone — a full
+        three dice when the rusher's *original* ST is at least the target's, only
+        two dice when the rusher is weaker. A 12 on two dice, or a 16/17/18 on
+        three, is an automatic fall. A shield-rush never inflicts hits, and has no
+        effect on a foe more than twice the rusher's (original) ST.
+
+        Returns the outcome: ``"miss"``, ``"no_effect"``, ``"fall"`` or
+        ``"stand"``.
+        """
+        if not self._can_shield_rush(attacker):
+            raise IllegalAction(f"{attacker.name} cannot shield-rush")
+        layout = self.arena.layout
+        if (target.position is None
+                or self.arena.distance(attacker.position, target.position) != 1
+                or target.position not in set(front_hexes(layout, attacker))):
+            raise IllegalAction(
+                f"{target.name} is not an adjacent foe in {attacker.name}'s front")
+        attacker.attacked_this_turn = True        # the rush replaces its attack
+        zone = attack_zone(layout, attacker, target)
+        needed = self.rules.to_hit_number(attacker, zone=zone)
+        dice_count = self.rules.attack_dice_count(target)
+        rolled = self.dice.total(dice_count)
+        hit, _multiplier, _dropped, _broke = self.rules.classify_roll(
+            rolled, dice_count, needed)
+        if not hit:
+            self.log.append(narrate_shield_rush(attacker, target, "miss"))
+            return "miss"
+        # Compare ORIGINAL ST (not the wounded current ST); a foe more than twice
+        # as strong simply isn't moved.
+        if target.strength > 2 * attacker.strength:
+            self.log.append(narrate_shield_rush(attacker, target, "no_effect"))
+            return "no_effect"
+        saving_dice = 3 if attacker.strength >= target.strength else 2
+        save_roll = self.dice.total(saving_dice)
+        auto_fall = ((saving_dice == 2 and save_roll == 12)
+                     or (saving_dice == 3 and save_roll >= 16))
+        if auto_fall or save_roll > target.base_adj_dx:
+            target.posture = Posture.PRONE
+            if target.in_hth:
+                self._clear_hth(target)           # a floored grappler loses its hold
+            self.log.append(narrate_shield_rush(attacker, target, "fall"))
+            return "fall"
+        self.log.append(narrate_shield_rush(attacker, target, "stand"))
+        return "stand"
 
     def _pole_charge_dice(self, attacker: Figure, target: Figure,
                           weapon, adjacent: bool) -> int:
@@ -731,6 +874,16 @@ class GameState:
             # zone is carried so a ready shield still stops frontal missiles,
             # but ignore_facing suppresses the to-hit facing bonus (missiles
             # and thrown weapons never get a facing add, p.16).
+            #
+            # The rulebook also requires the target be in the attacker's front
+            # arc (p.16). We deliberately do NOT enforce that here: the combat
+            # phase model lets a figure fire at any enemy without managing its
+            # facing (see ``_attack_targets`` and the board UI / ``ai`` callers,
+            # which never re-aim an archer in the combat phase). Enforcing the
+            # front arc would need facing to be a managed combat-phase choice —
+            # a larger change tracked separately. The line-of-flight itself is
+            # still traced from attacker to target, so intervening figures and
+            # fly-on are resolved directionally regardless.
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
                               ignore_facing=True, range_penalty=range_penalty,
@@ -780,13 +933,21 @@ class GameState:
                         and attacker.ready_weapon.reload > 0)
             if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
                 continue
-            # A hurled weapon traces a flight path — anyone in the way may be hit,
-            # and a miss flies on (p.15).
-            if pending.thrown:
-                self._resolve_thrown(pending, results)
+            # A flying weapon — hurled or fired — traces a line-of-flight: anyone
+            # in the way may be hit, and a clean miss flies on (p.15-16). Thrown
+            # weapons are single-shot; a high-adjDX bow looses two arrows, each
+            # arrow tracing its own flight. Don't waste a second arrow on a foe the
+            # first already dropped.
+            weapon = attacker.ready_weapon
+            is_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+            if pending.thrown or is_missile:
+                for shot in range(max(1, pending.shots)):
+                    if shot > 0 and (not attacker.can_act()
+                                     or pending.target.is_dead
+                                     or pending.target.collapsed):
+                        break
+                    self._resolve_flight(pending, results)
                 continue
-            # A high-adjDX bow looses two arrows; don't waste the second on a
-            # foe the first already dropped.
             # Recompute the facing zone against the target's CURRENT posture and
             # facing: an earlier attacker this phase may have knocked the target
             # prone (so it now has no front, scoring the +4 rear adjustment) or

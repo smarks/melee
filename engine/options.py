@@ -29,6 +29,7 @@ class Option(str, Enum):
     READY_WEAPON = "ready_weapon"    # (e) move <= 2, swap ready weapon/shield
     MISSILE_ATTACK = "missile_attack"  # (f) move <= 1, fire a missile weapon
     STAND_UP = "stand_up"            # (g) rise from prone/kneeling
+    CRAWL = "crawl"                  # (g) crawl <= 2 hexes instead of standing
     # engaged options (j, k, l, m, n)
     SHIFT_ATTACK = "shift_attack"    # (j) shift 1, attack (no missile)
     SHIFT_DEFEND = "shift_defend"    # (k) shift 1, defend
@@ -62,6 +63,7 @@ _SPECS: dict[Option, OptionSpec] = {
     Option.MISSILE_ATTACK: OptionSpec(
         Option.MISSILE_ATTACK, DISENGAGED, "one", True, True, False),
     Option.STAND_UP: OptionSpec(Option.STAND_UP, ANY, "none", False, False, False),
+    Option.CRAWL: OptionSpec(Option.CRAWL, ANY, "two", False, False, False),
     Option.SHIFT_ATTACK: OptionSpec(
         Option.SHIFT_ATTACK, ENGAGED, "one", True, False, False),
     Option.SHIFT_DEFEND: OptionSpec(

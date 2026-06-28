@@ -261,13 +261,13 @@ function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 const PHASE_LABEL = {initiative: "Initiative", move: "Movement", combat: "Combat"};
 const OPTION_LABEL = {
   move: "Full move", half_move: "Half move", charge_attack: "⚔ Charge & Attack", dodge: "Dodge",
-  ready_weapon: "Ready Weapon", missile_attack: "⚔ Missile Attack", stand_up: "Stand Up",
+  ready_weapon: "Ready Weapon", missile_attack: "⚔ Missile Attack", stand_up: "Stand Up", crawl: "Crawl 2",
   shift_attack: "⚔ Attack (may shift 1)", shift_defend: "Shift & Defend",
   one_last_shot: "⚔ One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
   hth_attack: "🤼 Grapple", pick_up: "Pick up weapon",
   go_prone: "Drop prone", kneel: "Kneel",
 };
-const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage"]);
+const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage", "crawl"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
 const TEAM_FILL = {red: "#d0524f", blue: "#4f86d0", green: "#57b894", gold: "#e0b13c", violet: "#b07ad8"};
 const fillFor = side => TEAM_FILL[side] || "#888";
@@ -542,6 +542,17 @@ function openMenu(f) {
       rows.push({label: `🤼 ${grappling ? "Strike" : "Grapple"} ${e ? e.name : uid}`,
                  act: () => setHth(f, uid)});
     }
+    for (const uid of (optInfo.shield_rush_targets || [])) {
+      const e = figByUid(uid);
+      rows.push({label: `🛡 Shield-rush ${e ? e.name : uid}`,
+                 act: () => setShieldRush(f, uid)});
+    }
+    // Option (n) general disengage: a figure that chose Disengage in the
+    // movement phase steps one hex now instead of attacking (p.19).
+    for (const dest of (optInfo.disengage_dests || [])) {
+      rows.push({label: `💨 Disengage → ${dest}`,
+                 act: () => setDisengageMove(f, dest)});
+    }
     if (!grappling && !(optInfo.hth_targets || []).length)
       rows.push({label: "🤼 Grapple", reason: "no foe in reach to grapple", disabled: true});
     if (grappling)
@@ -603,6 +614,17 @@ function setDisengage(f) {
   PLAN[f.uid] = {uid: f.uid, phase: "combat", disengage: true, label: "💨 Break free"};
   render();
 }
+function setShieldRush(f, target) {
+  const e = figByUid(target);
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", target, rush: true,
+                 label: `🛡 Shield-rush ${e ? e.name : target}`};
+  render();
+}
+function setDisengageMove(f, dest) {
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", disengageMove: true, dest,
+                 label: `💨 Disengage → ${dest}`};
+  render();
+}
 function setAttack(f, target) {
   const e = figByUid(target);
   PLAN[f.uid] = {uid: f.uid, phase: "combat", target, label: `Attack ${e ? e.name : target}`};
@@ -630,6 +652,8 @@ async function executePlans(kind) {
   } else {
     for (const p of plans) {
       if (p.disengage) await act({type: "hth_disengage", uid: p.uid});
+      else if (p.disengageMove) await act({type: "disengage_move", uid: p.uid, dest: p.dest});
+      else if (p.rush) await act({type: "shield_rush", uid: p.uid, target: p.target});
       else if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
                                     uid: p.uid, target: p.target});
     }

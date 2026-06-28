@@ -496,7 +496,8 @@ def test_legal_options_hide_illegal_choices() -> None:
     assert Option.MISSILE_ATTACK in state.legal_options(archer)  # has a bow
 
     swordsman.posture = Posture.PRONE
-    assert state.legal_options(swordsman) == [Option.STAND_UP]
+    # A grounded figure may rise or crawl (g, p.7); open ground -> both offered.
+    assert state.legal_options(swordsman) == [Option.STAND_UP, Option.CRAWL]
 
 
 def test_option_availability_surfaces_full_set_with_reasons() -> None:
@@ -517,12 +518,15 @@ def test_option_availability_surfaces_full_set_with_reasons() -> None:
     assert Option.STAND_UP in avail and avail[Option.STAND_UP] == "already standing"
     assert avail[Option.MISSILE_ATTACK] == "no missile weapon ready"
 
-    # A prone figure: every move option but Stand Up is shown disabled with a why.
+    # A prone figure: every move option but Stand Up and Crawl is shown disabled
+    # with a why (both grounded options are live on open ground).
     swordsman.posture = Posture.PRONE
     prone = dict(state.option_availability(swordsman))
     assert prone[Option.STAND_UP] is None
+    assert prone[Option.CRAWL] is None
     assert all(reason == "must stand up first"
-               for opt, reason in prone.items() if opt != Option.STAND_UP)
+               for opt, reason in prone.items()
+               if opt not in (Option.STAND_UP, Option.CRAWL))
 
 
 def test_attack_ordering_is_highest_adjdx_first() -> None:
@@ -680,3 +684,188 @@ def test_missile_shot_gains_no_rear_bonus_when_target_falls_mid_phase() -> None:
     target.posture = Posture.PRONE                       # felled before the arrow lands
     result = state.resolve_combat()[0]
     assert "rear" not in result.to_hit_breakdown         # missiles never get facing
+
+
+def test_prone_figure_may_crawl_two_hexes_and_stays_prone() -> None:
+    """Option (g) alternative (p.7): a grounded figure may crawl up to two hexes
+    during the movement phase instead of standing, and remains prone."""
+    arena = Arena(cols=9, rows=15)
+    crawler = create_human("Crawler", 12, 12, "a",
+                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    crawler.position = Hex(5, 5)
+    crawler.posture = Posture.PRONE
+    foe.position = Hex(8, 12)                             # well clear, no engagement
+    state = GameState(arena, [crawler, foe])
+    legal = state.legal_options(crawler)
+    assert Option.STAND_UP in legal and Option.CRAWL in legal
+    destination = state.reachable(crawler, Option.CRAWL)
+    assert destination                                   # somewhere to crawl
+    path = state.reach_for(crawler, Option.CRAWL).path_to(
+        next(h for h in destination
+             if arena.layout.distance(Hex(5, 5), h) == 2))
+    assert len(path) == 2                                # at most two hexes
+    state.move(crawler, Option.CRAWL, path=path)
+    assert crawler.posture == Posture.PRONE              # still on the ground
+    assert crawler.position == path[-1]
+
+
+def test_crawl_is_not_offered_to_a_standing_figure() -> None:
+    arena = Arena(cols=9, rows=15)
+    figure = create_human("Up", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    figure.position = Hex(5, 5)
+    foe.position = Hex(8, 12)
+    state = GameState(arena, [figure, foe])
+    assert Option.CRAWL not in state.legal_options(figure)
+    availability = dict(state.option_availability(figure))
+    assert availability[Option.CRAWL] == "already standing"
+
+
+def test_missile_strikes_a_bystander_blocking_its_lane() -> None:
+    """Missiles follow the thrown line-of-flight rules (p.16): a standing figure
+    in the lane must be rolled to miss, and may be hit instead of the target."""
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 11, 13, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    target = create_human("Target", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    blocker = create_human("Blocker", 12, 12, "c",
+                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(5, 5)
+    blocker.position = Hex(5, 6)                          # standing in the lane
+    target.position = Hex(5, 8)
+    # roll-to-miss the blocker needs <= adjDX(13) - 1; a scripted 18 fails -> hit
+    state = GameState(arena, [archer, target, blocker],
+                      dice=Dice(scripted=[6, 6, 6] + [3] * 12))
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, target)
+    state.resolve_combat()
+    assert blocker.damage_taken > 0                       # the bystander took it
+    assert target.damage_taken == 0                       # intended target untouched
+    # a fired arrow is expendable — nothing is added to the ground-pickup pile
+    assert state.dropped == []
+
+
+def test_missile_that_misses_flies_on_and_is_never_picked_up() -> None:
+    """A clean miss flies on (p.15) but a spent arrow is consumed, not dropped."""
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 11, 13, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    target = create_human("Target", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(5, 5)
+    target.position = Hex(5, 8)
+    # a scripted 15 (6+6+3) cleanly misses adjDX 13 — not a 16/17/18 fumble — and
+    # with no figure beyond the target the arrow flies off the field, spent
+    state = GameState(arena, [archer, target],
+                      dice=Dice(scripted=[6, 6, 3] * 12))
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, target)
+    results = state.resolve_combat()
+    assert results[0].hit is False                        # a clean miss
+    assert state.dropped == []                            # arrows are not recoverable
+    assert archer.ready_weapon == SMALL_BOW               # the bow itself is kept
+
+
+def _shield_rush_setup(rusher_st, rusher_dx, foe_st, foe_dx, dice):
+    """A shield-bearing rusher squarely facing an adjacent foe in its front."""
+    from engine.rules_data import DAGGER, SMALL_SHIELD
+    arena = Arena(cols=9, rows=15)
+    rusher = create_human("Rusher", rusher_st, rusher_dx, "a",
+                          weapons=[DAGGER], ready_weapon=DAGGER,
+                          shield=SMALL_SHIELD)
+    foe = create_human("Foe", foe_st, foe_dx, "b",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    rusher.position = Hex(5, 5)
+    rusher.facing = 0
+    foe.position = Hex(5, 4)                              # straight ahead, in front
+    state = GameState(arena, [rusher, foe], dice=Dice(scripted=dice))
+    return state, rusher, foe
+
+
+def test_shield_rush_floors_a_weaker_foe_on_a_failed_save() -> None:
+    # to-hit 3+3+3 connects; the ST-13 rusher rolls a save vs ST-11 foe on three
+    # dice — a 15 beats the foe's adjDX 13, so it falls. No hits are dealt.
+    state, rusher, foe = _shield_rush_setup(13, 11, 11, 13, [3, 3, 3, 6, 5, 4])
+    assert foe in state.shield_rush_targets(rusher)
+    assert state.shield_rush(rusher, foe) == "fall"
+    assert foe.posture == Posture.PRONE
+    assert foe.damage_taken == 0                          # never inflicts hits
+    assert rusher.attacked_this_turn                      # the rush was its action
+
+
+def test_shield_rush_leaves_a_foe_standing_on_a_made_save() -> None:
+    # same hit, but a save of 3+3+3 = 9 is under the foe's adjDX 13 — it holds.
+    state, rusher, foe = _shield_rush_setup(13, 11, 11, 13, [3, 3, 3, 3, 3, 3])
+    assert state.shield_rush(rusher, foe) == "stand"
+    assert foe.posture == Posture.STANDING
+    assert foe.damage_taken == 0
+
+
+def test_shield_rush_has_no_effect_on_a_foe_over_twice_your_strength() -> None:
+    state, rusher, foe = _shield_rush_setup(9, 15, 12, 12, [3, 3, 3])
+    foe.strength = 25                                     # a giant, > 2x ST 9
+    assert state.shield_rush(rusher, foe) == "no_effect"
+    assert foe.posture == Posture.STANDING
+    assert foe.damage_taken == 0
+
+
+def test_shield_rush_requires_a_ready_shield() -> None:
+    state, rusher, foe = _shield_rush_setup(13, 11, 11, 13, [3, 3, 3])
+    rusher.shield_ready = False
+    assert state.shield_rush_targets(rusher) == []
+    try:
+        state.shield_rush(rusher, foe)
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a shield-rush without a ready shield must be illegal")
+
+
+def test_general_disengage_moves_one_hex_in_combat_without_attacking() -> None:
+    """Option (n), p.19: at the attack step a disengaging figure moves one hex
+    instead of attacking, breaking engagement, and may never attack that turn."""
+    arena = Arena(cols=9, rows=15)
+    runner = create_human("Runner", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    runner.position = Hex(5, 5)
+    runner.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)         # engaged, face to face
+    foe.facing = LAYOUT.direction_to(foe.position, runner.position)
+    state = GameState(arena, [runner, foe])
+    runner.current_option = Option.DISENGAGE             # chosen in the movement phase
+    dest = LAYOUT.neighbor(Hex(5, 5), 3)                 # step away from the foe
+    assert dest in state.disengage_destinations(runner)
+    state.disengage_move(runner, dest)
+    assert runner.position == dest                       # relocated one hex
+    assert runner.attacked_this_turn                     # the move replaced its attack
+    try:
+        state.queue_attack(runner, foe)                  # cannot also attack
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a disengaging figure must not be able to attack")
+
+
+def test_a_prone_figure_cannot_disengage() -> None:
+    arena = Arena(cols=9, rows=15)
+    runner = create_human("Runner", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    runner.position = Hex(5, 5)
+    foe.position = Hex(8, 12)
+    state = GameState(arena, [runner, foe])
+    runner.current_option = Option.DISENGAGE
+    runner.posture = Posture.PRONE                       # must stand up first
+    assert state.disengage_destinations(runner) == []
+    try:
+        state.disengage_move(runner, LAYOUT.neighbor(Hex(5, 5), 3))
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a grounded figure must stand before it can disengage")
