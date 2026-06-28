@@ -156,7 +156,7 @@ class TarmarRuleset(Ruleset):
     def resolve_attack(
         self, dice, attacker, target, *, zone, weapon=None,
         dice_count=1, ignore_facing=False, range_penalty=0,
-        situational=0, situational_note="",
+        situational=0, situational_note="", extra_dice=0,
     ) -> AttackResult:
         weapon = weapon or attacker.ready_weapon
         weapon_class = WEAPON_CLASS.get(weapon.name) if weapon else None
@@ -191,6 +191,8 @@ class TarmarRuleset(Ruleset):
         raw_damage = damage = 0
         if outcome["hit"]:
             weapon_total = dice.total(weapon.damage.count) + weapon.damage.modifier
+            if extra_dice:                       # pole weapon in/against a charge
+                weapon_total += dice.total(extra_dice)
             raw_damage = max(0, weapon_total) * multiplier
             stops = target.hits_stopped(from_front=(zone == FRONT))
             damage = tarmar_rules.damage_after_armour(

@@ -65,6 +65,7 @@ class Weapon:
     notes: str = ""
     reload: int = 0
     double_shot_dx: int = 0   # adjDX at/above which a bow fires twice/turn (0 = never)
+    reach: int = 1            # hexes it can strike (pole weapons jab at 2; p.12)
 
 
 # ---- Weapon Table (p.14) ----------------------------------------------------
@@ -89,11 +90,11 @@ BATTLEAXE = Weapon("Battleaxe", DamageDice(3, 0), 15, two_handed=True)
 JAVELIN = Weapon("Javelin", DamageDice(1, -1), 9, kind=WeaponKind.POLE,
                  throwable=True, notes="too short to jab")
 SPEAR = Weapon("Spear", DamageDice(1, 1), 11, kind=WeaponKind.POLE,
-               two_handed=True, throwable=True)
+               two_handed=True, throwable=True, reach=2)
 HALBERD = Weapon("Halberd", DamageDice(2, 0), 13, kind=WeaponKind.POLE,
-                 two_handed=True)
+                 two_handed=True, reach=2)
 PIKE_AXE = Weapon("Pike axe", DamageDice(2, 2), 15, kind=WeaponKind.POLE,
-                  two_handed=True)
+                  two_handed=True, reach=2)
 
 # missile weapons (Missile Weapon rules, p.16)
 THROWN_ROCK = Weapon("Thrown rock", DamageDice(1, -4), 0, kind=WeaponKind.MISSILE,

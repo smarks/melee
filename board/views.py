@@ -24,7 +24,6 @@ from hexarena.dice import Dice
 from hexarena.hex import Hex
 
 from engine import ai, chargen
-from engine.facing import front_hexes
 from engine.options import Option, spec
 from engine.profile import PROFILES
 from engine.rules_data import WEAPONS, WeaponKind
@@ -142,8 +141,7 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list]:
         if figure.missile_cooldown > 0:
             return [], []                       # still reloading — can't fire
         return [], [e.uid for e in state.enemies_of(figure) if e.position is not None]
-    fronts = set(front_hexes(state.arena.layout, figure))
-    return [e.uid for e in state.enemies_of(figure) if e.position in fronts], []
+    return [e.uid for e in state.melee_targets(figure, weapon)], []
 
 
 def _auto_facing(state: GameState, figure, final_hex, path=None):

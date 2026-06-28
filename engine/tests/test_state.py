@@ -33,6 +33,54 @@ def test_initiative_winner_chooses_order() -> None:
     assert state.move_order() == ["b", "a"]
 
 
+def test_pole_weapon_jabs_two_hexes() -> None:
+    from engine.rules_data import JAVELIN, SHORTSWORD, SPEAR
+
+    assert SPEAR.reach == 2 and JAVELIN.reach == 1   # javelins are too short to jab
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    spearman = create_human("Spear", 13, 11, "a", weapons=[SPEAR], ready_weapon=SPEAR)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    spearman.position = Hex(5, 5)
+    spearman.facing = 0
+    ahead1 = layout.neighbor(Hex(5, 5), 0)
+    foe.position = layout.neighbor(ahead1, 0)        # two hexes straight ahead
+
+    state = GameState(arena, [spearman, foe])
+    assert foe in state.melee_targets(spearman, SPEAR)         # the spear jabs
+    assert foe not in state.melee_targets(spearman, SHORTSWORD)  # reach 1 can't
+
+    blocker = create_human("Block", 12, 12, "c", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    blocker.position = ahead1                          # someone in the way
+    blocked = GameState(arena, [spearman, foe, blocker])
+    assert foe not in blocked.melee_targets(spearman, SPEAR)   # straight jab blocked
+
+
+def test_pole_against_charge_gets_extra_die_and_strikes_first() -> None:
+    from engine.rules_data import SHORTSWORD, SPEAR
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    spearman = create_human("Spear", 13, 11, "a", weapons=[SPEAR], ready_weapon=SPEAR)
+    charger = create_human("Foe", 11, 13, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    spearman.position = Hex(5, 5)
+    charger.position = layout.neighbor(Hex(5, 5), 0)
+    spearman.facing = layout.direction_to(spearman.position, charger.position)
+    charger.facing = layout.direction_to(charger.position, spearman.position)
+    charger.current_option = Option.CHARGE_ATTACK
+    state = GameState(arena, [spearman, charger])
+
+    assert state._pole_charge_dice(spearman, charger, SPEAR, adjacent=True) == 1
+
+    spearman.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(spearman, charger)
+    state.queue_attack(charger, spearman)
+    results = state.resolve_combat()
+    # the polearm resolves first despite the charger's higher adjDX
+    assert results[0].weapon.name == "Spear"
+
+
 def test_situational_to_hit_modifiers() -> None:
     from engine.rules_data import LIGHT_CROSSBOW, SPEAR
 

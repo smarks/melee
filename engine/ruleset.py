@@ -121,6 +121,7 @@ class Ruleset:
         range_penalty: int = 0,
         situational: int = 0,
         situational_note: str = "",
+        extra_dice: int = 0,
     ) -> AttackResult:
         """Roll one attack and return its result (no state is mutated).
 
@@ -138,6 +139,8 @@ class Ruleset:
         damage = 0
         if hit and weapon is not None:
             raw_damage = self.weapon_damage(dice, weapon, multiplier)
+            if extra_dice:                      # pole weapon in/against a charge
+                raw_damage += dice.total(extra_dice)
             damage = max(0, raw_damage - self.absorbed(target, zone=zone))
 
         return AttackResult(
