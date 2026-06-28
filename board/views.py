@@ -28,7 +28,7 @@ import tarmar_rules
 from hexarena.dice import Dice
 from hexarena.hex import Hex
 
-from engine import ai, chargen
+from engine import ai, chargen, experience
 from engine.options import Option, spec
 from engine.profile import PROFILES
 from engine.rules_data import WEAPONS, WeaponKind
@@ -643,6 +643,78 @@ def api_game_save(request, gid):
     return JsonResponse({"ok": True, "gid": gid})
 
 
+@csrf_exempt
+def api_game_award(request, gid):
+    """Award Section IX experience at game over (#10).
+
+    Reads the combat type from the POST body (``death`` | ``arena`` | ``practice``,
+    default Death — the board's standard win condition) and banks XP on each
+    figure per Section IX. The winning side is taken from the live victory check;
+    ``ran_away_unhurt`` (a list of uids) only affects arena combat. The updated
+    game is persisted so the progression survives a restart.
+    """
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    game = _resident_game(gid)
+    if not game:
+        return JsonResponse({"error": "unknown game"}, status=404)
+    try:
+        body = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "bad JSON"}, status=400)
+    try:
+        combat_type = experience.CombatType(body.get("combat_type", "death"))
+    except ValueError:
+        return JsonResponse(
+            {"error": f"unknown combat type {body.get('combat_type')!r}"}, status=400)
+    state: GameState = game["state"]
+    awards = experience.award_experience(
+        state.figures, combat_type,
+        winning_side=_victory(state),
+        ran_away_unhurt=body.get("ran_away_unhurt", []))
+    _persist_game(gid, game)
+    payload = _payload(game)
+    payload["awards"] = awards
+    return JsonResponse(payload)
+
+
+@csrf_exempt
+def api_figure_advance(request, gid, uid):
+    """Trade 100 XP for +1 basic ST or DX on one figure (Section IX, #10).
+
+    The POST body's ``attribute`` is ``strength`` or ``dexterity``. Enforces the
+    100-XP cost and the 8-point lifetime cap (a refused spend is a clean 400). The
+    advanced figure is persisted so progression survives a restart.
+    """
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    game = _resident_game(gid)
+    if not game:
+        return JsonResponse({"error": "unknown game"}, status=404)
+    try:
+        body = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "bad JSON"}, status=400)
+    try:
+        attribute = experience.Attribute(body.get("attribute", ""))
+    except ValueError:
+        return JsonResponse(
+            {"error": f"unknown attribute {body.get('attribute')!r}"}, status=400)
+    state: GameState = game["state"]
+    try:
+        figure = _figure(state, uid)
+    except IllegalAction as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    try:
+        experience.spend_experience(figure, attribute)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    _persist_game(gid, game)
+    payload = _payload(game)
+    payload["uid"] = uid
+    return JsonResponse(payload)
+
+
 def api_game_load(request, gid):
     """Load a saved game on demand, reconstructing it into the live registry."""
     game = _resident_game(gid)
@@ -1012,6 +1084,13 @@ def _update_figure(game: dict, uid: str, spec: dict) -> None:
 
     # Identity and where it stands on the board.
     rebuilt.uid = figure.uid
+    # Section IX progression (#10): keep banked XP and re-apply bought points. The
+    # edit spec carries the *basic* spread, so fold the added points back in.
+    rebuilt.experience = figure.experience
+    rebuilt.added_st = figure.added_st
+    rebuilt.added_dx = figure.added_dx
+    rebuilt.strength += figure.added_st
+    rebuilt.dexterity += figure.added_dx
     rebuilt.position = figure.position
     rebuilt.facing = figure.facing
     rebuilt.posture = figure.posture

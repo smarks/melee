@@ -747,3 +747,87 @@ def test_admin_bypasses_seat_ownership(client: Client, django_user_model) -> Non
                        data=json.dumps({"type": "move", "uid": blue_uid, "option": "move"}),
                        content_type="application/json")
     assert moved.status_code != 403
+
+
+def _victory_duel(gid: str):
+    """A red knight standing over a slain blue knight, registered at game over.
+
+    Returns the two figures; the game is in :data:`GAMES` under ``gid`` for the
+    test to drive the Section IX award/advance endpoints (#10).
+    """
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    red = create_human("Victor", 12, 12, "red")
+    blue = create_human("Fallen", 12, 12, "blue")
+    red.position, blue.position = Hex(3, 3), Hex(3, 4)
+    blue.damage_taken = blue.strength + 2          # slain: red is the lone survivor
+    GAMES[gid] = {
+        "state": GameState(arena, [red, blue]), "layout": board_layout(arena),
+        "phase": "combat", "order": ["red", "blue"], "moving": 0, "winner": "red",
+        "controllers": {"red": "human", "blue": "human"}, "profile": "Classic Melee",
+        "seats": {},
+    }
+    return red, blue
+
+
+@pytest.mark.django_db
+def test_award_endpoint_grants_death_combat_xp(client: Client) -> None:
+    from board.views import GAMES
+
+    red, blue = _victory_duel("award-test")
+    try:
+        out = client.post("/api/game/award-test/award",
+                          data=json.dumps({"combat_type": "death"}),
+                          content_type="application/json")
+        assert out.status_code == 200
+        body = out.json()
+        # The lone survivor earns 50 XP (Section IX); the slain figure earns none.
+        assert body["awards"][red.uid] == 50
+        assert body["awards"][blue.uid] == 0
+        survivor = next(f for f in body["state"]["figures"] if f["uid"] == red.uid)
+        assert survivor["experience"] == 50
+    finally:
+        del GAMES["award-test"]
+
+
+@pytest.mark.django_db
+def test_advance_endpoint_spends_xp_on_strength(client: Client) -> None:
+    from board.views import GAMES
+
+    red, _blue = _victory_duel("advance-test")
+    red.experience = 100
+    try:
+        out = client.post(f"/api/game/advance-test/figure/{red.uid}/advance",
+                          data=json.dumps({"attribute": "strength"}),
+                          content_type="application/json")
+        assert out.status_code == 200
+        fighter = next(f for f in out.json()["state"]["figures"] if f["uid"] == red.uid)
+        assert fighter["max_st"] == 13                # basic ST raised 12 -> 13
+        assert fighter["added_st"] == 1
+        assert fighter["experience"] == 0
+    finally:
+        del GAMES["advance-test"]
+
+
+@pytest.mark.django_db
+def test_advance_endpoint_enforces_eight_point_cap(client: Client) -> None:
+    from board.views import GAMES
+
+    red, _blue = _victory_duel("cap-test")
+    red.experience = 1000
+    red.added_st = 5
+    red.added_dx = 3                                  # already at the 8-point cap
+    try:
+        out = client.post(f"/api/game/cap-test/figure/{red.uid}/advance",
+                          data=json.dumps({"attribute": "strength"}),
+                          content_type="application/json")
+        assert out.status_code == 400
+        assert "maximum" in out.json()["error"]
+    finally:
+        del GAMES["cap-test"]

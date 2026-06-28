@@ -21,9 +21,13 @@ def _edit_spec(figure: Figure) -> dict:
     ready_name = ready.name if ready else "Dagger"
     second = next((w for w in figure.weapons
                    if w is not ready and w.name != "Dagger"), None)
+    # Report the *basic* spread (before any Section IX advancement, #10) so the
+    # editor and chargen.build still see ST+DX summing to the race total. The
+    # added points are re-applied when the rebuilt figure is swapped back in.
     spec = {
         "name": figure.name, "side": figure.side,
-        "strength": figure.strength, "dexterity": figure.dexterity,
+        "strength": figure.strength - figure.added_st,
+        "dexterity": figure.dexterity - figure.added_dx,
         "weapon": ready_name, "weapon2": second.name if second else "None",
         "armor": figure.armor.name, "shield": figure.shield.name,
     }
@@ -66,6 +70,10 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "acted": figure.current_option is not None,
         "armor": figure.armor.name,
         "model": "melee",
+        # Section IX progression (#10) so the UI can show XP and advancement.
+        "experience": figure.experience,
+        "added_st": figure.added_st,
+        "added_dx": figure.added_dx,
         "edit_spec": _edit_spec(figure),
     }
     if isinstance(figure, TarmarFigure):
