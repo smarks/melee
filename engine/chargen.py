@@ -80,6 +80,8 @@ def validate(profile_name: str, spec: dict) -> list[str]:
     errors: list[str] = []
     if not (spec.get("name") or "").strip():
         errors.append("name is required")
+    if not (spec.get("side") or "").strip():
+        errors.append("side is required")
 
     weapon_name = spec.get("weapon")
     second_name = spec.get("weapon2")
@@ -149,7 +151,7 @@ def build(profile_name: str, spec: dict) -> Figure:
 
     if profile_name == "Tarmar":
         skills = {weapon.name: spec.get("skill", 0)}
-        if second is not None:
+        if second is not None and second is not weapon:
             skills[second.name] = spec.get("skill2", 0)
         return create_tarmar_fighter(
             spec["name"], side=spec["side"],

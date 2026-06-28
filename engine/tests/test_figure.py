@@ -11,6 +11,7 @@ from engine.rules_data import (
     LONGBOW,
     NO_ARMOR,
     SHORTSWORD,
+    TWO_HANDED_SWORD,
 )
 
 
@@ -62,6 +63,18 @@ def test_collapse_and_death_thresholds() -> None:
     assert fighter.collapsed and not fighter.is_dead
     fighter.damage_taken = 13   # ST -1
     assert fighter.is_dead
+
+
+def test_two_handed_ready_weapon_unreadies_a_shield() -> None:
+    # A directly-constructed figure with a two-handed ready weapon cannot also
+    # keep a ready shield -- there is no free hand for it.
+    fighter = Figure(
+        "Greatsword", strength=14, dexterity=12, side="a",
+        weapons=[TWO_HANDED_SWORD], ready_weapon=TWO_HANDED_SWORD,
+        shield=LARGE_SHIELD, shield_ready=True,
+    )
+    assert fighter.shield_ready is False
+    assert fighter.hits_stopped(from_front=True) == 0  # shield contributes nothing
 
 
 def test_no_armor_movement_and_dx() -> None:
