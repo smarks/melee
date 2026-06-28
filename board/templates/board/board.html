@@ -72,8 +72,12 @@
   .chip.green { color: var(--green); border-color: var(--green); }
   .chip.gold { color: var(--gold); border-color: var(--gold); }
   .chip.violet { color: var(--violet); border-color: var(--violet); }
-  #log { flex: 0 0 190px; overflow: auto; padding: 6px 16px 10px; font-size: 12.5px; }
+  #log { flex: 0 0 190px; overflow: auto; padding: 6px 16px 10px; font-size: 15px; }
   #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
+  /* A blow that actually lands stands out from misses, dodges, and movement. */
+  #log div.log-hit { color: var(--ink); font-weight: 600; font-size: 16.5px; }
+  #log div.log-crit { color: var(--gold); font-weight: 700; font-size: 18px;
+                      letter-spacing: .2px; }
   .roster .row { display: flex; justify-content: space-between; padding: 4px 0;
                  border-bottom: 1px solid #2a2733; cursor: pointer; }
   .roster .row:hover { color: #fff; }
@@ -732,7 +736,13 @@ function drawRoster() {
 function drawLog() {
   const l = $("log"); l.innerHTML = "";
   for (const line of S.log.slice().reverse()) {
-    const d = document.createElement("div"); d.textContent = line; l.appendChild(d);
+    const d = document.createElement("div"); d.textContent = line;
+    // Emphasize blows/missiles that land. A crushing blow (crit) gets the
+    // strongest treatment; a normal connecting hit a lighter one. Misses,
+    // dodges, armour-absorbed hits, and movement stay at normal weight.
+    if (line.includes("crushing blow")) d.className = "log-crit";
+    else if (line.includes("connects for")) d.className = "log-hit";
+    l.appendChild(d);
   }
 }
 
