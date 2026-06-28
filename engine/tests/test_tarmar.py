@@ -10,10 +10,10 @@ from __future__ import annotations
 import pytest
 from hexarena.dice import Dice
 
-from engine.facing import FRONT
+from engine.facing import FRONT, REAR
 from engine.profile import CLASSIC, TARMAR
-from engine.rules_data import BATTLEAXE, BROADSWORD, NO_ARMOR, PLATE
-from engine.ruleset import DEAD, Ruleset
+from engine.rules_data import BATTLEAXE, BROADSWORD, NO_ARMOR, PLATE, SMALL_SHIELD
+from engine.ruleset import DEAD, KNOCKDOWN, Ruleset
 from engine.tarmar import TarmarFigure, TarmarRuleset, create_tarmar_fighter
 
 
@@ -44,7 +44,7 @@ def test_normal_hit_reduces_fatigue_only() -> None:
     tgt = _target(armor=NO_ARMOR)        # tier None -> TN 13
     dice = Dice(scripted=[10, 4, 3])     # d20=10 (+7=17 >= 13 hit); damage 4+3=7
     result = rules.resolve_attack(dice, atk, tgt, zone=FRONT)
-    rules.apply_damage(tgt, result.damage)
+    rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
     assert result.hit and result.needed == 13 and result.damage == 7
     assert tgt.fatigue_taken == 7 and tgt.body_taken == 0
     assert tgt.current_fatigue == 40
@@ -56,7 +56,7 @@ def test_natural_twenty_crits_into_body() -> None:
     tgt = _target(armor=NO_ARMOR)
     dice = Dice(scripted=[20, 5, 4])     # nat 20 -> crit, double dice (5+4)*2 = 18
     result = rules.resolve_attack(dice, atk, tgt, zone=FRONT)
-    rules.apply_damage(tgt, result.damage)
+    rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
     assert result.note == "critical" and result.multiplier == 2
     assert result.damage == 18
     assert tgt.fatigue_taken == 18 and tgt.body_taken == 18  # crit reaches Body
@@ -106,11 +106,64 @@ def test_repeated_crits_eventually_kill_via_body() -> None:
     status = None
     for _ in range(6):                   # each crit: (6+6)*2 = 24 to Fatigue and Body
         result = rules.resolve_attack(Dice(scripted=[20, 6, 6]), atk, tgt, zone=FRONT)
-        rules.apply_damage(tgt, result.damage)
+        rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
         status = rules.status_after_hit(tgt)
         if status == DEAD:
             break
     assert tgt.current_body <= 0 and status == DEAD
+
+
+def test_shield_to_hit_bonus_only_applies_to_the_front() -> None:
+    # A shield covers only the front: its to-hit bonus must apply on a frontal
+    # attack but NOT on a flank/rear one, matching the damage-absorption gate.
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)                      # Striking
+    tgt = _target(armor=NO_ARMOR, shield=SMALL_SHIELD)  # Striking vs None -> TN 13
+    front = rules.resolve_attack(Dice(scripted=[10, 4, 3]), atk, tgt, zone=FRONT)
+    rear = rules.resolve_attack(Dice(scripted=[10, 4, 3]), atk, tgt, zone=REAR)
+    assert front.needed == 14    # shield raises the frontal target number (+1)
+    assert rear.needed == 13     # a shield does not protect the rear/flank
+
+
+def test_crit_body_signal_rides_result_without_mutating_target() -> None:
+    # The crit/Body signal lives on the AttackResult; resolve_attack mutates
+    # nothing on the target (so speculative look-ahead calls can't corrupt it).
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)
+    tgt = _target(armor=NO_ARMOR)
+    result = rules.resolve_attack(Dice(scripted=[20, 5, 4]), atk, tgt, zone=FRONT)
+    assert result.body_hit is True
+    assert tgt.fatigue_taken == 0 and tgt.body_taken == 0   # resolve_attack is pure
+    assert not hasattr(tgt, "pending_body_hit")             # no target flag left behind
+    # Applying with the carried flag is what reaches Body.
+    rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
+    assert tgt.fatigue_taken == 18 and tgt.body_taken == 18
+    # A normal hit carries no Body signal.
+    normal = rules.resolve_attack(
+        Dice(scripted=[10, 4, 3]), atk, _target(armor=NO_ARMOR), zone=FRONT)
+    assert normal.body_hit is False
+
+
+def test_knockdown_no_longer_fires_on_a_trivial_tarmar_hit() -> None:
+    # 12 hits in one turn is over classic Melee's flat-8 threshold, but trivial
+    # against Tarmar's ~5x-larger Fatigue pool (47), so it must NOT knock down.
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)
+    tgt = _target(armor=NO_ARMOR)                    # fatigue 47 -> threshold ceil(47*0.8)=38
+    result = rules.resolve_attack(Dice(scripted=[14, 6, 6]), atk, tgt, zone=FRONT)
+    rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
+    assert tgt.hits_this_turn == 12
+    assert rules.status_after_hit(tgt) is None
+
+
+def test_knockdown_still_fires_when_a_turn_drains_most_of_fatigue() -> None:
+    # Scaled, not disabled: a turn taking ~85% of the Fatigue pool still knocks
+    # the figure down (Fatigue/Body both still positive, so it's KNOCKDOWN).
+    rules = TarmarRuleset()
+    tgt = _target(armor=NO_ARMOR)                    # fatigue 47 -> threshold 38
+    rules.apply_damage(tgt, 40)
+    assert tgt.current_fatigue > 0 and tgt.current_body > 0
+    assert rules.status_after_hit(tgt) == KNOCKDOWN
 
 
 def test_profiles_pair_model_with_ruleset() -> None:
