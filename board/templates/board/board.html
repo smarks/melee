@@ -317,10 +317,12 @@ function drawArena() {
     if (f.dodging) cls += " dodge";
     g.setAttribute("class", cls);
 
-    // Grapplers share one hex — nudge the pair apart so both stay visible.
-    if (f.hth_opponent) {
-      const dir = (f.uid < f.hth_opponent) ? -1 : 1, d = LAYOUT.size * 0.34;
-      g.setAttribute("transform", `translate(${dir * d},${dir * d})`);
+    // Grapplers share one hex — fan them around its centre so each stays visible.
+    if (f.hth_opponents && f.hth_opponents.length) {
+      const ring = [f.uid, ...f.hth_opponents].sort();
+      const ang = ring.indexOf(f.uid) * (Math.PI / 3), d = LAYOUT.size * 0.34;
+      g.setAttribute("transform",
+        `translate(${Math.cos(ang) * d},${Math.sin(ang) * d})`);
     }
 
     const tip = document.createElementNS(SVG, "title");   // native hover tooltip
@@ -642,7 +644,7 @@ function statusHeader(f) {
       ? `<div class="muted">Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · adjDX ${f.dx}</div>`
       : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx}</div>`) +
     `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}` +
-    `${f.hth_opponent ? " · 🤼 grappling" : ""}</div>` +
+    `${(f.hth_opponents && f.hth_opponents.length) ? " · 🤼 grappling" : ""}</div>` +
     weaponsLine(f);
 }
 

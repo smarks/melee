@@ -129,6 +129,8 @@ def narrate_hth(attacker: Figure, target: Figure, kind: str) -> str | None:
     """A hand-to-hand grapple beat (p.17): the grab, a shrug-off, or a free hit."""
     if kind == "grapple":
         return _cap(f"{_name(attacker)} drags {_name(target)} to the ground, grappling!")
+    if kind == "join":
+        return _cap(f"{_name(attacker)} piles onto {_name(target)} in the brawl!")
     if kind == "shrug":
         return _cap(f"{_name(target)} shrugs off {_name(attacker)}'s grab and keeps its feet.")
     if kind == "free_hit":

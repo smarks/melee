@@ -117,11 +117,11 @@ def queue_attacks(state: GameState, side: str) -> None:
     layout = state.arena.layout
     for figure in [f for f in state.figures if f.side == side and f.can_act()]:
         if figure.in_hth:                    # locked in a grapple: keep wrestling
-            foe = next((f for f in state.figures
-                        if f.uid == figure.hth_opponent), None)
-            if foe is not None and foe.can_act():
+            foes = [f for f in state.figures
+                    if f.uid in figure.hth_opponents and f.can_act()]
+            if foes:
                 figure.current_option = Option.HTH_ATTACK
-                state.hth_attack(figure, foe)
+                state.hth_attack(figure, min(foes, key=lambda e: e.current_st))
             continue
         option = figure.current_option
         if option is None or not spec(option).is_attack:
