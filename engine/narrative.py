@@ -33,22 +33,25 @@ def _cap(sentence: str) -> str:
     return sentence[0].upper() + sentence[1:] if sentence else sentence
 
 
-def _approach(attacker: Figure, target: Figure, weapon, zone: str | None = None) -> str:
+def _approach(attacker: Figure, target: Figure, weapon, zone: str | None = None,
+              thrown: bool = False) -> str:
     """The wind-up, ending on the target so a ", who …" clause can follow."""
     if weapon is None:
         return f"{_name(attacker)} lunges at {_name(target)}"
-    verb = "shoots" if weapon.kind == WeaponKind.MISSILE else "swings"
+    verb = ("hurls" if thrown
+            else "shoots" if weapon.kind == WeaponKind.MISSILE else "swings")
     # A melee blow from the side/rear is easier to land (the facing bonus); call
     # it out so the higher to-hit number reads as deliberate, not a glitch.
     spot = ""
-    if weapon.kind != WeaponKind.MISSILE:
+    if weapon.kind != WeaponKind.MISSILE and not thrown:
         spot = "'s flank" if zone == SIDE else "'s rear" if zone == REAR else ""
     return f"{_name(attacker)} {verb} {_article(weapon.name)} at {_name(target)}{spot}"
 
 
 def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> str:
     """One vivid line for an attack's outcome (hit, miss, dodge, crit)."""
-    approach = _approach(attacker, target, result.weapon, result.zone)
+    approach = _approach(attacker, target, result.weapon, result.zone,
+                         getattr(result, "thrown", False))
     if not result.hit:
         if getattr(target, "dodging", False):
             body = f"{approach}, who dodges clear"

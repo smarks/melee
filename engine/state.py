@@ -65,6 +65,7 @@ class PendingAttack:
     situational: int = 0      # circumstantial DX mod (prone, pole-vs-charge, bodies)
     situational_note: str = ""
     damage_dice_bonus: int = 0  # extra damage dice (pole weapon in/against a charge)
+    thrown: bool = False        # a hurled weapon — it leaves the thrower's hand
 
 
 class GameState:
@@ -240,6 +241,19 @@ class GameState:
         return any(f is not exclude and f.position == hex_position
                    and (f.is_dead or f.collapsed) for f in self.figures)
 
+    def _discard_thrown(self, attacker: Figure) -> None:
+        """A thrown weapon leaves the hand and lands on the field (p.15). A thrown
+        rock is replenishable so it stays; otherwise the figure is left holding a
+        carried weapon (its dagger, typically) — or empty-handed."""
+        weapon = attacker.ready_weapon
+        if weapon is None or weapon.name == "Thrown rock":
+            return
+        if weapon in attacker.weapons:
+            attacker.weapons.remove(weapon)
+        attacker.ready_weapon = next((carried for carried in attacker.weapons), None)
+        if attacker.ready_weapon is not None:
+            self.log.append(narrate_ready(attacker, attacker.ready_weapon))
+
     def _pole_charge_dice(self, attacker: Figure, target: Figure,
                           weapon, adjacent: bool) -> int:
         """Extra damage dice for a pole weapon in/against a charge (p.12).
@@ -382,20 +396,28 @@ class GameState:
             )
         if is_missile and attacker.missile_cooldown > 0:
             raise IllegalAction(f"{weapon.name} is still reloading")
+        distance = self.arena.distance(attacker.position, target.position)
+        # A throwable melee weapon aimed at a non-adjacent foe is hurled (p.15);
+        # adjacent, it's a normal melee blow.
+        is_throw = not is_missile and weapon.throwable and distance > 1
+        ranged = is_missile or is_throw
         zone = attack_zone(self.arena.layout, attacker, target)
         situational, situational_note = self._situational_mods(
-            attacker, target, weapon, is_missile)
-        if is_missile:
-            range_penalty = self.rules.missile_range_penalty(
-                self.arena.distance(attacker.position, target.position)
-            )
+            attacker, target, weapon, ranged)
+        if ranged:
+            if is_throw:
+                range_penalty = -distance     # -1 DX per hex of distance (p.15)
+                shots = 1
+            else:
+                range_penalty = self.rules.missile_range_penalty(distance)
+                shots = max_missile_shots(weapon, attacker.base_adj_dx)
             # zone is carried so a ready shield still stops frontal missiles,
             # but ignore_facing suppresses the to-hit facing bonus (missiles
-            # never get a facing add, p.16).
+            # and thrown weapons never get a facing add, p.16).
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
                               ignore_facing=True, range_penalty=range_penalty,
-                              shots=max_missile_shots(weapon, attacker.base_adj_dx),
+                              shots=shots, thrown=is_throw,
                               situational=situational, situational_note=situational_note)
             )
         else:
@@ -456,8 +478,11 @@ class GameState:
                     situational_note=pending.situational_note,
                     extra_dice=pending.damage_dice_bonus,
                 )
+                result.thrown = pending.thrown
                 self._apply(attacker, pending.target, result)
                 results.append(result)
+            if pending.thrown:
+                self._discard_thrown(attacker)
         self._pending.clear()
         self._announce_victory()
         return results

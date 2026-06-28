@@ -33,6 +33,38 @@ def test_initiative_winner_chooses_order() -> None:
     assert state.move_order() == ["b", "a"]
 
 
+def test_throwing_a_weapon_hurls_it_and_takes_a_range_penalty() -> None:
+    from engine.rules_data import DAGGER, JAVELIN, SHORTSWORD, THROWN_ROCK
+
+    arena = Arena(cols=9, rows=15)
+    thrower = create_human("Thrower", 11, 13, "a",
+                           weapons=[JAVELIN, DAGGER], ready_weapon=JAVELIN)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    thrower.position = Hex(5, 5)
+    foe.position = Hex(5, 8)                          # three hexes away — a throw
+    state = GameState(arena, [thrower, foe], dice=Dice(scripted=[3] * 12))
+
+    thrower.current_option = Option.CHARGE_ATTACK     # throw detected from distance
+    state.queue_attack(thrower, foe)
+    results = state.resolve_combat()
+    assert len(results) == 1 and results[0].thrown is True
+    assert "range" in results[0].to_hit_breakdown      # -1 DX per hex of distance
+    assert JAVELIN not in thrower.weapons              # the javelin is gone
+    assert thrower.ready_weapon == DAGGER              # now holding the dagger
+
+    # a thrown rock is replenishable — it is not consumed
+    rocker = create_human("Rocker", 12, 12, "a",
+                          weapons=[THROWN_ROCK, DAGGER], ready_weapon=THROWN_ROCK)
+    enemy = create_human("Enemy", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    rocker.position = Hex(2, 2)
+    enemy.position = Hex(2, 5)
+    rock_game = GameState(arena, [rocker, enemy], dice=Dice(scripted=[3] * 12))
+    rocker.current_option = Option.MISSILE_ATTACK      # a rock is a missile weapon
+    rock_game.queue_attack(rocker, enemy)
+    rock_game.resolve_combat()
+    assert rocker.ready_weapon == THROWN_ROCK          # never consumed — always a rock
+
+
 def test_pole_weapon_jabs_two_hexes() -> None:
     from engine.rules_data import JAVELIN, SHORTSWORD, SPEAR
 
