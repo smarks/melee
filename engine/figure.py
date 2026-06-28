@@ -116,6 +116,14 @@ class Figure:
     hth_opponents: list[str] = field(default_factory=list)  # uids grappled (HTH)
     hth_drew_dagger: bool = False    # readied a dagger mid-grapple (usable next turn)
 
+    # ---- experience / advancement (Section IX) ----
+    # XP earned across fights, and how many basic ST/DX points it has bought. The
+    # bought points are already folded into ``strength`` / ``dexterity``; these
+    # counters track the 8-point lifetime cap and let progression persist (#10).
+    experience: int = 0
+    added_st: int = 0
+    added_dx: int = 0
+
     def __post_init__(self) -> None:
         if self.strength < 1 or self.dexterity < 1:
             raise ValueError("ST and DX must be positive")

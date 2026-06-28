@@ -109,6 +109,10 @@ def _figure_to_json(figure: Figure) -> dict:
         "missile_cooldown": figure.missile_cooldown,
         "hth_opponents": list(figure.hth_opponents),
         "hth_drew_dagger": figure.hth_drew_dagger,
+        # ---- experience / advancement (Section IX, #10) ----
+        "experience": figure.experience,
+        "added_st": figure.added_st,
+        "added_dx": figure.added_dx,
     }
     if isinstance(figure, TarmarFigure):
         data.update(
@@ -175,6 +179,10 @@ def _figure_from_json(data: dict) -> Figure:
     figure.missile_cooldown = data["missile_cooldown"]
     figure.hth_opponents = list(data["hth_opponents"])
     figure.hth_drew_dagger = data["hth_drew_dagger"]
+    # Experience/advancement (#10). Defaulted so pre-#10 snapshots still load.
+    figure.experience = data.get("experience", 0)
+    figure.added_st = data.get("added_st", 0)
+    figure.added_dx = data.get("added_dx", 0)
     return figure
 
 

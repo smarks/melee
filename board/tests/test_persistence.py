@@ -35,6 +35,7 @@ _FIGURE_FIELDS = (
     "moved_this_turn", "dodging", "unconscious", "dead", "current_option",
     "dealt_st_damage_this_turn", "missile_cooldown", "hth_opponents",
     "hth_drew_dagger", "shield_ready", "current_st",
+    "experience", "added_st", "added_dx",
 )
 _TARMAR_FIELDS = (
     "intelligence", "wisdom", "constitution", "charisma", "fatigue_roll",
@@ -234,3 +235,39 @@ def test_game_survives_registry_eviction() -> None:
         assert after_figs[uid]["label"] == figure["label"]
         assert after_figs[uid]["st"] == figure["st"]
         assert after_figs[uid]["facing"] == figure["facing"]
+
+
+def test_experience_progression_round_trips_through_json() -> None:
+    """Banked XP and bought attribute points survive a save/load (Section IX, #10)."""
+    state = _two_figure_game("Classic Melee")
+    fighter = state.figures[0]
+    fighter.experience = 175           # earned across fights, not yet all spent
+    fighter.added_st = 2               # two ST points already bought
+    fighter.added_dx = 1               # one DX point already bought
+
+    restored = persistence.state_from_json(persistence.state_to_json(state))
+
+    restored_fighter = restored.figures[0]
+    assert restored_fighter.experience == 175
+    assert restored_fighter.added_st == 2
+    assert restored_fighter.added_dx == 1
+
+
+@pytest.mark.django_db
+def test_experience_progression_round_trips_through_saved_game() -> None:
+    """Progression survives the DB row, the stand-in for a server restart (#10)."""
+    state = _two_figure_game("Classic Melee")
+    fighter = state.figures[1]
+    fighter.experience = 50
+    fighter.added_dx = 3
+    game = {"state": state, "phase": "initiative", "order": state.sides,
+            "moving": 0, "winner": None, "profile": "Classic Melee",
+            "controllers": {}, "seats": {}}
+
+    SavedGame.objects.create(gid="xp1", data=persistence.game_to_json(game),
+                             profile="Classic Melee")
+    reloaded = persistence.game_from_json(SavedGame.objects.get(gid="xp1").data)
+
+    reloaded_fighter = reloaded["state"].figures[1]
+    assert reloaded_fighter.experience == 50
+    assert reloaded_fighter.added_dx == 3
