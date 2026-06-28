@@ -257,6 +257,61 @@ class GameState:
         if weapon is not None and hex_position is not None and weapon.name != "Thrown rock":
             self.dropped.append((hex_position, weapon))
 
+    def _resolve_thrown(self, pending, results: list) -> None:
+        """A hurled weapon's flight (p.15): roll to miss anyone in the way, strike
+        the intended target, then fly on if it misses. It lands where it strikes."""
+        attacker, target = pending.attacker, pending.target
+        layout = self.arena.layout
+        held = self.occupied(exclude=attacker)
+        adjdx = attacker.base_adj_dx
+        # 1) figures in the way roll to be missed — a low roll flies past (p.15).
+        for hex_pos in layout.line(attacker.position, target.position)[1:-1]:
+            blocker = held.get(hex_pos)
+            if blocker is None or blocker is target:
+                continue
+            dist = layout.distance(attacker.position, hex_pos)
+            if self.dice.total(3) <= adjdx - dist:
+                continue                                  # flew past this one
+            self._thrown_strike(attacker, blocker, dist, results)
+            return
+        # 2) the intended target — a normal thrown attack.
+        result = self.rules.resolve_attack(
+            self.dice, attacker, target, zone=pending.zone, ignore_facing=True,
+            dice_count=self.rules.attack_dice_count(target),
+            range_penalty=pending.range_penalty)
+        result.thrown = True
+        self._apply(attacker, target, result)
+        results.append(result)
+        if result.hit:
+            self._discard_thrown(attacker, target.position)
+            return
+        # 3) a clean miss — the weapon flies on up to ten hexes (p.15).
+        direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
+        current = target.position
+        for _ in range(10):
+            current = layout.neighbor(current, direction)
+            if not self.arena.contains(current):
+                break
+            figure = held.get(current)
+            if figure is None:
+                continue
+            dist = layout.distance(attacker.position, current)
+            if self.dice.total(3) <= adjdx - dist:        # the stray weapon strikes
+                self._thrown_strike(attacker, figure, dist, results)
+                return
+        self._discard_thrown(attacker, target.position)   # spent; lands by the target
+
+    def _thrown_strike(self, attacker, victim, dist, results: list) -> None:
+        """A thrown weapon that connected mid-flight: apply its damage, drop it."""
+        result = self.rules.resolve_attack(
+            self.dice, attacker, victim,
+            zone=attack_zone(self.arena.layout, attacker, victim),
+            ignore_facing=True, range_penalty=-dist, force_hit=True)
+        result.thrown = True
+        self._apply(attacker, victim, result)
+        results.append(result)
+        self._discard_thrown(attacker, victim.position)
+
     def dropped_in_reach(self, figure: Figure) -> list:
         """Dropped weapons in ``figure``'s hex or an adjacent one (option q)."""
         if figure.position is None:
@@ -666,6 +721,11 @@ class GameState:
                         and attacker.ready_weapon.reload > 0)
             if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
                 continue
+            # A hurled weapon traces a flight path — anyone in the way may be hit,
+            # and a miss flies on (p.15).
+            if pending.thrown:
+                self._resolve_thrown(pending, results)
+                continue
             # A high-adjDX bow looses two arrows; don't waste the second on a
             # foe the first already dropped.
             for shot in range(max(1, pending.shots)):
@@ -686,8 +746,6 @@ class GameState:
                 result.thrown = pending.thrown
                 self._apply(attacker, pending.target, result)
                 results.append(result)
-            if pending.thrown:
-                self._discard_thrown(attacker, pending.target.position)
         self._pending.clear()
         self._announce_victory()
         return results
