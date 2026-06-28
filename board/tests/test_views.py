@@ -350,6 +350,79 @@ def test_update_figure_rebuilds_in_place_preserving_board_state() -> None:
         del GAMES["upd-test"]
 
 
+def test_update_figure_action_applies_new_stats_to_running_game(client: Client) -> None:
+    """Editing a fighter mid-game writes the new stats back to the live figure,
+    so the rest of the match uses them (issue #69)."""
+    roster = {"profile": "Classic Melee", "computer": "", "seed": 1, "fighters": [
+        {"name": "Hero", "side": "red", "strength": 12, "dexterity": 12,
+         "weapon": "Dagger", "armor": "None", "shield": "None"},
+        {"name": "Foe", "side": "blue", "strength": 12, "dexterity": 12,
+         "weapon": "Dagger", "armor": "None", "shield": "None"},
+    ]}
+    started = client.post("/api/game/new_custom", data=json.dumps(roster),
+                          content_type="application/json").json()
+    gid = started["gid"]
+    hero = next(f for f in started["state"]["figures"] if f["name"] == "Hero")
+    assert hero["weapon"] == "Dagger" and hero["dx"] == 12
+
+    edited = _post(client, gid, {"type": "update_figure", "uid": hero["uid"], "spec": {
+        "strength": 13, "dexterity": 11, "weapon": "Broadsword",
+        "weapon2": "None", "armor": "Leather", "shield": "None"}})
+    assert "error" not in edited
+    new_hero = next(f for f in edited["state"]["figures"] if f["name"] == "Hero")
+    assert new_hero["uid"] == hero["uid"]                 # same figure in play
+    assert new_hero["weapon"] == "Broadsword"             # new weapon is live
+    assert new_hero["armor"] == "Leather"                 # new armour is live
+    assert new_hero["max_st"] == 13                       # new ST is live
+    assert new_hero["dx"] == 9                            # DX 11, -2 from leather
+
+
+def test_update_figure_preserves_fight_state(client: Client) -> None:
+    """An edit must not reset running-fight state: a reloading missile stays
+    spent, injury flags persist, and an active grapple stays two-sided."""
+    from board.views import GAMES, _update_figure
+    from engine.arena import Arena
+    from engine.figure import Posture, create_human
+    from engine.rules_data import DAGGER, WEAPONS
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=9, rows=9)
+    crossbow = WEAPONS["Light crossbow"]
+    archer = create_human("Archer", 12, 12, "red",
+                          weapons=[crossbow, DAGGER], ready_weapon=crossbow)
+    archer.position, archer.uid = Hex(2, 2), "archer"
+    foe = create_human("Foe", 12, 12, "blue",
+                       weapons=[DAGGER], ready_weapon=DAGGER)
+    foe.position, foe.uid = Hex(2, 2), "foe"
+    # mid-fight: archer is reloading, wounded, and grappling the foe.
+    archer.missile_cooldown = 3
+    archer.wounded_last_turn = True
+    archer.hits_this_turn = 4
+    archer.moved_this_turn = 2
+    archer.dealt_st_damage_this_turn = True
+    archer.hth_opponents, foe.hth_opponents = ["foe"], ["archer"]
+    archer.posture = foe.posture = Posture.PRONE
+
+    GAMES["fight-test"] = {"state": GameState(arena, [archer, foe]),
+                           "profile": "Classic Melee"}
+    try:
+        _update_figure(GAMES["fight-test"], "archer", {
+            "strength": 13, "dexterity": 11, "weapon": "Shortsword",
+            "armor": "Leather", "shield": "None"})
+        new = GAMES["fight-test"]["state"].figures[0]
+        assert new.ready_weapon.name == "Shortsword"      # the edit took effect
+        assert new.missile_cooldown == 3                  # still reloading
+        assert new.wounded_last_turn and new.hits_this_turn == 4
+        assert new.moved_this_turn == 2                   # half-MA budget kept
+        assert new.dealt_st_damage_this_turn             # force-retreat eligibility
+        assert new.posture == Posture.PRONE
+        assert new.hth_opponents == ["foe"]               # grapple still two-sided
+        assert GAMES["fight-test"]["state"].figures[1].hth_opponents == ["archer"]
+    finally:
+        del GAMES["fight-test"]
+
+
 def test_catalog_endpoint_lists_legal_choices(client: Client) -> None:
     data = client.get("/api/catalog?profile=Tarmar").json()
     assert data["stat_rules"]["model"] == "tarmar"
