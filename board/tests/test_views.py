@@ -590,3 +590,27 @@ def test_bounded_store_evicts_games_past_their_ttl() -> None:
     assert store["fresh"]            # any access triggers TTL eviction
     assert "old" not in store
     assert "fresh" in store
+
+
+def test_only_the_owning_session_can_drive_the_game(client: Client) -> None:
+    # #74: a game is owned by its creating session. A different browser may
+    # spectate (open reads) but cannot drive any action.
+    data = _new(client)                      # the fixture client creates -> owns it
+    gid = data["gid"]
+
+    intruder = Client()                      # a different browser / session
+    assert intruder.get(f"/api/game/{gid}").status_code == 200   # spectating is open
+    blocked = intruder.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "roll_initiative"}),
+        content_type="application/json",
+    )
+    assert blocked.status_code == 403
+
+    ok = client.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "roll_initiative"}),
+        content_type="application/json",
+    )
+    assert ok.status_code == 200
+    assert set(ok.json()["you_control"]) == {"red", "blue"}   # hot-seat: owns both

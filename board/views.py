@@ -18,6 +18,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Iterator, MutableMapping
 
+from django.core.signing import BadSignature
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
@@ -369,13 +370,19 @@ def api_character_delete(request, pk):
     return JsonResponse({"ok": True})
 
 
-def _start_game(arena, figures, profile, computer_sides, seed) -> dict:
+def _start_game(arena, figures, profile, computer_sides, seed, owner_key) -> dict:
     """Register a new game and return its initial payload (shared entry point)."""
     seed_value = _seed_int(seed)
     dice = Dice(seed=seed_value) if seed_value is not None else Dice()
     state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset)
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
+    # Seats record who may drive each side. The creating session owns every human
+    # side, so hot-seat (one player, all sides) just works; computer sides are the
+    # AI's. #85 lets the creator open human seats for others to claim over a shared
+    # link; #86 adds an admin override.
+    seats = {side: ("computer" if side in computer_sides else owner_key)
+             for side in state.sides}
     gid = secrets.token_hex(4)
     GAMES[gid] = {
         "state": state,
@@ -386,6 +393,7 @@ def _start_game(arena, figures, profile, computer_sides, seed) -> dict:
         "winner": None,
         "profile": profile.name,
         "controllers": controllers,
+        "seats": seats,
         "combat_prepared": False,
     }
     _advance_computer(GAMES[gid])
@@ -438,8 +446,12 @@ def api_new_game(request):
     else:
         arena, figures = scenario.skirmish_for(profile.name)
         computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
-    return JsonResponse(
-        _start_game(arena, figures, profile, computer_sides, request.GET.get("seed")))
+    pid = _player_id(request) or secrets.token_hex(16)
+    response = JsonResponse(_start_game(
+        arena, figures, profile, computer_sides, request.GET.get("seed"), pid))
+    if _player_id(request) is None:
+        _set_player_cookie(response, pid)
+    return response
 
 
 def api_catalog(request):
@@ -523,15 +535,21 @@ def api_new_custom(request):
             profile.name, body.get("fighters", []))
     except (ValueError, KeyError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
-    return JsonResponse(
-        _start_game(arena, figures, profile, computer_sides, body.get("seed")))
+    pid = _player_id(request) or secrets.token_hex(16)
+    response = JsonResponse(_start_game(
+        arena, figures, profile, computer_sides, body.get("seed"), pid))
+    if _player_id(request) is None:
+        _set_player_cookie(response, pid)
+    return response
 
 
 def api_state(request, gid):
     game = GAMES.get(gid)
     if not game:
         return JsonResponse({"error": "unknown game"}, status=404)
-    return JsonResponse(_payload(game))
+    payload = _payload(game)
+    payload["you_control"] = sorted(_owned_sides(game, request))
+    return JsonResponse(payload)
 
 
 def api_options(request, gid):
@@ -578,6 +596,61 @@ def api_options(request, gid):
     })
 
 
+class Forbidden(Exception):
+    """The requester does not own the seat this action drives (HTTP 403)."""
+
+
+# A stable per-browser identity lives in a tamper-proof signed cookie — no DB
+# session needed, and anonymous play requires no login. A logged-in account
+# identity will layer on top in #85/#86.
+PLAYER_COOKIE = "melee_pid"
+_PLAYER_COOKIE_SALT = "melee.player"
+_PLAYER_COOKIE_MAX_AGE = 60 * 60 * 24 * 30   # 30 days
+
+
+def _player_id(request) -> str | None:
+    """The caller's browser id from the signed cookie, or None if it has none."""
+    try:
+        return request.get_signed_cookie(
+            PLAYER_COOKIE, default=None, salt=_PLAYER_COOKIE_SALT)
+    except BadSignature:
+        return None
+
+
+def _set_player_cookie(response, pid: str) -> None:
+    response.set_signed_cookie(
+        PLAYER_COOKIE, pid, salt=_PLAYER_COOKIE_SALT,
+        max_age=_PLAYER_COOKIE_MAX_AGE, httponly=True, samesite="Lax")
+
+
+def _owned_sides(game: dict, request) -> set[str]:
+    pid = _player_id(request)
+    if pid is None:
+        return set()
+    return {side for side, owner in game.get("seats", {}).items() if owner == pid}
+
+
+_FIGURE_ACTIONS = {"move", "queue_attack", "force_retreat", "update_figure"}
+
+
+def _authorize_action(game: dict, request, body: dict) -> None:
+    """Enforce seat ownership on a mutating action: you must own at least one seat
+    to drive the shared turn state, and may only act on a figure of a side you own.
+    Reads (state/options) stay open so anyone with the link can spectate. Games
+    built outside _start_game (test fixtures) carry no seats and are unrestricted.
+    """
+    seats = game.get("seats")
+    if not seats:
+        return
+    mine = _owned_sides(game, request)
+    if not mine:
+        raise Forbidden("you are not a player in this game")
+    if body.get("type") in _FIGURE_ACTIONS:
+        figure = _figure(game["state"], body.get("uid", ""))
+        if figure.side not in mine:
+            raise Forbidden(f"you do not control {figure.side}")
+
+
 @csrf_exempt
 def api_action(request, gid):
     game = GAMES.get(gid)
@@ -591,13 +664,17 @@ def api_action(request, gid):
         return JsonResponse({"error": "bad JSON"}, status=400)
 
     try:
+        _authorize_action(game, request, body)
         result = _dispatch(game, body)
         _advance_computer(game)
         _auto_end_if_idle(game)
     except IllegalAction as exc:
         return JsonResponse({"error": str(exc)}, status=400)
+    except Forbidden as exc:
+        return JsonResponse({"error": str(exc)}, status=403)
 
     payload = _payload(game)
+    payload["you_control"] = sorted(_owned_sides(game, request))
     if result is not None:
         payload["result"] = result
     return JsonResponse(payload)
