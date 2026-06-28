@@ -63,6 +63,10 @@
   button:disabled { opacity: .4; cursor: not-allowed; }
   .chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
           border: 1px solid var(--line); }
+  /* A small replica of the board token's numbered disc, to match data to a counter. */
+  .tokenbadge { display: inline-flex; align-items: center; justify-content: center;
+          width: 20px; height: 20px; border-radius: 50%; font-size: 11px; font-weight: 700;
+          color: #fff; vertical-align: middle; }
   .chip.red { color: var(--red); border-color: var(--red); }
   .chip.blue { color: var(--blue); border-color: var(--blue); }
   .chip.green { color: var(--green); border-color: var(--green); }
@@ -599,12 +603,23 @@ function drawSelInfo() {
   box.appendChild(label);
   box.appendChild(liveEditCard(f));
 }
+function tokenBadge(f) {   // the same numbered disc the board draws, for matching
+  return `<span class="tokenbadge" style="background:${fillFor(f.side)}">`
+    + `${f.dead ? "✗" : hpCur(f)}</span>`;
+}
+function weaponsLine(f) {
+  const ready = f.weapon || "—";
+  const reserve = (f.weapons || []).filter(w => w !== f.weapon);
+  return `<div class="muted">In hand: <b>${ready}</b>`
+    + (reserve.length ? ` · ready to switch: ${reserve.join(", ")}` : "") + `</div>`;
+}
 function statusHeader(f) {
-  return `<div><b>${f.name}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
+  return `<div>${tokenBadge(f)} <b>${f.name}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
     (f.model === "tarmar"
       ? `<div class="muted">Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · adjDX ${f.dx}</div>`
       : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx}</div>`) +
-    `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>`;
+    `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>` +
+    weaponsLine(f);
 }
 
 // Catalog for the *running* game's profile (the editor may have loaded another).
@@ -652,7 +667,7 @@ function drawRoster() {
     row.className = "row" + (f.dead || f.collapsed ? " dead" : "");
     const state = f.dead ? "dead" : f.collapsed ? "down"
       : `${hpCur(f)}/${hpMax(f)}` + (f.posture !== "standing" ? " · " + f.posture : "");
-    row.innerHTML = `<span class="chip ${f.side}">${f.side}</span> ${f.name}` +
+    row.innerHTML = `${tokenBadge(f)} ${f.name}` +
       `<span class="muted">${state}</span>`;
     row.addEventListener("click", () => onFigureClick(f));
     r.appendChild(row);
