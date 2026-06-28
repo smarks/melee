@@ -19,7 +19,7 @@ stay local while the stat validation is portable.
 """
 from __future__ import annotations
 
-from .figure import Figure, create_human
+from .figure import RACE_SPREADS, Figure, Race, create_fighter
 from .rules_data import (
     ARMORS,
     DAGGER,
@@ -41,6 +41,19 @@ TARMAR_STATS = ("strength", "dexterity", "intelligence",
 TARMAR_MIN, TARMAR_MAX = 3, 18
 TARMAR_BUDGET = 65
 TARMAR_SKILL_MAX = 5
+
+
+def _race_from_spec(spec: dict) -> tuple[Race | None, str | None]:
+    """Parse the (optional) race from a Classic Melee spec; default human.
+
+    Returns ``(race, None)`` on success, or ``(None, error_message)`` if the
+    spec names a race the rulebook doesn't list.
+    """
+    raw = (spec.get("race") or "human")
+    try:
+        return Race(raw), None
+    except ValueError:
+        return None, f"unknown race {raw!r}"
 
 
 def catalog() -> dict:
@@ -113,15 +126,21 @@ def validate(profile_name: str, spec: dict) -> list[str]:
             if not isinstance(value, int) or not (0 <= value <= TARMAR_SKILL_MAX):
                 errors.append(f"{label} must be 0-{TARMAR_SKILL_MAX}")
     else:
+        race, race_error = _race_from_spec(spec)
+        if race_error is not None:
+            errors.append(race_error)
+        spread = RACE_SPREADS[race or Race.HUMAN]
         strength, dexterity = spec.get("strength"), spec.get("dexterity")
         if not isinstance(strength, int) or not isinstance(dexterity, int):
             errors.append("ST and DX are required")
         else:
-            if strength < MELEE_MIN or dexterity < MELEE_MIN:
-                errors.append(f"ST and DX must each be at least {MELEE_MIN}")
-            if strength + dexterity != MELEE_TOTAL:
+            if strength < spread.min_strength or dexterity < spread.min_dexterity:
                 errors.append(
-                    f"ST + DX must total {MELEE_TOTAL} (got {strength + dexterity})")
+                    f"a {(race or Race.HUMAN).value}'s ST must be at least "
+                    f"{spread.min_strength} and DX at least {spread.min_dexterity}")
+            if strength + dexterity != spread.total:
+                errors.append(
+                    f"ST + DX must total {spread.total} (got {strength + dexterity})")
             for carried_name in (weapon_name, second_name if has_second else None):
                 carried = WEAPONS.get(carried_name)
                 if carried and strength < carried.min_strength:
@@ -159,5 +178,6 @@ def build(profile_name: str, spec: dict) -> Figure:
             intelligence=spec["intelligence"], wisdom=spec["wisdom"],
             constitution=spec["constitution"], charisma=spec["charisma"],
             weapon_skill=skills, **gear)
-    return create_human(spec["name"], spec["strength"], spec["dexterity"],
-                        spec["side"], **gear)
+    race, _ = _race_from_spec(spec)
+    return create_fighter(spec["name"], spec["strength"], spec["dexterity"],
+                          spec["side"], race=race or Race.HUMAN, **gear)

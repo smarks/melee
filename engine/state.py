@@ -34,7 +34,7 @@ from .facing import (
     zone_of_direction,
     zone_toward,
 )
-from .figure import Figure, Posture
+from .figure import Figure, Posture, Race
 from .movement import reachable_moves
 from .narrative import (
     narrate_attack,
@@ -727,13 +727,23 @@ class GameState:
         return 1 if (against_charge or in_charge) else 0
 
     def _situational_mods(self, attacker: Figure, target: Figure,
-                          weapon, is_missile: bool) -> tuple[int, str]:
+                          weapon, is_missile: bool,
+                          is_throw: bool = False) -> tuple[int, str]:
         """Circumstantial to-hit modifiers (Section: DX Adjustments, p.16).
 
         Positive = easier to hit, matching the facing convention.
         """
         mods, notes = 0, []
         layout = self.arena.layout
+        # A halfling gets +2 DX whenever it throws something (p.21). "Throwing"
+        # means a hurled weapon or a thrown rock, not a fired bow/sling.
+        thrown_attack = is_throw or (
+            weapon is not None and weapon.name == "Thrown rock")
+        if thrown_attack and attacker.race == Race.HALFLING:
+            mods += 2; notes.append("+2 halfling throw")
+        # The giant snake is "very hard to hit": -3 off the attacker's DX (p.21).
+        if target.hard_to_hit:
+            mods -= target.hard_to_hit; notes.append(f"-{target.hard_to_hit} hard to hit")
         # A prone crossbowman fires steadied: +1 (p.16).
         if (attacker.posture == Posture.PRONE and is_missile
                 and weapon is not None and weapon.reload > 0):
@@ -912,7 +922,7 @@ class GameState:
         ranged = is_missile or is_throw
         zone = attack_zone(self.arena.layout, attacker, target)
         situational, situational_note = self._situational_mods(
-            attacker, target, weapon, ranged)
+            attacker, target, weapon, ranged, is_throw=is_throw)
         if ranged:
             # The target must lie in the attacker's front arc (p.15-16): you fire
             # where you face. (Posture-independent, so a prone crossbowman may

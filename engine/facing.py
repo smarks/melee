@@ -66,6 +66,11 @@ def zone_toward(layout: HexLayout, observer: Figure, point: Hex) -> str | None:
     direction = layout.direction_to(observer.position, line[1])
     if direction is None:
         return None
+    # A giant snake's side hexes count as front hexes for all purposes (p.21):
+    # it strikes so fast it has no flank or rear to exploit, so every attack on
+    # it is a frontal one.
+    if observer.all_front:
+        return FRONT
     if observer.posture != Posture.STANDING:    # prone or kneeling: no front (p.7)
         return REAR
     return zone_of_direction(observer.facing, direction)
