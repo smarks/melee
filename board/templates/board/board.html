@@ -542,6 +542,11 @@ function openMenu(f) {
       rows.push({label: `🤼 ${grappling ? "Strike" : "Grapple"} ${e ? e.name : uid}`,
                  act: () => setHth(f, uid)});
     }
+    for (const uid of (optInfo.shield_rush_targets || [])) {
+      const e = figByUid(uid);
+      rows.push({label: `🛡 Shield-rush ${e ? e.name : uid}`,
+                 act: () => setShieldRush(f, uid)});
+    }
     if (!grappling && !(optInfo.hth_targets || []).length)
       rows.push({label: "🤼 Grapple", reason: "no foe in reach to grapple", disabled: true});
     if (grappling)
@@ -603,6 +608,12 @@ function setDisengage(f) {
   PLAN[f.uid] = {uid: f.uid, phase: "combat", disengage: true, label: "💨 Break free"};
   render();
 }
+function setShieldRush(f, target) {
+  const e = figByUid(target);
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", target, rush: true,
+                 label: `🛡 Shield-rush ${e ? e.name : target}`};
+  render();
+}
 function setAttack(f, target) {
   const e = figByUid(target);
   PLAN[f.uid] = {uid: f.uid, phase: "combat", target, label: `Attack ${e ? e.name : target}`};
@@ -630,6 +641,7 @@ async function executePlans(kind) {
   } else {
     for (const p of plans) {
       if (p.disengage) await act({type: "hth_disengage", uid: p.uid});
+      else if (p.rush) await act({type: "shield_rush", uid: p.uid, target: p.target});
       else if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
                                     uid: p.uid, target: p.target});
     }

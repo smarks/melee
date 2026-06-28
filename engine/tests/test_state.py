@@ -769,3 +769,58 @@ def test_missile_that_misses_flies_on_and_is_never_picked_up() -> None:
     assert results[0].hit is False                        # a clean miss
     assert state.dropped == []                            # arrows are not recoverable
     assert archer.ready_weapon == SMALL_BOW               # the bow itself is kept
+
+
+def _shield_rush_setup(rusher_st, rusher_dx, foe_st, foe_dx, dice):
+    """A shield-bearing rusher squarely facing an adjacent foe in its front."""
+    from engine.rules_data import DAGGER, SMALL_SHIELD
+    arena = Arena(cols=9, rows=15)
+    rusher = create_human("Rusher", rusher_st, rusher_dx, "a",
+                          weapons=[DAGGER], ready_weapon=DAGGER,
+                          shield=SMALL_SHIELD)
+    foe = create_human("Foe", foe_st, foe_dx, "b",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    rusher.position = Hex(5, 5)
+    rusher.facing = 0
+    foe.position = Hex(5, 4)                              # straight ahead, in front
+    state = GameState(arena, [rusher, foe], dice=Dice(scripted=dice))
+    return state, rusher, foe
+
+
+def test_shield_rush_floors_a_weaker_foe_on_a_failed_save() -> None:
+    # to-hit 3+3+3 connects; the ST-13 rusher rolls a save vs ST-11 foe on three
+    # dice — a 15 beats the foe's adjDX 13, so it falls. No hits are dealt.
+    state, rusher, foe = _shield_rush_setup(13, 11, 11, 13, [3, 3, 3, 6, 5, 4])
+    assert foe in state.shield_rush_targets(rusher)
+    assert state.shield_rush(rusher, foe) == "fall"
+    assert foe.posture == Posture.PRONE
+    assert foe.damage_taken == 0                          # never inflicts hits
+    assert rusher.attacked_this_turn                      # the rush was its action
+
+
+def test_shield_rush_leaves_a_foe_standing_on_a_made_save() -> None:
+    # same hit, but a save of 3+3+3 = 9 is under the foe's adjDX 13 — it holds.
+    state, rusher, foe = _shield_rush_setup(13, 11, 11, 13, [3, 3, 3, 3, 3, 3])
+    assert state.shield_rush(rusher, foe) == "stand"
+    assert foe.posture == Posture.STANDING
+    assert foe.damage_taken == 0
+
+
+def test_shield_rush_has_no_effect_on_a_foe_over_twice_your_strength() -> None:
+    state, rusher, foe = _shield_rush_setup(9, 15, 12, 12, [3, 3, 3])
+    foe.strength = 25                                     # a giant, > 2x ST 9
+    assert state.shield_rush(rusher, foe) == "no_effect"
+    assert foe.posture == Posture.STANDING
+    assert foe.damage_taken == 0
+
+
+def test_shield_rush_requires_a_ready_shield() -> None:
+    state, rusher, foe = _shield_rush_setup(13, 11, 11, 13, [3, 3, 3])
+    rusher.shield_ready = False
+    assert state.shield_rush_targets(rusher) == []
+    try:
+        state.shield_rush(rusher, foe)
+    except IllegalAction:
+        pass
+    else:
+        raise AssertionError("a shield-rush without a ready shield must be illegal")

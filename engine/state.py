@@ -38,6 +38,7 @@ from .narrative import (
     narrate_move_order,
     narrate_ready,
     narrate_retreat,
+    narrate_shield_rush,
     narrate_status,
     narrate_turn,
     narrate_victory,
@@ -569,6 +570,78 @@ class GameState:
             if foe is not None and figure.uid in foe.hth_opponents:
                 foe.hth_opponents.remove(figure.uid)
         figure.hth_opponents = []
+
+    # ---- shield-rush (p.13) ----
+    def _can_shield_rush(self, attacker: Figure) -> bool:
+        """Whether ``attacker`` could shield-rush this combat phase (p.13).
+
+        Needs a ready shield (large or small) and a free hand for the rush — so a
+        standing, un-grappled figure that has not yet attacked this turn.
+        """
+        return (attacker.can_act()
+                and not attacker.attacked_this_turn
+                and not attacker.in_hth
+                and attacker.posture == Posture.STANDING
+                and attacker.shield_ready
+                and attacker.shield.name != "None")
+
+    def shield_rush_targets(self, attacker: Figure) -> list[Figure]:
+        """Adjacent enemies in ``attacker``'s front it could shield-rush (p.13)."""
+        if not self._can_shield_rush(attacker) or attacker.position is None:
+            return []
+        fronts = set(front_hexes(self.arena.layout, attacker))
+        return [enemy for enemy in self.enemies_of(attacker)
+                if enemy.position in fronts]
+
+    def shield_rush(self, attacker: Figure, target: Figure) -> str:
+        """Strike with a ready shield to floor a foe (p.13).
+
+        Instead of a weapon attack, a figure with a ready shield rushes an
+        adjacent front enemy. Roll to hit as usual; a miss does nothing. On a hit
+        the target makes a saving roll against its adjDX or falls prone — a full
+        three dice when the rusher's *original* ST is at least the target's, only
+        two dice when the rusher is weaker. A 12 on two dice, or a 16/17/18 on
+        three, is an automatic fall. A shield-rush never inflicts hits, and has no
+        effect on a foe more than twice the rusher's (original) ST.
+
+        Returns the outcome: ``"miss"``, ``"no_effect"``, ``"fall"`` or
+        ``"stand"``.
+        """
+        if not self._can_shield_rush(attacker):
+            raise IllegalAction(f"{attacker.name} cannot shield-rush")
+        layout = self.arena.layout
+        if (target.position is None
+                or self.arena.distance(attacker.position, target.position) != 1
+                or target.position not in set(front_hexes(layout, attacker))):
+            raise IllegalAction(
+                f"{target.name} is not an adjacent foe in {attacker.name}'s front")
+        attacker.attacked_this_turn = True        # the rush replaces its attack
+        zone = attack_zone(layout, attacker, target)
+        needed = self.rules.to_hit_number(attacker, zone=zone)
+        dice_count = self.rules.attack_dice_count(target)
+        rolled = self.dice.total(dice_count)
+        hit, _multiplier, _dropped, _broke = self.rules.classify_roll(
+            rolled, dice_count, needed)
+        if not hit:
+            self.log.append(narrate_shield_rush(attacker, target, "miss"))
+            return "miss"
+        # Compare ORIGINAL ST (not the wounded current ST); a foe more than twice
+        # as strong simply isn't moved.
+        if target.strength > 2 * attacker.strength:
+            self.log.append(narrate_shield_rush(attacker, target, "no_effect"))
+            return "no_effect"
+        saving_dice = 3 if attacker.strength >= target.strength else 2
+        save_roll = self.dice.total(saving_dice)
+        auto_fall = ((saving_dice == 2 and save_roll == 12)
+                     or (saving_dice == 3 and save_roll >= 16))
+        if auto_fall or save_roll > target.base_adj_dx:
+            target.posture = Posture.PRONE
+            if target.in_hth:
+                self._clear_hth(target)           # a floored grappler loses its hold
+            self.log.append(narrate_shield_rush(attacker, target, "fall"))
+            return "fall"
+        self.log.append(narrate_shield_rush(attacker, target, "stand"))
+        return "stand"
 
     def _pole_charge_dice(self, attacker: Figure, target: Figure,
                           weapon, adjacent: bool) -> int:

@@ -574,6 +574,7 @@ def api_options(request, gid):
         "melee_targets": melee_targets,
         "missile_targets": missile_targets,
         "hth_targets": hth_targets,
+        "shield_rush_targets": [e.uid for e in state.shield_rush_targets(figure)],
         "pickups": [w.name for w in state.dropped_in_reach(figure)],
     })
 
@@ -671,6 +672,14 @@ def _dispatch(game: dict, body: dict):
         target = _figure(state, body.get("target", ""))
         attacker.current_option = Option.HTH_ATTACK
         state.hth_attack(attacker, target)
+        return None
+
+    if action == "shield_rush":
+        if game["phase"] != "combat":
+            raise IllegalAction("not the combat phase")
+        attacker = _figure(state, body.get("uid", ""))
+        target = _figure(state, body.get("target", ""))
+        state.shield_rush(attacker, target)
         return None
 
     if action == "hth_disengage":
