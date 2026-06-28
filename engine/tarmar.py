@@ -156,9 +156,11 @@ class TarmarRuleset(Ruleset):
     def resolve_attack(
         self, dice, attacker, target, *, zone, weapon=None,
         dice_count=1, ignore_facing=False, range_penalty=0,
-        situational=0, situational_note="", extra_dice=0,
+        situational=0, situational_note="", extra_dice=0, hth_damage=None,
     ) -> AttackResult:
         weapon = weapon or attacker.ready_weapon
+        if hth_damage is not None:
+            return self._resolve_hth(dice, attacker, target, zone, weapon, hth_damage)
         weapon_class = WEAPON_CLASS.get(weapon.name) if weapon else None
         if weapon_class is None:
             return AttackResult(
@@ -209,6 +211,26 @@ class TarmarRuleset(Ruleset):
                 attacker, weapon, weapon_class, tier, shield, target.dodging,
                 target_number, skill, zone, ignore_facing, range_penalty, bonus,
                 situational_note))
+
+    def _resolve_hth(self, dice, attacker, target, zone, weapon, hth_damage) -> AttackResult:
+        """A grapple strike under Tarmar — bare hands have no weapon class, so this
+        rolls d20 vs a flat grapple number with the DX and +4 rear adjustments,
+        then takes off the target's flat armour stops. (An approximation.)"""
+        target_number = 11
+        bonus = tarmar_rules.dex_modifier(attacker.base_adj_dx) + facing_bonus(zone)
+        die = dice.dn(20)
+        outcome = tarmar_rules.resolve_attack(die, target_number, bonus)
+        multiplier = 2 if outcome["critical"] else 1
+        raw_damage = damage = 0
+        if outcome["hit"]:
+            raw_damage = max(0, dice.total(hth_damage.count) + hth_damage.modifier) * multiplier
+            damage = max(0, raw_damage - target.hits_stopped(from_front=(zone == FRONT)))
+            target.pending_body_hit = outcome["critical"]
+        return AttackResult(
+            hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
+            multiplier=multiplier, raw_damage=raw_damage, damage=damage,
+            dropped_weapon=False, broke_weapon=False, weapon=weapon, zone=zone,
+            note=outcome["outcome"], to_hit_breakdown=f"grapple: d20 {bonus:+d} vs {target_number}")
 
     @staticmethod
     def _breakdown(attacker, weapon, weapon_class, tier, shield, defending,

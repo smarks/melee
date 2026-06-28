@@ -35,6 +35,7 @@ class Option(str, Enum):
     ONE_LAST_SHOT = "one_last_shot"  # (l) one last missile shot if it was ready
     CHANGE_WEAPONS = "change_weapons"  # (m) shift 1, swap to a non-missile weapon
     DISENGAGE = "disengage"          # (n) move away from engaging enemies
+    HTH_ATTACK = "hth_attack"        # (b/o) enter an enemy's hex, grapple hand-to-hand
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,8 @@ _SPECS: dict[Option, OptionSpec] = {
         Option.CHANGE_WEAPONS, ENGAGED, "one", False, False, False),
     Option.DISENGAGE: OptionSpec(
         Option.DISENGAGE, ENGAGED, "one", False, False, False),
+    Option.HTH_ATTACK: OptionSpec(
+        Option.HTH_ATTACK, ANY, "one", True, False, False),
 }
 
 

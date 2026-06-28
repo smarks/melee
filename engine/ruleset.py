@@ -143,6 +143,7 @@ class Ruleset:
         situational: int = 0,
         situational_note: str = "",
         extra_dice: int = 0,
+        hth_damage: object | None = None,
     ) -> AttackResult:
         """Roll one attack and return its result (no state is mutated).
 
@@ -158,7 +159,10 @@ class Ruleset:
 
         raw_damage = 0
         damage = 0
-        if hit and weapon is not None:
+        if hit and hth_damage is not None:      # grapple strike (dagger or bare hands)
+            raw_damage = max(0, dice.total(hth_damage.count) + hth_damage.modifier) * multiplier
+            damage = max(0, raw_damage - self.absorbed(target, zone=zone))
+        elif hit and weapon is not None:
             raw_damage = self.weapon_damage(dice, weapon, multiplier)
             if extra_dice:                      # pole weapon in/against a charge
                 raw_damage += dice.total(extra_dice)

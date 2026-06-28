@@ -13,6 +13,89 @@ from engine.state import GameState
 LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
+def _rear_grapple(defense_roll):
+    """An attacker poised behind a defender (rear = HTH-eligible), dice primed
+    with the defender's defense roll then plenty of 3s for any strike."""
+    from engine.rules_data import DAGGER
+    arena = Arena(cols=9, rows=15)
+    attacker = create_human("Atk", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    defender = create_human("Def", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    defender.position = Hex(5, 5)
+    defender.facing = 0                                  # back is toward direction 3
+    attacker.position = LAYOUT.neighbor(Hex(5, 5), 3)
+    attacker.facing = LAYOUT.direction_to(attacker.position, defender.position)
+    state = GameState(arena, [attacker, defender],
+                      dice=Dice(scripted=[defense_roll] + [3] * 12))
+    return state, attacker, defender
+
+
+def test_hth_grapple_takes_both_to_the_ground() -> None:
+    state, attacker, defender = _rear_grapple(2)
+    assert state.hth_attack(attacker, defender) == "grappled"
+    assert attacker.hth_opponent == defender.uid
+    assert defender.hth_opponent == attacker.uid
+    assert attacker.posture == Posture.PRONE and defender.posture == Posture.PRONE
+    assert attacker.position == defender.position        # sharing the hex
+    assert defender.ready_weapon is None                 # sword dropped, bare-handed
+
+
+def test_hth_defender_shrugs_off_on_a_five() -> None:
+    state, attacker, defender = _rear_grapple(5)
+    assert state.hth_attack(attacker, defender) == "shrugged"
+    assert attacker.hth_opponent is None and defender.hth_opponent is None
+    assert defender.ready_weapon is not None             # kept its weapon
+
+
+def test_hth_strike_uses_dagger_dice_at_plus_four() -> None:
+    state, attacker, defender = _rear_grapple(2)
+    state.hth_attack(attacker, defender)
+    result = state.resolve_combat()[0]
+    assert result.needed == attacker.base_adj_dx + 4     # the +4 'rear' grapple bonus
+    assert result.raw_damage == 5                        # dagger 1d+2, die scripted to 3
+
+
+def test_hth_free_hit_on_a_six() -> None:
+    from engine.rules_data import DAGGER, PLATE
+    arena = Arena(cols=9, rows=15)
+    attacker = create_human("Atk", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    # plate -> lower MA, so HTH is eligible from the front and a 6 is NOT ignored
+    defender = create_human("Def", 12, 12, "b", weapons=[SHORTSWORD],
+                            ready_weapon=SHORTSWORD, armor=PLATE)
+    defender.position = Hex(5, 5)
+    defender.facing = 3                                   # facing the attacker (front)
+    attacker.position = LAYOUT.neighbor(Hex(5, 5), 3)
+    attacker.facing = LAYOUT.direction_to(attacker.position, defender.position)
+    state = GameState(arena, [attacker, defender], dice=Dice(scripted=[6] + [3] * 12))
+    assert state.hth_attack(attacker, defender) == "free_hit"
+    assert attacker.hth_opponent is None                 # no grapple took hold
+
+
+def test_cannot_grapple_a_standing_equal_foe_from_the_front() -> None:
+    from engine.rules_data import DAGGER
+    arena = Arena(cols=9, rows=15)
+    attacker = create_human("Atk", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    defender = create_human("Def", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    defender.position = Hex(5, 5)
+    defender.facing = 3                                   # facing the attacker
+    attacker.position = LAYOUT.neighbor(Hex(5, 5), 3)
+    attacker.facing = LAYOUT.direction_to(attacker.position, defender.position)
+    state = GameState(arena, [attacker, defender])
+    assert defender not in state.hth_targets(attacker)   # standing, equal MA, frontal
+
+
+def test_hth_bare_handed_damage_scales_with_strength() -> None:
+    from engine.rules_data import DAGGER
+    arena = Arena(cols=9, rows=15)
+    strong = create_human("Strong", 15, 9, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    weak = create_human("Weak", 9, 15, "b", weapons=[DAGGER], ready_weapon=DAGGER)
+    state = GameState(arena, [strong, weak])
+    strong.ready_weapon = None                           # bare hands
+    weak.ready_weapon = None
+    assert state._hth_damage(strong, weak).modifier == -2   # vs a weaker foe
+    assert state._hth_damage(weak, strong).modifier == -4   # vs a stronger foe
+    assert state._hth_damage(strong, strong).modifier == -3  # vs an equal
+
+
 def _duel(dice=None):
     arena = Arena(cols=9, rows=15)
     a = create_human("A", 12, 12, "a", weapons=[BROADSWORD], ready_weapon=BROADSWORD)

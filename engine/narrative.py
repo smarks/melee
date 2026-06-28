@@ -125,6 +125,18 @@ def narrate_move(figure: Figure, option: Option, moved: bool,
     return _cap(f"{_name(figure)} {verb}{clause}.")
 
 
+def narrate_hth(attacker: Figure, target: Figure, kind: str) -> str | None:
+    """A hand-to-hand grapple beat (p.17): the grab, a shrug-off, or a free hit."""
+    if kind == "grapple":
+        return _cap(f"{_name(attacker)} drags {_name(target)} to the ground, grappling!")
+    if kind == "shrug":
+        return _cap(f"{_name(target)} shrugs off {_name(attacker)}'s grab and keeps its feet.")
+    if kind == "free_hit":
+        return _cap(f"{_name(target)} twists free and lands a blow as "
+                    f"{_name(attacker)} is thrown back!")
+    return None
+
+
 def narrate_victory(side: str) -> str:
     """The game-ending line: one side is the last left standing."""
     return f"🏆 The {side} hold the field — victory!"

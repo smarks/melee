@@ -123,24 +123,30 @@ def _do_end_turn(game: dict) -> None:
     game["combat_prepared"] = False
 
 
-def _attack_targets(state: GameState, figure) -> tuple[list, list]:
-    """``(melee_targets, missile_targets)`` ``figure`` could attack this combat phase.
+def _attack_targets(state: GameState, figure) -> tuple[list, list, list]:
+    """``(melee, missile, hth)`` uid lists ``figure`` could attack this combat phase.
 
     Based on where it stands and what weapon is ready — attacks are chosen in the
     combat phase, so no movement-time attack declaration is required. A figure
     that committed to defending (dodge/defend) does not attack.
     """
-    weapon = figure.ready_weapon
     if not (figure.can_act() and not figure.attacked_this_turn
-            and weapon is not None and figure.position is not None):
-        return [], []
+            and figure.position is not None):
+        return [], [], []
     option = figure.current_option
     if option is not None and spec(option).sets_dodge:
-        return [], []
+        return [], [], []
+    # Already grappling: the only attack is the hand-to-hand strike on that foe.
+    if figure.in_hth:
+        return [], [], [e.uid for e in state.hth_targets(figure)]
+    hth = [e.uid for e in state.hth_targets(figure)]   # foes it could grapple
+    weapon = figure.ready_weapon
+    if weapon is None:
+        return [], [], hth
     if weapon.kind == WeaponKind.MISSILE:
         if figure.missile_cooldown > 0:
-            return [], []                       # still reloading — can't fire
-        return [], [e.uid for e in state.enemies_of(figure) if e.position is not None]
+            return [], [], hth                  # still reloading — can't fire
+        return [], [e.uid for e in state.enemies_of(figure) if e.position is not None], hth
     melee = [e.uid for e in state.melee_targets(figure, weapon)]
     # A throwable weapon can be hurled at any foe out of melee reach (p.15);
     # those throw targets ride the missile slot so the UI treats them as ranged.
@@ -149,7 +155,7 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list]:
         in_reach = set(melee)
         throw = [e.uid for e in state.enemies_of(figure)
                  if e.position is not None and e.uid not in in_reach]
-    return melee, throw
+    return melee, throw, hth
 
 
 def _auto_facing(state: GameState, figure, final_hex, path=None):
@@ -195,8 +201,8 @@ def _human_has_attack_left(game: dict) -> bool:
     for figure in state.figures:
         if controllers.get(figure.side, "human") != "human":
             continue
-        melee, missile = _attack_targets(state, figure)
-        if melee or missile:
+        melee, missile, hth = _attack_targets(state, figure)
+        if melee or missile or hth:
             return True
     return False
 
@@ -446,12 +452,13 @@ def api_options(request, gid):
 
     # Attacks are chosen in the combat phase: targets depend on where the figure
     # stands and what it has ready, not on a movement-time declaration.
-    melee_targets, missile_targets = _attack_targets(state, figure)
+    melee_targets, missile_targets, hth_targets = _attack_targets(state, figure)
     return JsonResponse({
         "uid": uid,
         "options": options,
         "melee_targets": melee_targets,
         "missile_targets": missile_targets,
+        "hth_targets": hth_targets,
     })
 
 
@@ -537,6 +544,15 @@ def _dispatch(game: dict, body: dict):
         target = _figure(state, body.get("target", ""))
         _ensure_attack_option(state, attacker)
         state.queue_attack(attacker, target)
+        return None
+
+    if action == "queue_hth":
+        if game["phase"] != "combat":
+            raise IllegalAction("not the combat phase")
+        attacker = _figure(state, body.get("uid", ""))
+        target = _figure(state, body.get("target", ""))
+        attacker.current_option = Option.HTH_ATTACK
+        state.hth_attack(attacker, target)
         return None
 
     if action == "resolve_combat":
