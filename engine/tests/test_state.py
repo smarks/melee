@@ -402,7 +402,9 @@ def test_high_adjdx_bow_fires_twice() -> None:
     foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     archer.position = Hex(5, 5)
     foe.position = Hex(5, 9)
-    state = GameState(arena, [archer, foe])
+    # Scripted dice keep this deterministic: a random triple-damage first arrow
+    # could otherwise drop the foe and cancel the second shot.
+    state = GameState(arena, [archer, foe], dice=Dice(scripted=[3] * 16))
 
     archer.current_option = Option.MISSILE_ATTACK
     state.queue_attack(archer, foe)
