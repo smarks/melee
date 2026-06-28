@@ -369,24 +369,10 @@ def api_character_delete(request, pk):
     return JsonResponse({"ok": True})
 
 
-def _coerce_seed(raw) -> int | None:
-    """Parse a client-supplied RNG seed; ``None``/blank means 'pick randomly'.
-
-    A non-integer seed is bad client input, so it surfaces as an
-    :class:`IllegalAction` (a clean 400) rather than an uncaught 500.
-    """
-    if raw is None or raw == "":
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError) as exc:
-        raise IllegalAction(f"seed must be an integer, got {raw!r}") from exc
-
-
 def _start_game(arena, figures, profile, computer_sides, seed) -> dict:
     """Register a new game and return its initial payload (shared entry point)."""
-    parsed_seed = _coerce_seed(seed)
-    dice = Dice(seed=parsed_seed) if parsed_seed is not None else Dice()
+    seed_value = _seed_int(seed)
+    dice = Dice(seed=seed_value) if seed_value is not None else Dice()
     state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset)
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
@@ -416,6 +402,26 @@ def _int_param(request, name: str) -> int:
         return 0
 
 
+def _seed_int(seed) -> int | None:
+    """Parse an optional RNG seed; missing or non-numeric -> None (random dice)."""
+    if seed in (None, ""):
+        return None
+    try:
+        return int(seed)
+    except (TypeError, ValueError):
+        return None
+
+
+def _option(body: dict) -> Option:
+    """Coerce the client's option to an Option — a clean 400 (IllegalAction) on a
+    missing or unknown value, rather than an uncaught KeyError/ValueError -> 500."""
+    raw = body.get("option")
+    try:
+        return Option(raw)
+    except ValueError:
+        raise IllegalAction(f"unknown option {raw!r}")
+
+
 def api_new_game(request):
     profile = PROFILES.get(request.GET.get("profile", ""), PROFILES["Classic Melee"])
     teams = _int_param(request, "teams")
@@ -432,12 +438,8 @@ def api_new_game(request):
     else:
         arena, figures = scenario.skirmish_for(profile.name)
         computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
-    try:
-        return JsonResponse(
-            _start_game(arena, figures, profile, computer_sides,
-                        request.GET.get("seed")))
-    except IllegalAction as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse(
+        _start_game(arena, figures, profile, computer_sides, request.GET.get("seed")))
 
 
 def api_catalog(request):
@@ -521,11 +523,8 @@ def api_new_custom(request):
             profile.name, body.get("fighters", []))
     except (ValueError, KeyError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
-    try:
-        return JsonResponse(
-            _start_game(arena, figures, profile, computer_sides, body.get("seed")))
-    except IllegalAction as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
+    return JsonResponse(
+        _start_game(arena, figures, profile, computer_sides, body.get("seed")))
 
 
 def api_state(request, gid):
@@ -604,22 +603,6 @@ def api_action(request, gid):
     return JsonResponse(payload)
 
 
-def _parse_option(body: dict) -> Option:
-    """Coerce the client's ``option`` field into an :class:`Option`.
-
-    A missing key or an unrecognised value is bad client input, so it surfaces
-    as an :class:`IllegalAction` (mapped to a 400) rather than an uncaught 500.
-    """
-    try:
-        raw = body["option"]
-    except KeyError as exc:
-        raise IllegalAction("missing 'option'") from exc
-    try:
-        return Option(raw)
-    except ValueError as exc:
-        raise IllegalAction(f"unknown option {raw!r}") from exc
-
-
 def _dispatch(game: dict, body: dict):
     state: GameState = game["state"]
     action = body.get("type")
@@ -632,6 +615,8 @@ def _dispatch(game: dict, body: dict):
         return outcome
 
     if action == "choose_first":
+        if game["phase"] != "initiative":
+            raise IllegalAction("not the initiative phase")
         side = body.get("side")
         state.choose_first(side)
         game["order"] = state.move_order()
@@ -646,7 +631,7 @@ def _dispatch(game: dict, body: dict):
         moving_side = game["order"][game["moving"]]
         if figure.side != moving_side:
             raise IllegalAction(f"it is {moving_side}'s turn to move")
-        option = _parse_option(body)
+        option = _option(body)
         facing = body.get("facing")
         dest = body.get("dest")
         path = []
@@ -708,6 +693,8 @@ def _dispatch(game: dict, body: dict):
         ]
 
     if action == "force_retreat":
+        if game["phase"] != "combat":
+            raise IllegalAction("not the combat phase")
         attacker = _figure(state, body.get("uid", ""))
         target = _figure(state, body.get("target", ""))
         state.force_retreat(attacker, target, advance=bool(body.get("advance")))

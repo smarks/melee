@@ -167,18 +167,20 @@ class GameState:
         if figure.posture != Posture.STANDING:
             return [Option.STAND_UP]
         weapon = figure.ready_weapon
-        can_fire = (weapon is not None and weapon.kind == WeaponKind.MISSILE
-                    and figure.missile_cooldown == 0)
+        has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+        can_fire = has_missile and figure.missile_cooldown == 0
         legal: list[Option] = []
         for option in options_for(engaged=self.engaged(figure)):
+            option_spec = spec(option)
             if option == Option.STAND_UP:
                 continue                       # already standing — nothing to do
-            if spec(option).is_missile and not can_fire:
+            if option_spec.is_missile and not can_fire:
                 continue                       # no missile ready, or still reloading
+            if option_spec.is_attack and not option_spec.is_missile and has_missile:
+                continue                       # a readied missile has no melee blow
             if option == Option.PICK_UP and not self.dropped_in_reach(figure):
                 continue                       # nothing on the ground within reach
-            if option in (Option.GO_PRONE, Option.KNEEL) and not (
-                    weapon is not None and weapon.kind == WeaponKind.MISSILE):
+            if option in (Option.GO_PRONE, Option.KNEEL) and not has_missile:
                 continue                       # dropping to fire is a missile move (f)
             legal.append(option)
         return legal
@@ -785,13 +787,22 @@ class GameState:
                 continue
             # A high-adjDX bow looses two arrows; don't waste the second on a
             # foe the first already dropped.
+            # Recompute the facing zone against the target's CURRENT posture and
+            # facing: an earlier attacker this phase may have knocked the target
+            # prone (so it now has no front, scoring the +4 rear adjustment) or
+            # turned it. The zone captured at declaration time would be stale.
+            # Missile/thrown attacks (ignore_facing) and HTH grapples (forced to
+            # REAR, hth_damage set) keep their declared zone.
+            zone = pending.zone
+            if not pending.ignore_facing and pending.hth_damage is None:
+                zone = attack_zone(self.arena.layout, attacker, pending.target)
             for shot in range(max(1, pending.shots)):
                 if shot > 0 and (not attacker.can_act()
                                  or pending.target.is_dead or pending.target.collapsed):
                     break
                 result = self.rules.resolve_attack(
                     self.dice, attacker, pending.target,
-                    zone=pending.zone,
+                    zone=zone,
                     dice_count=self.rules.attack_dice_count(pending.target),
                     ignore_facing=pending.ignore_facing,
                     range_penalty=pending.range_penalty,
@@ -839,7 +850,7 @@ class GameState:
             self.log.append(narrate_attack(attacker, target, result))
         if not result.hit:
             return
-        self.rules.apply_damage(target, result.damage)
+        self.rules.apply_damage(target, result.damage, body_hit=result.body_hit)
         if result.damage > 0:
             attacker.dealt_st_damage_this_turn = True
         status = self.rules.status_after_hit(target)

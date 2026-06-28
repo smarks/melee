@@ -447,7 +447,9 @@ def test_crossbow_must_reload_between_shots() -> None:
     foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     shooter.position = Hex(5, 5)
     foe.position = Hex(5, 9)                      # well apart — a missile shot
-    state = GameState(arena, [shooter, foe])
+    # Scripted dice keep this deterministic — an unseeded natural-16+ fumble would
+    # drop the crossbow and change legal_options out from under the assertions.
+    state = GameState(arena, [shooter, foe], dice=Dice(scripted=[3] * 12))
 
     shooter.current_option = Option.MISSILE_ATTACK
     state.queue_attack(shooter, foe)
@@ -593,3 +595,88 @@ def test_one_attack_per_turn_rejects_a_second_declaration() -> None:
         raise AssertionError("re-attacking after resolving should raise IllegalAction")
     except IllegalAction:
         pass
+
+
+def test_missile_armed_figure_is_not_offered_melee_attacks() -> None:
+    """A readied missile weapon can make only missile attacks; legal_options must
+    not dangle melee/charge/HTH options that queue_attack would reject (#79)."""
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 12, 12, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    swordsman = create_human("Sword", 12, 12, "b",
+                             weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    archer.position = Hex(2, 2)
+    swordsman.position = Hex(7, 12)                       # far apart -> both disengaged
+    state = GameState(arena, [archer, swordsman])
+
+    archer_options = state.legal_options(archer)
+    assert Option.MISSILE_ATTACK in archer_options       # the shot it can make
+    assert Option.CHARGE_ATTACK not in archer_options    # not a melee charge
+    assert Option.HTH_ATTACK not in archer_options       # not a grapple
+
+    sword_options = state.legal_options(swordsman)
+    assert Option.CHARGE_ATTACK in sword_options         # melee still offered
+    assert Option.MISSILE_ATTACK not in sword_options    # no missile to fire
+
+
+def test_engaged_missile_holder_is_not_offered_a_shift_attack() -> None:
+    """Engaged with a bow ready: a last shot is allowed, a melee shift is not (#79)."""
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 12, 12, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    foe = create_human("Foe", 12, 12, "b",
+                       weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe.position = Hex(5, 5)
+    foe.facing = 0
+    archer.position = LAYOUT.neighbor(Hex(5, 5), 0)      # in foe's front -> engaged
+    archer.facing = LAYOUT.direction_to(archer.position, foe.position)
+    state = GameState(arena, [archer, foe])
+    assert state.engaged(archer)
+    options = state.legal_options(archer)
+    assert Option.SHIFT_ATTACK not in options            # can't melee with a bow
+    assert Option.ONE_LAST_SHOT in options               # may loose a parting shot
+
+
+def test_attack_zone_recomputed_when_target_knocked_prone_mid_phase() -> None:
+    """A target knocked prone earlier in the same combat phase has no front, so a
+    later melee blow lands as a +4 rear strike. The zone must be recomputed at
+    resolution, not frozen at declaration time (#80)."""
+    from engine.facing import FRONT
+    arena = Arena(cols=9, rows=15)
+    attacker = create_human("Atk", 12, 12, "a",
+                            weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    target = create_human("Def", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    target.position = Hex(5, 5)
+    target.facing = 0
+    attacker.position = LAYOUT.neighbor(Hex(5, 5), 0)    # in the target's front
+    attacker.facing = LAYOUT.direction_to(attacker.position, target.position)
+    state = GameState(arena, [attacker, target], dice=Dice(scripted=[3] * 12))
+    attacker.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(attacker, target)
+    assert state._pending[0].zone == FRONT               # declared while target stood
+    target.posture = Posture.PRONE                       # an earlier attacker fells it
+    result = state.resolve_combat()[0]
+    assert "+4 rear" in result.to_hit_breakdown          # recomputed: prone == rear
+
+
+def test_missile_shot_gains_no_rear_bonus_when_target_falls_mid_phase() -> None:
+    """A missile shot never takes a facing bonus (ignore_facing); knocking the
+    target prone mid-phase must not retroactively grant +4 rear (#80)."""
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 12, 12, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    target = create_human("Foe", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(5, 5)
+    archer.facing = 0
+    target.position = Hex(5, 9)
+    state = GameState(arena, [archer, target], dice=Dice(scripted=[3] * 12))
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, target)
+    target.posture = Posture.PRONE                       # felled before the arrow lands
+    result = state.resolve_combat()[0]
+    assert "rear" not in result.to_hit_breakdown         # missiles never get facing
