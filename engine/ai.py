@@ -68,17 +68,25 @@ def take_movement(state: GameState, side: str) -> None:
 
         weapon = figure.ready_weapon
         has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+        can_fire = has_missile and figure.missile_cooldown == 0
         facing = _facing_toward(layout, figure.position, target.position)
 
         if state.engaged(figure):
-            # Stay in contact and attack (one last shot if stuck with a bow).
-            option = Option.ONE_LAST_SHOT if has_missile else Option.SHIFT_ATTACK
+            # Stay in contact and attack (one last shot if a loaded bow is stuck).
+            option = (Option.ONE_LAST_SHOT if can_fire
+                      else Option.SHIFT_ATTACK if not has_missile
+                      else Option.SHIFT_DEFEND)   # reloading in melee: keep guard up
             state.move(figure, option, facing=facing)
             continue
 
-        if has_missile:
+        if can_fire:
             # Hold position and fire down the lane.
             state.move(figure, Option.MISSILE_ATTACK, facing=facing)
+            continue
+
+        if has_missile:
+            # Reloading: hold and face the enemy; the weapon reloads automatically.
+            state.move(figure, Option.MOVE, facing=facing)
             continue
 
         # Melee: charge into contact if reachable this turn, else close distance.
@@ -115,6 +123,8 @@ def queue_attacks(state: GameState, side: str) -> None:
             continue
         enemies = [e for e in state.enemies_of(figure) if e.position is not None]
         if weapon.kind == WeaponKind.MISSILE:
+            if figure.missile_cooldown > 0:
+                continue                        # still reloading
             candidates = enemies
         else:
             fronts = set(front_hexes(layout, figure))

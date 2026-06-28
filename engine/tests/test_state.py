@@ -33,6 +33,33 @@ def test_initiative_winner_chooses_order() -> None:
     assert state.move_order() == ["b", "a"]
 
 
+def test_crossbow_must_reload_between_shots() -> None:
+    from engine.rules_data import LIGHT_CROSSBOW, missile_reload_turns
+
+    # the reload rule itself (p.16): a turn to reload, instant at adjDX 14+
+    assert missile_reload_turns(LIGHT_CROSSBOW, 12) == 1
+    assert missile_reload_turns(LIGHT_CROSSBOW, 14) == 0
+
+    arena = Arena(cols=9, rows=15)
+    shooter = create_human("Bowman", 12, 12, "a",
+                           weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    shooter.position = Hex(5, 5)
+    foe.position = Hex(5, 9)                      # well apart — a missile shot
+    state = GameState(arena, [shooter, foe])
+
+    shooter.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(shooter, foe)
+    state.resolve_combat()
+    assert shooter.missile_cooldown > 0
+    assert Option.MISSILE_ATTACK not in state.legal_options(shooter)   # reloading
+    state.end_turn()
+    assert Option.MISSILE_ATTACK not in state.legal_options(shooter)   # still reloading
+    while shooter.missile_cooldown > 0:
+        state.end_turn()
+    assert Option.MISSILE_ATTACK in state.legal_options(shooter)       # loaded again
+
+
 def test_victory_is_logged_once_one_side_is_left_standing() -> None:
     state, a, b = _duel()
     b.damage_taken = b.strength + 5          # blue is down
