@@ -504,3 +504,27 @@ def test_new_custom_multi_team_one_ai(client: Client) -> None:
     ctrl = out["state"]["controllers"]
     assert ctrl["green"] == "computer"
     assert ctrl["red"] == "human" and ctrl["blue"] == "human"
+
+
+def test_choose_first_is_rejected_outside_the_initiative_phase(client: Client) -> None:
+    """choose_first must guard its phase like every sibling action (#79)."""
+    data = _new(client)
+    gid = data["gid"]
+    _post(client, gid, {"type": "roll_initiative"})
+    moved = _post(client, gid, {"type": "choose_first", "side": "red"})
+    assert moved["state"]["phase"] == "move"             # now past initiative
+    again = _post(client, gid, {"type": "choose_first", "side": "blue"})
+    assert again["error"] == "not the initiative phase"
+
+
+def test_force_retreat_is_rejected_outside_the_combat_phase(client: Client) -> None:
+    """force_retreat must guard its phase like every sibling action (#79)."""
+    data = _new(client)
+    gid = data["gid"]
+    figures = data["state"]["figures"]
+    red = next(f for f in figures if f["side"] == "red")
+    blue = next(f for f in figures if f["side"] == "blue")
+    out = _post(client, gid, {                           # still in the initiative phase
+        "type": "force_retreat", "uid": red["uid"], "target": blue["uid"],
+    })
+    assert out["error"] == "not the combat phase"

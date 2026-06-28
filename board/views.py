@@ -506,6 +506,8 @@ def _dispatch(game: dict, body: dict):
         return outcome
 
     if action == "choose_first":
+        if game["phase"] != "initiative":
+            raise IllegalAction("not the initiative phase")
         side = body.get("side")
         state.choose_first(side)
         game["order"] = state.move_order()
@@ -582,6 +584,8 @@ def _dispatch(game: dict, body: dict):
         ]
 
     if action == "force_retreat":
+        if game["phase"] != "combat":
+            raise IllegalAction("not the combat phase")
         attacker = _figure(state, body.get("uid", ""))
         target = _figure(state, body.get("target", ""))
         state.force_retreat(attacker, target, advance=bool(body.get("advance")))
