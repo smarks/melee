@@ -33,6 +33,41 @@ def test_initiative_winner_chooses_order() -> None:
     assert state.move_order() == ["b", "a"]
 
 
+def test_main_gauche_parry_rules() -> None:
+    from engine.facing import FRONT, SIDE
+    from engine.ruleset import main_gauche_parry
+    from engine.rules_data import BROADSWORD, MAIN_GAUCHE, RAPIER, TWO_HANDED_SWORD
+
+    duelist = create_human("Duelist", 12, 12, "b",
+                           weapons=[RAPIER, MAIN_GAUCHE], ready_weapon=RAPIER)
+    assert main_gauche_parry(duelist, BROADSWORD, FRONT) == 1     # frontal 1-handed
+    assert main_gauche_parry(duelist, BROADSWORD, SIDE) == 0      # only from the front
+    assert main_gauche_parry(duelist, TWO_HANDED_SWORD, FRONT) == 0  # not vs two-handed
+
+    plain = create_human("Plain", 12, 12, "b", weapons=[RAPIER], ready_weapon=RAPIER)
+    assert main_gauche_parry(plain, BROADSWORD, FRONT) == 0       # carries no main-gauche
+
+
+def test_main_gauche_turns_aside_a_hit_in_combat() -> None:
+    from engine.rules_data import BROADSWORD, MAIN_GAUCHE, RAPIER
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    attacker = create_human("Atk", 13, 11, "a", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    duelist = create_human("Duel", 12, 12, "b",
+                           weapons=[RAPIER, MAIN_GAUCHE], ready_weapon=RAPIER)
+    attacker.position = Hex(5, 5)
+    duelist.position = layout.neighbor(Hex(5, 5), 0)
+    attacker.facing = layout.direction_to(attacker.position, duelist.position)
+    duelist.facing = layout.direction_to(duelist.position, attacker.position)  # front
+    state = GameState(arena, [attacker, duelist], dice=Dice(scripted=[3, 3, 3, 4, 4]))
+
+    attacker.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(attacker, duelist)
+    result = state.resolve_combat()[0]
+    assert result.hit and result.raw_damage - result.damage == 1   # the parry stops one
+
+
 def test_throwing_a_weapon_hurls_it_and_takes_a_range_penalty() -> None:
     from engine.rules_data import DAGGER, JAVELIN, SHORTSWORD, THROWN_ROCK
 
