@@ -555,6 +555,12 @@ def _dispatch(game: dict, body: dict):
         state.hth_attack(attacker, target)
         return None
 
+    if action == "hth_disengage":
+        if game["phase"] != "combat":
+            raise IllegalAction("not the combat phase")
+        state.attempt_hth_disengage(_figure(state, body.get("uid", "")))
+        return None
+
     if action == "resolve_combat":
         if game["phase"] != "combat":
             raise IllegalAction("not the combat phase")

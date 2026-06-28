@@ -501,6 +501,8 @@ function openMenu(f) {
       const e = figByUid(uid);
       rows.push({label: `🤼 Grapple ${e ? e.name : uid}`, act: () => setHth(f, uid)});
     }
+    if ((f.hth_opponents || []).length)
+      rows.push({label: "💨 Break free (roll)", act: () => setDisengage(f)});
     rows.push({label: "Do nothing", act: () => setDoNothing(f)});
   } else return;
   const menu = $("tokenMenu");
@@ -537,6 +539,10 @@ function setHth(f, target) {
                  label: `🤼 Grapple ${e ? e.name : target}`};
   render();
 }
+function setDisengage(f) {
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", disengage: true, label: "💨 Break free"};
+  render();
+}
 function setAttack(f, target) {
   const e = figByUid(target);
   PLAN[f.uid] = {uid: f.uid, phase: "combat", target, label: `Attack ${e ? e.name : target}`};
@@ -562,9 +568,11 @@ async function executePlans(kind) {
                  facing: p.facing, ready: p.ready || null});
     resetAll(); await act({type: "end_side_move"}); after();
   } else {
-    for (const p of plans)
-      if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
-                               uid: p.uid, target: p.target});
+    for (const p of plans) {
+      if (p.disengage) await act({type: "hth_disengage", uid: p.uid});
+      else if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
+                                    uid: p.uid, target: p.target});
+    }
     resetAll(); await act({type: "resolve_combat"}); render();
   }
 }

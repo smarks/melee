@@ -69,6 +69,19 @@ def test_multiple_hth_gang_up_joins_without_rolling_and_scales_dice() -> None:
     assert state._hth_damage(defender, a1).modifier == -4   # lone, outmuscled 9 vs 24
 
 
+def test_hth_disengage_breaks_free_on_a_good_roll() -> None:
+    state, attacker, defender = _rear_grapple(2)
+    state.hth_attack(attacker, defender)
+    assert attacker.in_hth
+    state.dice = Dice(scripted=[5])                       # equal DX -> needs a 1
+    assert state.attempt_hth_disengage(attacker) is False
+    assert attacker.in_hth                                # still pinned
+    state.dice = Dice(scripted=[1])
+    assert state.attempt_hth_disengage(attacker) is True
+    assert not attacker.in_hth and attacker.posture == Posture.STANDING
+    assert defender.hth_opponents == []                  # link cleared both ways
+
+
 def test_hth_strike_uses_dagger_dice_at_plus_four() -> None:
     state, attacker, defender = _rear_grapple(2)
     state.hth_attack(attacker, defender)

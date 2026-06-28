@@ -139,6 +139,13 @@ def narrate_hth(attacker: Figure, target: Figure, kind: str) -> str | None:
     return None
 
 
+def narrate_hth_disengage(figure: Figure, broke_free: bool) -> str:
+    """A figure's attempt to wrench free of a grapple (p.19)."""
+    if broke_free:
+        return _cap(f"{_name(figure)} wrenches free of the grapple and scrambles up!")
+    return _cap(f"{_name(figure)} struggles to break free, but can't.")
+
+
 def narrate_victory(side: str) -> str:
     """The game-ending line: one side is the last left standing."""
     return f"🏆 The {side} hold the field — victory!"
