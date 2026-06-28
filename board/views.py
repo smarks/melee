@@ -436,18 +436,24 @@ def api_options(request, gid):
     except IllegalAction as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
+    # The full candidate option set for this phase: available ones carry their
+    # reachable hexes; unavailable ones are surfaced with a reason so the client
+    # can show them disabled rather than hiding them (issue #73).
     options = []
-    for option in state.legal_options(figure):
+    for option, reason in state.option_availability(figure):
         option_spec = spec(option)
+        available = reason is None
         reach = [
             label_of(h.col, h.row)
             for h in state.reach_for(figure, option).reachable_hexes()
-        ]
+        ] if available else []
         options.append({
             "option": option.value,
             "is_attack": option_spec.is_attack,
             "is_missile": option_spec.is_missile,
             "reach": reach,
+            "available": available,
+            "reason": reason,
         })
 
     # Attacks are chosen in the combat phase: targets depend on where the figure
