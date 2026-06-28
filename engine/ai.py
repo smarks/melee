@@ -58,6 +58,8 @@ def take_movement(state: GameState, side: str) -> None:
     """Play the movement phase for every figure on ``side``."""
     layout = state.arena.layout
     for figure in [f for f in state.figures if f.side == side and f.can_act()]:
+        if figure.in_hth:
+            continue                     # grappling on the ground; it fights in combat
         if figure.posture != Posture.STANDING:
             state.move(figure, Option.STAND_UP)
             continue
@@ -114,6 +116,13 @@ def queue_attacks(state: GameState, side: str) -> None:
     """Declare attacks for every figure on ``side`` that chose an attack option."""
     layout = state.arena.layout
     for figure in [f for f in state.figures if f.side == side and f.can_act()]:
+        if figure.in_hth:                    # locked in a grapple: keep wrestling
+            foe = next((f for f in state.figures
+                        if f.uid == figure.hth_opponent), None)
+            if foe is not None and foe.can_act():
+                figure.current_option = Option.HTH_ATTACK
+                state.hth_attack(figure, foe)
+            continue
         option = figure.current_option
         if option is None or not spec(option).is_attack:
             continue

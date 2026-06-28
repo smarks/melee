@@ -317,6 +317,12 @@ function drawArena() {
     if (f.dodging) cls += " dodge";
     g.setAttribute("class", cls);
 
+    // Grapplers share one hex — nudge the pair apart so both stay visible.
+    if (f.hth_opponent) {
+      const dir = (f.uid < f.hth_opponent) ? -1 : 1, d = LAYOUT.size * 0.34;
+      g.setAttribute("transform", `translate(${dir * d},${dir * d})`);
+    }
+
     const tip = document.createElementNS(SVG, "title");   // native hover tooltip
     tip.textContent = `${f.name} (${f.side})`;
     g.appendChild(tip);
@@ -386,7 +392,7 @@ function validTargets() {
   if (!f) return [];
   const w = f.weapon;
   // attacker must have chosen an attack option (reflected in optInfo at move time)
-  return optInfo._targets || [];
+  return [...(optInfo._targets || []), ...(optInfo.hth_targets || [])];
 }
 
 // ---- controls ---------------------------------------------------------------
@@ -489,6 +495,10 @@ function openMenu(f) {
       const e = figByUid(uid);
       rows.push({label: `Attack ${e ? e.name : uid}`, act: () => setAttack(f, uid)});
     }
+    for (const uid of (optInfo.hth_targets || [])) {
+      const e = figByUid(uid);
+      rows.push({label: `🤼 Grapple ${e ? e.name : uid}`, act: () => setHth(f, uid)});
+    }
     rows.push({label: "Do nothing", act: () => setDoNothing(f)});
   } else return;
   const menu = $("tokenMenu");
@@ -519,6 +529,12 @@ function chooseMoveOption(f, option) {
     PLAN[f.uid] = plan; chosenOption = null; render();
   }
 }
+function setHth(f, target) {
+  const e = figByUid(target);
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", target, hth: true,
+                 label: `🤼 Grapple ${e ? e.name : target}`};
+  render();
+}
 function setAttack(f, target) {
   const e = figByUid(target);
   PLAN[f.uid] = {uid: f.uid, phase: "combat", target, label: `Attack ${e ? e.name : target}`};
@@ -545,7 +561,8 @@ async function executePlans(kind) {
     resetAll(); await act({type: "end_side_move"}); after();
   } else {
     for (const p of plans)
-      if (p.target) await act({type: "queue_attack", uid: p.uid, target: p.target});
+      if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
+                               uid: p.uid, target: p.target});
     resetAll(); await act({type: "resolve_combat"}); render();
   }
 }
@@ -624,7 +641,8 @@ function statusHeader(f) {
     (f.model === "tarmar"
       ? `<div class="muted">Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · adjDX ${f.dx}</div>`
       : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx}</div>`) +
-    `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}</div>` +
+    `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}` +
+    `${f.hth_opponent ? " · 🤼 grappling" : ""}</div>` +
     weaponsLine(f);
 }
 
