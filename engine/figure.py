@@ -98,6 +98,9 @@ class Figure:
                 )
         if self.ready_weapon is not None and self.ready_weapon not in self.weapons:
             self.weapons.append(self.ready_weapon)
+        # A two-handed ready weapon leaves no hand for a shield (Section III).
+        if self.ready_weapon is not None and self.ready_weapon.two_handed:
+            self.shield_ready = False
 
     # ---- derived combat numbers ----
     @property

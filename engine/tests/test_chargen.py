@@ -78,6 +78,20 @@ def test_build_rejects_an_illegal_fighter():
         chargen.build("Classic Melee", _melee(strength=20, dexterity=12))  # 32 != 24
 
 
+def test_missing_side_is_a_validation_error_not_a_keyerror():
+    spec = _melee()
+    del spec["side"]
+    assert any("side is required" in p for p in chargen.validate("Classic Melee", spec))
+    with pytest.raises(ValueError):
+        chargen.build("Classic Melee", spec)
+
+
+def test_same_weapon_as_both_primary_and_second_keeps_its_skill():
+    fighter = chargen.build("Tarmar", _tarmar(
+        weapon="Broadsword", weapon2="Broadsword", skill=3, skill2=0))
+    assert fighter.weapon_skill["Broadsword"] == 3  # primary skill not clobbered
+
+
 def test_a_fighter_carries_two_weapons_plus_a_dagger():
     fighter = chargen.build("Classic Melee", _melee(weapon="Broadsword", weapon2="Mace"))
     names = [w.name for w in fighter.weapons]
