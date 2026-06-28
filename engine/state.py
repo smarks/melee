@@ -850,7 +850,7 @@ class GameState:
             self.log.append(narrate_attack(attacker, target, result))
         if not result.hit:
             return
-        self.rules.apply_damage(target, result.damage)
+        self.rules.apply_damage(target, result.damage, body_hit=result.body_hit)
         if result.damage > 0:
             attacker.dealt_st_damage_this_turn = True
         status = self.rules.status_after_hit(target)

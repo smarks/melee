@@ -194,9 +194,16 @@ class Ruleset:
         )
 
     # ---- injury / status ----------------------------------------------------
-    def apply_damage(self, target: Figure, amount: int) -> None:
+    def apply_damage(
+        self, target: Figure, amount: int, *, body_hit: bool = False
+    ) -> None:
         """Subtract a hit's damage from the target. Override to change how hits
-        accrue (e.g. damage to a hit-location instead of ST)."""
+        accrue (e.g. damage to a hit-location instead of ST).
+
+        ``body_hit`` flags a crit that also reaches a deeper pool (used by
+        Tarmar's Fatigue/Body model); classic Melee has a single pool and
+        ignores it.
+        """
         target.damage_taken += amount
         target.hits_this_turn += amount
 
