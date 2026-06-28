@@ -29,6 +29,27 @@ def _rear_grapple(defense_roll):
     return state, attacker, defender
 
 
+def test_thrown_weapon_strikes_a_figure_in_its_flight_path() -> None:
+    from engine.rules_data import DAGGER, JAVELIN, SHORTSWORD
+    arena = Arena(cols=9, rows=15)
+    thrower = create_human("Thrower", 11, 13, "a",
+                           weapons=[JAVELIN, DAGGER], ready_weapon=JAVELIN)
+    target = create_human("Target", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    blocker = create_human("Blocker", 12, 12, "c", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    thrower.position = Hex(5, 5)
+    blocker.position = Hex(5, 6)                          # standing in the way
+    target.position = Hex(5, 8)
+    # roll-to-miss the blocker needs <= adjDX(13) - 1; a scripted 18 fails -> it hits
+    state = GameState(arena, [thrower, target, blocker],
+                      dice=Dice(scripted=[6, 6, 6] + [3] * 12))
+    thrower.current_option = Option.CHARGE_ATTACK
+    state.queue_attack(thrower, target)
+    state.resolve_combat()
+    assert blocker.damage_taken > 0                       # the bystander took it
+    assert target.damage_taken == 0                       # the intended target is untouched
+    assert "Javelin" in [w.name for _, w in state.dropped]  # the javelin lies where it fell
+
+
 def test_drop_and_pick_up_a_weapon() -> None:
     from engine.rules_data import BROADSWORD, DAGGER
     arena = Arena(cols=9, rows=15)

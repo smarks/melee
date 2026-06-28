@@ -157,6 +157,7 @@ class TarmarRuleset(Ruleset):
         self, dice, attacker, target, *, zone, weapon=None,
         dice_count=1, ignore_facing=False, range_penalty=0,
         situational=0, situational_note="", extra_dice=0, hth_damage=None,
+        force_hit=False,
     ) -> AttackResult:
         weapon = weapon or attacker.ready_weapon
         if hth_damage is not None:
@@ -188,6 +189,8 @@ class TarmarRuleset(Ruleset):
 
         die = dice.dn(20)
         outcome = tarmar_rules.resolve_attack(die, target_number, bonus)
+        if force_hit:                                    # flight already decided a hit
+            outcome = {**outcome, "hit": True, "critical": False, "outcome": "hit"}
         multiplier = 2 if outcome["critical"] else 1   # crit = double dice (deferred: confirm->triple)
 
         raw_damage = damage = 0

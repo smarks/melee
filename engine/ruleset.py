@@ -144,10 +144,13 @@ class Ruleset:
         situational_note: str = "",
         extra_dice: int = 0,
         hth_damage: object | None = None,
+        force_hit: bool = False,
     ) -> AttackResult:
         """Roll one attack and return its result (no state is mutated).
 
         Composed from the hooks above so a subclass can change any single step.
+        ``force_hit`` skips the to-hit roll (the hit is already decided, e.g. a
+        thrown weapon that struck a figure in its flight path).
         """
         weapon = weapon or attacker.ready_weapon
         needed = self.to_hit_number(
@@ -155,7 +158,10 @@ class Ruleset:
             range_penalty=range_penalty, situational=situational,
         )
         rolled = dice.total(dice_count)
-        hit, multiplier, dropped, broke = self.classify_roll(rolled, dice_count, needed)
+        if force_hit:
+            hit, multiplier, dropped, broke = True, 1, False, False
+        else:
+            hit, multiplier, dropped, broke = self.classify_roll(rolled, dice_count, needed)
 
         raw_damage = 0
         damage = 0
