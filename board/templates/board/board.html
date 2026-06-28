@@ -1108,8 +1108,8 @@ async function openEditor() {
 }
 function closeEditor() { $("editor").style.display = "none"; }
 
-function loadOptions() {
-  return `<option value="">Load saved…</option>`
+function savedCharacterOptions() {   // was loadOptions — collided with the game
+  return `<option value="">Load saved…</option>`   // options fetch (issue #115)
     + SAVED.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
 }
 function applySpecToCard(card, spec) {        // fill a card from a saved spec (keep its team)
@@ -1126,7 +1126,7 @@ async function saveCharacter(card) {
   const idx = SAVED.findIndex(c => c.id === data.id);
   if (idx >= 0) SAVED[idx] = data; else SAVED.push(data);
   $("editorErr").textContent = `Saved “${data.name}”.`;
-  $("editorRoster").querySelectorAll("select.loadsel").forEach(s => s.innerHTML = loadOptions());
+  $("editorRoster").querySelectorAll("select.loadsel").forEach(s => s.innerHTML = savedCharacterOptions());
 }
 
 function optionTags(list, chosen) {
@@ -1167,7 +1167,7 @@ function fighterCard(f, side_i) {
     card.appendChild(save);
     const load = document.createElement("select");
     load.className = "loadsel";
-    load.innerHTML = loadOptions();
+    load.innerHTML = savedCharacterOptions();
     load.addEventListener("change", () => {
       const c = SAVED.find(x => String(x.id) === load.value);
       if (c) applySpecToCard(card, c.spec);
