@@ -33,6 +33,48 @@ def test_initiative_winner_chooses_order() -> None:
     assert state.move_order() == ["b", "a"]
 
 
+def test_high_adjdx_bow_fires_twice() -> None:
+    from engine.rules_data import SMALL_BOW, max_missile_shots
+
+    assert max_missile_shots(SMALL_BOW, 14) == 1
+    assert max_missile_shots(SMALL_BOW, 15) == 2
+
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 9, 15, "a",          # adjDX 15 -> two shots
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    archer.position = Hex(5, 5)
+    foe.position = Hex(5, 9)
+    state = GameState(arena, [archer, foe])
+
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, foe)
+    results = state.resolve_combat()
+    assert len(results) == 2                              # loosed two arrows
+
+
+def test_engaged_figure_cannot_reload_a_crossbow() -> None:
+    from engine.rules_data import LIGHT_CROSSBOW
+
+    arena = Arena(cols=9, rows=15)
+    shooter = create_human("Bowman", 12, 12, "a",
+                           weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    shooter.position = Hex(5, 5)
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)          # adjacent, face to face
+    shooter.facing = LAYOUT.direction_to(shooter.position, foe.position)
+    foe.facing = LAYOUT.direction_to(foe.position, shooter.position)
+    state = GameState(arena, [shooter, foe])
+    assert state.engaged(shooter)
+
+    shooter.missile_cooldown = 2                          # just fired
+    state.end_turn()
+    assert shooter.missile_cooldown == 2                 # engaged -> no reload
+    foe.position = Hex(5, 12)                             # break contact
+    state.end_turn()
+    assert shooter.missile_cooldown == 1                 # free now -> reloads
+
+
 def test_crossbow_must_reload_between_shots() -> None:
     from engine.rules_data import LIGHT_CROSSBOW, missile_reload_turns
 

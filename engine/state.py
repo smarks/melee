@@ -42,7 +42,12 @@ from .narrative import (
 )
 from .options import Option, OptionSpec, options_for, spec
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset
-from .rules_data import WOUND_HITS_THRESHOLD, WeaponKind, missile_reload_turns
+from .rules_data import (
+    WOUND_HITS_THRESHOLD,
+    WeaponKind,
+    max_missile_shots,
+    missile_reload_turns,
+)
 
 
 class IllegalAction(Exception):
@@ -56,6 +61,7 @@ class PendingAttack:
     zone: str | None
     ignore_facing: bool
     range_penalty: int
+    shots: int = 1            # >1 for a high-adjDX bow firing twice in a turn
 
 
 class GameState:
@@ -305,7 +311,8 @@ class GameState:
             # never get a facing add, p.16).
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
-                              ignore_facing=True, range_penalty=range_penalty)
+                              ignore_facing=True, range_penalty=range_penalty,
+                              shots=max_missile_shots(weapon, attacker.base_adj_dx))
             )
         else:
             if zone is None:
@@ -341,15 +348,21 @@ class GameState:
             # killed or knocked down before its turn to strike -> no attack
             if not attacker.can_act() or attacker.posture == Posture.PRONE:
                 continue
-            result = self.rules.resolve_attack(
-                self.dice, attacker, pending.target,
-                zone=pending.zone,
-                dice_count=self.rules.attack_dice_count(pending.target),
-                ignore_facing=pending.ignore_facing,
-                range_penalty=pending.range_penalty,
-            )
-            self._apply(attacker, pending.target, result)
-            results.append(result)
+            # A high-adjDX bow looses two arrows; don't waste the second on a
+            # foe the first already dropped.
+            for shot in range(max(1, pending.shots)):
+                if shot > 0 and (not attacker.can_act()
+                                 or pending.target.is_dead or pending.target.collapsed):
+                    break
+                result = self.rules.resolve_attack(
+                    self.dice, attacker, pending.target,
+                    zone=pending.zone,
+                    dice_count=self.rules.attack_dice_count(pending.target),
+                    ignore_facing=pending.ignore_facing,
+                    range_penalty=pending.range_penalty,
+                )
+                self._apply(attacker, pending.target, result)
+                results.append(result)
         self._pending.clear()
         self._announce_victory()
         return results
@@ -366,9 +379,10 @@ class GameState:
 
     def _apply(self, attacker: Figure, target: Figure, result: AttackResult) -> None:
         attacker.attacked_this_turn = True
-        # A fired missile weapon must reload before firing again (crossbows take
-        # turns; bows reload as they fire). end_turn counts the reload down.
-        if result.weapon is not None and result.weapon.kind == WeaponKind.MISSILE:
+        # A fired crossbow must reload before firing again; bows fire every turn
+        # (their per-turn limit is the shot count, not a cooldown).
+        if (result.weapon is not None and result.weapon.kind == WeaponKind.MISSILE
+                and result.weapon.reload > 0):
             attacker.missile_cooldown = missile_reload_turns(
                 result.weapon, attacker.base_adj_dx) + 1
         # A fumble's own story (dropped/shattered weapon) replaces the swing line.
@@ -438,7 +452,9 @@ class GameState:
             figure.dodging = False
             figure.current_option = None
             figure.dealt_st_damage_this_turn = False
-            if figure.missile_cooldown > 0:        # a turn of reloading goes by
+            # A crossbow reloads a turn closer — but an engaged figure cannot
+            # reload (p.16), so its bolt stays unspent until it breaks free.
+            if figure.missile_cooldown > 0 and not self.engaged(figure):
                 figure.missile_cooldown -= 1
         self._pending.clear()
         self.first_side = None
