@@ -7,6 +7,7 @@ app_name = "board"
 urlpatterns = [
     path("", views.index, name="index"),
     path("api/catalog", views.api_catalog, name="api_catalog"),
+    path("api/best_weapons", views.api_best_weapons, name="api_best_weapons"),
     path("api/characters", views.api_characters, name="api_characters"),
     path("api/characters/<int:pk>/delete", views.api_character_delete,
          name="api_character_delete"),

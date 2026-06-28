@@ -18,6 +18,8 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 
+import tarmar_rules
+
 from hexarena.dice import Dice
 from hexarena.hex import Hex
 
@@ -25,9 +27,9 @@ from engine import ai, chargen
 from engine.facing import front_hexes
 from engine.options import Option, spec
 from engine.profile import PROFILES
-from engine.rules_data import WeaponKind
+from engine.rules_data import WEAPONS, WeaponKind
 from engine.state import GameState, IllegalAction
-from engine.tarmar import TarmarFigure
+from engine.tarmar import WEAPON_CLASS, TarmarFigure
 
 from . import scenario
 from .geometry import label_of, layout
@@ -324,6 +326,62 @@ def api_catalog(request):
     data["stat_rules"] = chargen.stat_rules(profile.name)
     data["profile"] = profile.name
     return JsonResponse(data)
+
+
+def _weapon_score(profile_name, weapon, strength, dexterity, skill) -> float:
+    """How effective ``weapon`` is for a figure with these stats — expected
+    damage = hit-chance x damage. Higher is better; negative means unusable."""
+    mean = weapon.damage.count * 3.5 + weapon.damage.modifier
+    if (weapon.min_strength or 0) > strength:
+        return -1.0                                       # too heavy to wield well
+    if profile_name == "Tarmar":
+        weapon_class = WEAPON_CLASS.get(weapon.name)
+        if weapon_class is None:
+            return -1.0                                   # no Tarmar class -> can't use
+        tiers = tarmar_rules.ARMOUR_TIERS
+        bonus = tarmar_rules.to_hit_bonus(
+            effective_dexterity=dexterity, skill_level=skill,
+            effective_strength=strength, str_req=weapon.min_strength or None)
+        # average expected damage across the armour tiers a foe might wear, so a
+        # heavy/under-strength weapon's lower hit-chance is weighed against its
+        # better penetration.
+        total = sum(
+            tarmar_rules.hit_probability(
+                tarmar_rules.target_number(weapon_class, tier), bonus)
+            * tarmar_rules.damage_after_armour(
+                round(max(0.0, mean)), index * 2, weapon_class, tier)
+            for index, tier in enumerate(tiers))
+        return total / len(tiers)
+    # Classic: to-hit is weapon-independent, so just rank wieldable weapons by damage.
+    return mean
+
+
+def _best_weapons(profile_name, strength, dexterity, skill) -> dict:
+    best = {}
+    for kind, is_missile in (("melee", False), ("missile", True)):
+        candidates = [w for w in WEAPONS.values()
+                      if (w.kind == WeaponKind.MISSILE) == is_missile]
+        ranked = max(candidates, default=None, key=lambda w: _weapon_score(
+            profile_name, w, strength, dexterity, skill))
+        usable = ranked is not None and _weapon_score(
+            profile_name, ranked, strength, dexterity, skill) >= 0
+        best[kind] = ranked.name if usable else None
+    return best
+
+
+def api_best_weapons(request):
+    """The most effective melee + missile weapon for a figure's stats."""
+    profile = PROFILES.get(request.GET.get("profile", ""), PROFILES["Classic Melee"])
+
+    def as_int(name: str, default: int) -> int:
+        try:
+            return int(request.GET.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    return JsonResponse(_best_weapons(
+        profile.name, as_int("strength", 10), as_int("dexterity", 10),
+        as_int("skill", 0)))
 
 
 @csrf_exempt
