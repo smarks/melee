@@ -87,6 +87,8 @@ def dump_game(state: GameState, *, meta: dict | None = None) -> dict:
         "turn": state.turn_number,
         "sides": state.sides,
         "figures": [_figure_dict(state, f) for f in state.figures],
+        "dropped": [{"label": label_of(hex_pos.col, hex_pos.row), "name": weapon.name}
+                    for hex_pos, weapon in state.dropped],
         "log": state.log[-40:],
     }
     if meta:

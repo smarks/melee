@@ -94,6 +94,8 @@ class GameState:
         self.log: list[str] = []
         self._pending: list[PendingAttack] = []
         self.first_side: str | None = None
+        # Weapons lying on the ground (dropped, fumbled, or thrown), pick-up-able.
+        self.dropped: list[tuple] = []        # (Hex, Weapon)
         for index, figure in enumerate(figures):
             if not figure.uid:
                 figure.uid = f"f{index}"
@@ -173,6 +175,8 @@ class GameState:
                 continue                       # already standing — nothing to do
             if spec(option).is_missile and not can_fire:
                 continue                       # no missile ready, or still reloading
+            if option == Option.PICK_UP and not self.dropped_in_reach(figure):
+                continue                       # nothing on the ground within reach
             legal.append(option)
         return legal
 
@@ -248,15 +252,47 @@ class GameState:
         return any(f is not exclude and f.position == hex_position
                    and (f.is_dead or f.collapsed) for f in self.figures)
 
-    def _discard_thrown(self, attacker: Figure) -> None:
-        """A thrown weapon leaves the hand and lands on the field (p.15). A thrown
-        rock is replenishable so it stays; otherwise the figure is left holding a
-        carried weapon (its dagger, typically) — or empty-handed."""
+    def _drop_to_ground(self, weapon, hex_position) -> None:
+        """Lay a weapon on the field where it can be picked up later (p.7, q)."""
+        if weapon is not None and hex_position is not None and weapon.name != "Thrown rock":
+            self.dropped.append((hex_position, weapon))
+
+    def dropped_in_reach(self, figure: Figure) -> list:
+        """Dropped weapons in ``figure``'s hex or an adjacent one (option q)."""
+        if figure.position is None:
+            return []
+        reach = {figure.position, *self.arena.neighbors(figure.position)}
+        return [weapon for hex_pos, weapon in self.dropped if hex_pos in reach]
+
+    def pick_up_weapon(self, figure: Figure, weapon_name: str) -> None:
+        """Take a named dropped weapon in reach, dropping the current one (p.7, q)."""
+        if figure.position is None:
+            raise IllegalAction(f"{figure.name} is not on the board")
+        reach = {figure.position, *self.arena.neighbors(figure.position)}
+        entry = next(((hex_pos, weapon) for (hex_pos, weapon) in self.dropped
+                      if weapon.name == weapon_name and hex_pos in reach), None)
+        if entry is None:
+            raise IllegalAction(f"no {weapon_name} within reach to pick up")
+        if figure.ready_weapon is not None:        # drop what you're holding first
+            if figure.ready_weapon in figure.weapons:
+                figure.weapons.remove(figure.ready_weapon)
+            self._drop_to_ground(figure.ready_weapon, figure.position)
+        self.dropped.remove(entry)
+        weapon = entry[1]
+        figure.weapons.append(weapon)
+        figure.ready_weapon = weapon
+        self.log.append(narrate_ready(figure, weapon))
+
+    def _discard_thrown(self, attacker: Figure, landing_hex=None) -> None:
+        """A thrown weapon leaves the hand and lands on the field (p.15) where it
+        can be recovered. A thrown rock is replenishable so it stays; otherwise the
+        thrower is left holding a carried weapon (its dagger), or empty-handed."""
         weapon = attacker.ready_weapon
         if weapon is None or weapon.name == "Thrown rock":
             return
         if weapon in attacker.weapons:
             attacker.weapons.remove(weapon)
+        self._drop_to_ground(weapon, landing_hex or attacker.position)
         attacker.ready_weapon = next((carried for carried in attacker.weapons), None)
         if attacker.ready_weapon is not None:
             self.log.append(narrate_ready(attacker, attacker.ready_weapon))
@@ -325,6 +361,10 @@ class GameState:
     def _grapple_bare(self, figure: Figure) -> None:
         """Drop a non-dagger ready weapon and shield to grapple bare-handed."""
         if figure.ready_weapon is None or figure.ready_weapon.name not in self._DAGGERS:
+            if figure.ready_weapon is not None:
+                if figure.ready_weapon in figure.weapons:
+                    figure.weapons.remove(figure.ready_weapon)
+                self._drop_to_ground(figure.ready_weapon, figure.position)
             figure.ready_weapon = None
             figure.shield_ready = False
 
@@ -498,7 +538,10 @@ class GameState:
         if option == Option.STAND_UP:
             figure.posture = Posture.STANDING
         if ready is not None:
-            self._ready_weapon(figure, option, ready)
+            if option == Option.PICK_UP:
+                self.pick_up_weapon(figure, ready)
+            else:
+                self._ready_weapon(figure, option, ready)
         line = narrate_move(figure, option, bool(path), self._faced_enemy(figure))
         if line:
             self.log.append(line)
@@ -644,7 +687,7 @@ class GameState:
                 self._apply(attacker, pending.target, result)
                 results.append(result)
             if pending.thrown:
-                self._discard_thrown(attacker)
+                self._discard_thrown(attacker, pending.target.position)
         self._pending.clear()
         self._announce_victory()
         return results
@@ -674,6 +717,8 @@ class GameState:
             )
             if attacker.ready_weapon in attacker.weapons:
                 attacker.weapons.remove(attacker.ready_weapon)
+            if result.dropped_weapon:           # dropped lands intact; broken is gone
+                self._drop_to_ground(attacker.ready_weapon, attacker.position)
             attacker.ready_weapon = None
         else:
             self.log.append(narrate_attack(attacker, target, result))

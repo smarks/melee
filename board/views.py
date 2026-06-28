@@ -459,6 +459,7 @@ def api_options(request, gid):
         "melee_targets": melee_targets,
         "missile_targets": missile_targets,
         "hth_targets": hth_targets,
+        "pickups": [w.name for w in state.dropped_in_reach(figure)],
     })
 
 
