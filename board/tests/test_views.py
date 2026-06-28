@@ -660,3 +660,35 @@ def test_seat_action_errors(client: Client) -> None:
     assert seat(Client(), "claim", "red").status_code == 409    # still taken, can't claim
     assert seat(client, "open", "purple").status_code == 400    # unknown side
     assert seat(client, "frobnicate", "red").status_code == 400  # unknown action
+
+
+@pytest.mark.django_db
+def test_admin_bypasses_seat_ownership(client: Client, django_user_model) -> None:
+    # #86: a logged-in admin (is_staff) may drive any side / edit any figure,
+    # bypassing seat ownership; a plain non-owner cannot.
+    data = _new(client)                          # the fixture client owns the game
+    gid = data["gid"]
+    blue_uid = next(f["uid"] for f in data["state"]["figures"] if f["side"] == "blue")
+
+    admin_user = django_user_model.objects.create_user(
+        username="gm", password="gm-pass-12345", is_staff=True)
+    admin = Client()
+    admin.force_login(admin_user)
+
+    plain = Client()                             # neither the owner nor an admin
+    blocked = plain.post(f"/api/game/{gid}/action",
+                         data=json.dumps({"type": "roll_initiative"}),
+                         content_type="application/json")
+    assert blocked.status_code == 403
+
+    ok = admin.post(f"/api/game/{gid}/action",
+                    data=json.dumps({"type": "roll_initiative"}),
+                    content_type="application/json")
+    assert ok.status_code == 200
+    assert ok.json()["is_admin"] is True
+
+    # the admin may act on a figure it doesn't own (authz passes; phase handled elsewhere)
+    moved = admin.post(f"/api/game/{gid}/action",
+                       data=json.dumps({"type": "move", "uid": blue_uid, "option": "move"}),
+                       content_type="application/json")
+    assert moved.status_code != 403
