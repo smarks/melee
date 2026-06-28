@@ -504,3 +504,33 @@ def test_new_custom_multi_team_one_ai(client: Client) -> None:
     ctrl = out["state"]["controllers"]
     assert ctrl["green"] == "computer"
     assert ctrl["red"] == "human" and ctrl["blue"] == "human"
+
+
+def test_bad_or_missing_option_is_a_clean_400(client: Client) -> None:
+    # Malformed client input should be a 400, not an uncaught 500 (#82).
+    data = _new(client)
+    gid = data["gid"]
+    _post(client, gid, {"type": "roll_initiative"})
+    _post(client, gid, {"type": "choose_first", "side": "red"})
+    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+
+    bad = client.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "move", "uid": red["uid"], "option": "garbage"}),
+        content_type="application/json",
+    )
+    assert bad.status_code == 400
+
+    missing = client.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "move", "uid": red["uid"]}),
+        content_type="application/json",
+    )
+    assert missing.status_code == 400
+
+
+def test_non_numeric_seed_falls_back_to_random_not_500(client: Client) -> None:
+    # A non-numeric ?seed should yield random dice, not an uncaught 500 (#82).
+    resp = client.get("/api/game/new?seed=not-a-number")
+    assert resp.status_code == 200
+    assert "gid" in resp.json()

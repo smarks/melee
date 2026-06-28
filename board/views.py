@@ -283,7 +283,8 @@ def api_character_delete(request, pk):
 
 def _start_game(arena, figures, profile, computer_sides, seed) -> dict:
     """Register a new game and return its initial payload (shared entry point)."""
-    dice = Dice(seed=int(seed)) if seed else Dice()
+    seed_value = _seed_int(seed)
+    dice = Dice(seed=seed_value) if seed_value is not None else Dice()
     state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset)
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
@@ -311,6 +312,26 @@ def _int_param(request, name: str) -> int:
         return int(request.GET.get(name, "") or 0)
     except ValueError:
         return 0
+
+
+def _seed_int(seed) -> int | None:
+    """Parse an optional RNG seed; missing or non-numeric -> None (random dice)."""
+    if seed in (None, ""):
+        return None
+    try:
+        return int(seed)
+    except (TypeError, ValueError):
+        return None
+
+
+def _option(body: dict) -> Option:
+    """Coerce the client's option to an Option — a clean 400 (IllegalAction) on a
+    missing or unknown value, rather than an uncaught KeyError/ValueError -> 500."""
+    raw = body.get("option")
+    try:
+        return Option(raw)
+    except ValueError:
+        raise IllegalAction(f"unknown option {raw!r}")
 
 
 def api_new_game(request):
@@ -520,7 +541,7 @@ def _dispatch(game: dict, body: dict):
         moving_side = game["order"][game["moving"]]
         if figure.side != moving_side:
             raise IllegalAction(f"it is {moving_side}'s turn to move")
-        option = Option(body["option"])
+        option = _option(body)
         facing = body.get("facing")
         dest = body.get("dest")
         path = []
