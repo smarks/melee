@@ -29,6 +29,35 @@ def _rear_grapple(defense_roll):
     return state, attacker, defender
 
 
+def test_drop_prone_to_fire_a_crossbow_at_plus_one() -> None:
+    from engine.rules_data import LIGHT_CROSSBOW
+    arena = Arena(cols=9, rows=15)
+    shooter = create_human("Bow", 12, 12, "a",
+                           weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    shooter.position = Hex(5, 5)
+    foe.position = Hex(5, 9)
+    state = GameState(arena, [shooter, foe])
+    assert Option.GO_PRONE in state.legal_options(shooter)   # offered to a missile holder
+    state.move(shooter, Option.GO_PRONE)
+    assert shooter.posture == Posture.PRONE
+    shooter.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(shooter, foe)
+    assert "+1 prone" in state.resolve_combat()[0].to_hit_breakdown
+
+
+def test_kneeling_figure_has_no_front() -> None:
+    from engine.facing import REAR, attack_zone
+    arena = Arena(cols=9, rows=15)
+    a = create_human("A", 12, 12, "a", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    b = create_human("B", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    b.position = Hex(5, 5)
+    b.facing = 0
+    a.position = LAYOUT.neighbor(Hex(5, 5), 0)               # squarely in b's front
+    b.posture = Posture.KNEELING
+    assert attack_zone(arena.layout, a, b) == REAR          # kneeling -> struck as rear
+
+
 def test_thrown_weapon_strikes_a_figure_in_its_flight_path() -> None:
     from engine.rules_data import DAGGER, JAVELIN, SHORTSWORD
     arena = Arena(cols=9, rows=15)

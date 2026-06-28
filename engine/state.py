@@ -177,6 +177,9 @@ class GameState:
                 continue                       # no missile ready, or still reloading
             if option == Option.PICK_UP and not self.dropped_in_reach(figure):
                 continue                       # nothing on the ground within reach
+            if option in (Option.GO_PRONE, Option.KNEEL) and not (
+                    weapon is not None and weapon.kind == WeaponKind.MISSILE):
+                continue                       # dropping to fire is a missile move (f)
             legal.append(option)
         return legal
 
@@ -592,6 +595,10 @@ class GameState:
         figure.dodging = option_spec.sets_dodge
         if option == Option.STAND_UP:
             figure.posture = Posture.STANDING
+        elif option == Option.GO_PRONE:
+            figure.posture = Posture.PRONE
+        elif option == Option.KNEEL:
+            figure.posture = Posture.KNEELING
         if ready is not None:
             if option == Option.PICK_UP:
                 self.pick_up_weapon(figure, ready)

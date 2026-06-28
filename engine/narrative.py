@@ -103,6 +103,8 @@ _MOVE_VERB = {
     Option.SHIFT_DEFEND: "raises a guard",
     Option.ONE_LAST_SHOT: "looses a parting shot",
     Option.DISENGAGE: "breaks away",
+    Option.GO_PRONE: "drops prone",
+    Option.KNEEL: "kneels",
 }
 
 

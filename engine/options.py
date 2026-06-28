@@ -37,6 +37,8 @@ class Option(str, Enum):
     DISENGAGE = "disengage"          # (n) move away from engaging enemies
     HTH_ATTACK = "hth_attack"        # (b/o) enter an enemy's hex, grapple hand-to-hand
     PICK_UP = "pick_up"              # (q) bend over, take a dropped weapon in reach
+    GO_PRONE = "go_prone"            # (f) drop prone (a crossbow fires from prone at +1)
+    KNEEL = "kneel"                  # (f) drop to one knee (a bow may fire from kneeling)
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,10 @@ _SPECS: dict[Option, OptionSpec] = {
         Option.HTH_ATTACK, ANY, "one", True, False, False),
     Option.PICK_UP: OptionSpec(
         Option.PICK_UP, DISENGAGED, "none", False, False, False),
+    Option.GO_PRONE: OptionSpec(
+        Option.GO_PRONE, DISENGAGED, "none", False, False, False),
+    Option.KNEEL: OptionSpec(
+        Option.KNEEL, DISENGAGED, "none", False, False, False),
 }
 
 
