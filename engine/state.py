@@ -568,10 +568,12 @@ class GameState:
 
     # ---- general disengage (option n, p.19) ----
     def disengage_destinations(self, figure: Figure) -> list[Hex]:
-        """Adjacent free hexes a disengaging figure may step into (p.19).
+        """Adjacent hexes a disengaging figure may step into (p.19).
 
         Empty unless the figure chose to disengage this turn, is standing, and
         has not yet acted — a grounded figure must stand before it can disengage.
+        Includes free hexes and the hex of any adjacent enemy it may move onto to
+        attempt hand-to-hand combat that same turn (p.19).
         """
         if (figure.current_option != Option.DISENGAGE
                 or figure.posture != Posture.STANDING
@@ -579,18 +581,23 @@ class GameState:
                 or figure.position is None):
             return []
         held = set(self.occupied(exclude=figure))
-        return [hex_position for hex_position in self.arena.neighbors(figure.position)
+        free = [hex_position for hex_position in self.arena.neighbors(figure.position)
                 if self.arena.contains(hex_position) and hex_position not in held]
+        hth = [enemy.position for enemy in self.enemies_of(figure)
+               if enemy.position is not None
+               and self._can_initiate_hth(figure, enemy)]
+        return free + hth
 
     def disengage_move(self, figure: Figure, dest: Hex) -> None:
         """Carry out option (n) general disengage in the combat phase (p.19).
 
         A figure that chose to disengage moves one hex in any direction instead
-        of attacking, breaking engagement, and may never attack that turn. It
-        must be standing first (a kneeling/prone/fallen figure must rise before
-        it can disengage). Higher-DX enemies still get their strike this turn —
-        the engine resolves their queued attacks normally; this move simply does
-        not add one of its own.
+        of attacking, breaking engagement. It must be standing first (a
+        kneeling/prone/fallen figure must rise before it can disengage). It may
+        not also make a normal attack — except that it may move onto an adjacent
+        enemy's hex to attempt hand-to-hand combat that same turn (p.19), in which
+        case the grapple is initiated. Higher-DX enemies still get their strike
+        this turn — the engine resolves their queued attacks normally.
         """
         if figure.current_option != Option.DISENGAGE:
             raise IllegalAction(f"{figure.name} did not choose to disengage this turn")
@@ -602,6 +609,15 @@ class GameState:
             raise IllegalAction("a disengage needs a destination hex")
         if self.arena.distance(figure.position, dest) != 1:
             raise IllegalAction("a disengage moves exactly one hex")
+        occupant = self.figure_at(dest)
+        if occupant is not None and occupant in self.enemies_of(figure):
+            # Disengage straight into a grapple on an eligible adjacent foe (p.19).
+            if not self._can_initiate_hth(figure, occupant):
+                raise IllegalAction(
+                    f"{figure.name} cannot grapple {occupant.name}"
+                )
+            self.hth_attack(figure, occupant)
+            return
         if not self.arena.contains(dest) or dest in self.occupied(exclude=figure):
             raise IllegalAction(f"{dest} is not a free hex to disengage into")
         figure.position = dest

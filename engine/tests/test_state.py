@@ -972,3 +972,24 @@ def test_missile_outside_the_front_arc_is_rejected() -> None:
     assert state._pending
 
 
+def test_disengage_can_step_into_a_grapple() -> None:
+    """General disengage may move onto an eligible adjacent enemy to start
+    hand-to-hand combat that same turn (from #6, p.19)."""
+    arena = Arena(cols=9, rows=15)
+    runner = create_human("Runner", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe.position = Hex(5, 5)
+    foe.facing = 0                                       # rear hex is direction 3
+    runner.position = LAYOUT.neighbor(Hex(5, 5), 3)      # standing at the foe's rear
+    runner.facing = LAYOUT.direction_to(runner.position, foe.position)  # faces -> engaged
+    # The defender's fresh-grapple roll of 2 lets the hold take; 3s for any strike.
+    state = GameState(arena, [runner, foe], dice=Dice(scripted=[2] + [3] * 12))
+    assert state.engaged(runner)
+
+    runner.current_option = Option.DISENGAGE
+    assert foe.position in state.disengage_destinations(runner)   # offered as a grapple step
+    state.disengage_move(runner, foe.position)
+    assert runner.in_hth and foe.uid in runner.hth_opponents      # locked together
+    assert runner.position == foe.position                        # moved onto the foe
+    assert runner.posture == Posture.PRONE and foe.posture == Posture.PRONE
