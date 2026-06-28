@@ -71,6 +71,7 @@ class AttackResult:
     zone: str | None
     note: str = ""
     to_hit_breakdown: str = ""   # human-readable composition of `needed` / the roll
+    thrown: bool = False         # this attack was a hurled weapon (for narration)
 
 
 def classify_roll(
