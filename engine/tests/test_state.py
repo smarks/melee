@@ -1472,3 +1472,41 @@ def test_crossbowman_prone_from_a_previous_turn_still_fires() -> None:
     results = state.resolve_combat()
     assert len(results) == 1 and results[0].hit
     assert foe.damage_taken > 0                 # the prone crossbowman fired
+
+
+def test_hth_back_to_the_wall_lets_a_frontal_grapple_through() -> None:
+    # p.17 case (a): a figure may grapple a foe that has its "back to the wall" —
+    # no hex to give ground into away from the attacker — even head-on against a
+    # standing, equal-MA foe (which clauses b/c/d would otherwise forbid).
+    from engine.rules_data import DAGGER
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    attacker = create_human("Atk", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    defender = create_human("Def", 12, 12, "b",
+                            weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    defender.position = Hex(5, 5)
+    attacker.position = layout.neighbor(defender.position, 0)
+    defender.facing = layout.direction_to(defender.position, attacker.position)  # faces attacker
+    attacker.facing = layout.direction_to(attacker.position, defender.position)
+    state = GameState(arena, [attacker, defender])
+
+    # Sanity: a frontal grapple on a standing equal-MA foe with open space is
+    # NOT allowed (only clause (a) is in question here).
+    from engine.facing import FRONT, attack_zone
+    assert attack_zone(layout, attacker, defender) == FRONT
+    assert defender.movement_allowance == attacker.movement_allowance
+    assert defender not in state.hth_targets(attacker)
+
+    # Wall off every hex the defender could give ground into (those farther from
+    # the attacker) -> its back is to the wall.
+    start = layout.distance(attacker.position, defender.position)
+    arena.walls = {neighbor for neighbor in layout.neighbors(defender.position)
+                   if layout.distance(attacker.position, neighbor) > start}
+    assert state._has_back_to_wall(attacker, defender)
+    assert defender in state.hth_targets(attacker)
+
+    # Re-open one retreat hex: the defender is no longer pinned.
+    arena.walls.pop()
+    assert not state._has_back_to_wall(attacker, defender)
+    assert defender not in state.hth_targets(attacker)

@@ -565,9 +565,10 @@ class GameState:
     def _can_initiate_hth(self, attacker: Figure, defender: Figure) -> bool:
         """Whether ``attacker`` may move onto ``defender``'s hex to grapple (p.17).
 
-        Allowed when the defender is down/kneeling, has a lower MA, or is taken
-        from the rear. A foe already in a brawl can always be piled onto (p.18).
-        (Mutual agreement — case (d) — is a table call we skip.)
+        Allowed when the defender (a) has its back to the wall, (b) is
+        down/kneeling, (c) has a lower MA, or (d) is taken from the rear. A foe
+        already in a brawl can always be piled onto (p.18). (Mutual agreement —
+        the rulebook's case (d) — is a table call we skip.)
         """
         if attacker.position is None or defender.position is None:
             return False
@@ -583,7 +584,29 @@ class GameState:
             return True
         if defender.movement_allowance < attacker.movement_allowance:
             return True
+        if self._has_back_to_wall(attacker, defender):
+            return True           # (a) nowhere to give ground — pinned (p.17)
         return attack_zone(self.arena.layout, attacker, defender) == REAR
+
+    def _has_back_to_wall(self, attacker: Figure, defender: Figure) -> bool:
+        """Whether ``defender`` has its "back to the wall" against ``attacker`` —
+        no hex to give ground into away from the attacker (p.17, HTH case a).
+
+        Conservatively defined to mirror force-retreat: the defender is pinned
+        when every neighbouring hex that lies farther from the attacker than the
+        defender now stands is off-board or occupied. The attacker's own hex
+        counts as occupied (it is, by the attacker), so a foe backed into a board
+        edge or wall of figures cannot retreat and may be grappled head-on.
+        """
+        layout = self.arena.layout
+        occupied = set(self.occupied(exclude=defender))
+        start_distance = layout.distance(attacker.position, defender.position)
+        return not any(
+            self.arena.contains(neighbor)
+            and neighbor not in occupied
+            and layout.distance(attacker.position, neighbor) > start_distance
+            for neighbor in self.arena.neighbors(defender.position)
+        )
 
     def hth_targets(self, attacker: Figure) -> list[Figure]:
         """Enemies ``attacker`` could grapple (or, if already grappling, strike)."""
