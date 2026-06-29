@@ -20,6 +20,9 @@ from hexarena.hex import FLAT, Hex, HexLayout
 # One movement point per clear hex (5.01). Bodies and difficult moves cost more;
 # those costs live in engine.movement.
 CLEAR_COST = 1
+# A fallen body is an obstacle: moving cautiously into its hex (or leaping over
+# it into the hex beyond) costs 3 MA rather than 1 (p.8).
+BODY_COST = 3
 
 
 class Arena:

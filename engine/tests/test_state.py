@@ -170,6 +170,66 @@ def test_hth_strike_uses_dagger_dice_at_plus_four() -> None:
     assert result.raw_damage == 5                        # dagger 1d+2, die scripted to 3
 
 
+def test_standing_attacker_misses_into_a_pile_and_cascades() -> None:
+    # Hitting Your Friends (p.17-18): Bjorn hacks at a goblin down in an HTH
+    # pile with his friend Ragnar. He misses the goblin, rolls on (same adjusted
+    # DX) at the OTHER goblin and misses, then rolls at Ragnar — and hits him.
+    from engine.rules_data import DAGGER, SHORTSWORD
+    arena = Arena(cols=9, rows=15)
+    bjorn = create_human("Bjorn", 16, 8, "a",
+                         weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    ragnar = create_human("Ragnar", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    g1 = create_human("G1", 12, 12, "b", weapons=[DAGGER], ready_weapon=DAGGER)
+    g2 = create_human("G2", 12, 12, "b", weapons=[DAGGER], ready_weapon=DAGGER)
+    pile_hex = Hex(5, 5)
+    for member in (ragnar, g1, g2):
+        member.position = pile_hex
+        member.posture = Posture.PRONE
+    bjorn.position = LAYOUT.neighbor(pile_hex, 0)
+    bjorn.facing = LAYOUT.direction_to(bjorn.position, pile_hex)
+    state = GameState(arena, [bjorn, ragnar, g1, g2])
+    ragnar.hth_opponents = [g1.uid, g2.uid]              # the two goblins pin Ragnar
+    g1.hth_opponents = [ragnar.uid]
+    g2.hth_opponents = [ragnar.uid]
+    # adjDX 8, +4 rear = needs 12: 13 is a clean miss, 9 a hit. The cascade rolls
+    # the OTHER goblin (a miss), then Ragnar (a hit), then his damage.
+    state.dice = Dice(scripted=[6, 6, 1] + [6, 6, 1] + [3, 3, 3] + [3] * 12)
+    bjorn.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(bjorn, g1)
+    state.resolve_combat()
+    assert g1.damage_taken == 0                          # the declared goblin was missed
+    assert g2.damage_taken == 0                          # the other goblin too
+    assert ragnar.damage_taken > 0                       # the friend caught the blow
+    assert any("Ragnar instead" in line for line in state.log)
+
+
+def test_missile_into_an_hth_pile_strikes_a_random_member() -> None:
+    # A shot aimed at a pile of grapplers (p.18): roll to hit, then roll randomly
+    # to see who in the pile it caught. A scripted random roll of 2 picks the
+    # second member of the pile — not the figure aimed at.
+    from engine.rules_data import DAGGER, JAVELIN
+    arena = Arena(cols=9, rows=15)
+    thrower = create_human("Thrower", 11, 13, "a",
+                           weapons=[JAVELIN, DAGGER], ready_weapon=JAVELIN)
+    aimed = create_human("Aimed", 12, 12, "b", weapons=[DAGGER], ready_weapon=DAGGER)
+    other = create_human("Other", 12, 12, "c", weapons=[DAGGER], ready_weapon=DAGGER)
+    thrower.position = Hex(5, 5)
+    aimed.position = Hex(5, 9)
+    other.position = Hex(5, 9)                           # same hex — the pile
+    aimed.posture = other.posture = Posture.PRONE
+    _aim(thrower, aimed)
+    state = GameState(arena, [thrower, aimed, other])
+    aimed.hth_opponents = [other.uid]                    # the two are grappling
+    other.hth_opponents = [aimed.uid]
+    # random pick = 2 (the second pile member, Other), then the to-hit and damage.
+    state.dice = Dice(scripted=[2] + [3, 3, 3] + [3] * 12)
+    thrower.current_option = Option.CHARGE_ATTACK
+    state.queue_attack(thrower, aimed)
+    state.resolve_combat()
+    assert other.damage_taken > 0                        # the random roll caught Other
+    assert aimed.damage_taken == 0                       # not the figure aimed at
+
+
 def test_hth_free_hit_on_a_six() -> None:
     from engine.rules_data import DAGGER, PLATE
     arena = Arena(cols=9, rows=15)

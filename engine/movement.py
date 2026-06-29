@@ -15,7 +15,7 @@ from __future__ import annotations
 from hexarena.hex import Hex
 from hexarena.pathfinding import Reach, reachable
 
-from .arena import CLEAR_COST, Arena
+from .arena import BODY_COST, CLEAR_COST, Arena
 
 
 def reachable_moves(
@@ -25,6 +25,7 @@ def reachable_moves(
     *,
     blocked: set[Hex] | None = None,
     stop_hexes: set[Hex] | None = None,
+    body_hexes: set[Hex] | None = None,
 ) -> Reach:
     """Hexes a figure can finish movement on within ``budget`` hexes.
 
@@ -34,13 +35,16 @@ def reachable_moves(
         budget: hexes of movement available (the option's cap).
         blocked: hexes that may not be entered (standing figures).
         stop_hexes: hexes that may be entered but not moved past (enemy fronts).
+        body_hexes: hexes holding a fallen body; entering one costs
+            :data:`~engine.arena.BODY_COST` MA instead of ``CLEAR_COST`` (p.8).
     """
     blocked = blocked or set()
     stop_hexes = stop_hexes or set()
+    body_hexes = body_hexes or set()
     return reachable(
         start,
         arena.neighbors,
-        lambda _from, _to: CLEAR_COST,
+        lambda _from, to_hex: BODY_COST if to_hex in body_hexes else CLEAR_COST,
         budget,
         must_stop_fn=lambda hex_position: hex_position in stop_hexes,
         blocked=blocked,

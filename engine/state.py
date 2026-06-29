@@ -23,7 +23,7 @@ from hexarena.hex import Hex
 
 from hexarena.pathfinding import Reach
 
-from .arena import Arena
+from .arena import BODY_COST, CLEAR_COST, Arena
 from .combat import AttackResult
 from .facing import (
     FRONT,
@@ -39,6 +39,7 @@ from .megahex import megahex_distance
 from .movement import reachable_moves
 from .narrative import (
     narrate_attack,
+    narrate_cascade,
     narrate_fumble,
     narrate_hth,
     narrate_hth_disengage,
@@ -269,9 +270,12 @@ class GameState:
             return reach
         blocked = set(occupied)
         stop_hexes = self._enemy_front_hexes(figure)
+        # A fallen body is a 3-MA obstacle on the ground (p.8); a flyer passing
+        # overhead ignores it (handled in the flight branch above).
+        body_hexes = self._body_hexes(exclude=figure)
         reach = reachable_moves(
             self.arena, figure.position, budget,
-            blocked=blocked, stop_hexes=stop_hexes,
+            blocked=blocked, stop_hexes=stop_hexes, body_hexes=body_hexes,
         )
         if figure.size > 1:
             # A multi-hex figure can only finish where its whole footprint fits.
@@ -352,6 +356,23 @@ class GameState:
         return any(f is not exclude and f.position == hex_position
                    and (f.is_dead or f.collapsed) for f in self.figures)
 
+    def _body_hexes(self, *, exclude: Figure | None = None) -> set[Hex]:
+        """Every hex holding a fallen body — the costly-to-enter obstacles (p.8)."""
+        return {f.position for f in self.figures
+                if f is not exclude and f.position is not None
+                and (f.is_dead or f.collapsed)}
+
+    def _hth_pile_at(self, hex_position: Hex | None) -> list[Figure]:
+        """The figures grappling in the HTH pile that shares ``hex_position``.
+
+        Members are enumerated by HTH membership, not :meth:`occupied` (which
+        excludes the prone/collapsed grapplers in a pile), so the whole brawl is
+        captured even though they all sit on one hex (p.18).
+        """
+        if hex_position is None:
+            return []
+        return [f for f in self.figures if f.in_hth and f.position == hex_position]
+
     def _drop_to_ground(self, weapon, hex_position) -> None:
         """Lay a weapon on the field where it can be picked up later (p.7, q)."""
         if weapon is not None and hex_position is not None and weapon.name != "Thrown rock":
@@ -384,19 +405,30 @@ class GameState:
         # 2) the intended target — a normal thrown/missile attack. A thrown
         # weapon takes the target's facing bonus (ignore_facing False); a missile
         # never does (p.16) — both are carried on the pending attack.
+        # A shot aimed at a pile of figures in HTH combat strikes a RANDOM member
+        # of the pile, not necessarily the one aimed at (p.18). The classic to-hit
+        # number is the attacker's adjDX and does not depend on which member is
+        # struck, so the pile member is rolled first and the shot then resolves
+        # against it (zone/absorption recomputed for whoever it caught).
+        struck = target
+        pile = self._hth_pile_at(target.position)
+        if len(pile) >= 2:
+            struck = pile[self.dice.dn(len(pile)) - 1]
+        zone = (pending.zone if struck is target
+                else attack_zone(self.arena.layout, attacker, struck))
         result = self.rules.resolve_attack(
-            self.dice, attacker, target, zone=pending.zone,
+            self.dice, attacker, struck, zone=zone,
             ignore_facing=pending.ignore_facing,
-            dice_count=self.rules.attack_dice_count(target, ranged=True),
+            dice_count=self.rules.attack_dice_count(struck, ranged=True),
             range_penalty=pending.range_penalty,
             situational=pending.situational,
             situational_note=pending.situational_note,
             ranged=True)
         result.thrown = pending.thrown
-        self._apply(attacker, target, result)
+        self._apply(attacker, struck, result)
         results.append(result)
         if result.hit:
-            self._land_flight(pending, target.position)
+            self._land_flight(pending, struck.position)
             return
         if result.dropped_weapon or result.broke_weapon:
             # A 17 drops the weapon (in the target hex for a throw), an 18 breaks
@@ -874,10 +906,11 @@ class GameState:
         budget = self.rules.movement_budget(
             figure.movement_allowance, option_spec.movement_cap
         )
-        if len(path) > budget:
+        path_cost = self._path_cost(figure, path)
+        if path_cost > budget:
             raise IllegalAction(
-                f"{figure.name} may move at most {budget} hex(es) on "
-                f"{option.value}, not {len(path)}"
+                f"{figure.name} may spend at most {budget} MA on "
+                f"{option.value}, but that path costs {path_cost}"
             )
         self._validate_path(figure, path)
         if figure.size > 1:
@@ -967,6 +1000,20 @@ class GameState:
         if weapon.two_handed and figure.shield_ready:
             figure.shield_ready = False   # a two-handed weapon needs both hands
         self.log.append(narrate_ready(figure, weapon))
+
+    def _path_cost(self, figure: Figure, path: list[Hex]) -> int:
+        """Total MA a move along ``path`` consumes (p.8).
+
+        Each step normally costs :data:`~engine.arena.CLEAR_COST`; entering a hex
+        that holds a fallen body costs :data:`~engine.arena.BODY_COST` instead. A
+        flyer overhead ignores bodies, so every step costs the clear rate. This
+        mirrors the cost function :func:`~engine.movement.reachable_moves` uses, so
+        the move-budget check and the reachability highlight always agree.
+        """
+        if figure.flying:
+            return len(path) * CLEAR_COST
+        body_hexes = self._body_hexes(exclude=figure)
+        return sum(BODY_COST if step in body_hexes else CLEAR_COST for step in path)
 
     def _validate_path(self, figure: Figure, path: list[Hex]) -> None:
         """Validate each step of ``figure``'s move.
@@ -1238,6 +1285,16 @@ class GameState:
                 result.thrown = pending.thrown
                 self._apply(attacker, pending.target, result)
                 results.append(result)
+                # Hitting Your Friends (p.17-18): a STANDING figure that misses
+                # a foe down in an HTH pile rolls on — same DX adjustments —
+                # against the other piled enemies, then friends, stopping at the
+                # first hit. A fumble (dropped/broken weapon) ends the swing.
+                if (not result.hit and not result.dropped_weapon
+                        and not result.broke_weapon
+                        and not attacker.in_hth and pending.target.in_hth
+                        and pending.hth_damage is None):
+                    self._cascade_into_pile(
+                        attacker, pending.target, weapon, pending, results)
         self._pending.clear()
         self._announce_victory()
         return results
@@ -1251,6 +1308,41 @@ class GameState:
         if len(self.sides) >= 2 and len(standing) == 1:
             self._victory_announced = True
             self.log.append(narrate_victory(next(iter(standing))))
+
+    def _cascade_into_pile(
+        self, attacker: Figure, intended: Figure, weapon,
+        pending: PendingAttack, results: list,
+    ) -> None:
+        """Resolve the Hitting Your Friends miss-cascade (p.17-18).
+
+        ``attacker`` is a standing figure that struck ``intended`` — a foe down
+        in an HTH pile — and missed. It now rolls, one by one, at the SAME DX
+        adjustments, against the other enemies in that pile and then its own
+        friends in it, stopping the instant it hits someone. Figures grappling on
+        the ground never hit their own friends; only the standing striker rolls.
+        """
+        pile = [member for member in self._hth_pile_at(intended.position)
+                if member is not attacker and member is not intended
+                and member.can_act()]
+        enemies = [member for member in pile if member.side != attacker.side]
+        friends = [member for member in pile if member.side == attacker.side]
+        for victim in [*enemies, *friends]:
+            zone = attack_zone(self.arena.layout, attacker, victim)
+            result = self.rules.resolve_attack(
+                self.dice, attacker, victim,
+                zone=zone, weapon=weapon,
+                dice_count=self.rules.attack_dice_count(victim, ranged=False),
+                ranged=False,
+                range_penalty=pending.range_penalty,
+                situational=pending.situational,
+                situational_note=pending.situational_note,
+            )
+            result.thrown = pending.thrown
+            self._apply(attacker, victim, result)
+            results.append(result)
+            if result.hit:
+                self.log.append(narrate_cascade(attacker, intended, victim))
+                return
 
     def _apply(self, attacker: Figure, target: Figure, result: AttackResult) -> None:
         attacker.attacked_this_turn = True
