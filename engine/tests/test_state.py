@@ -181,9 +181,12 @@ def test_hth_free_hit_on_a_six() -> None:
     defender.facing = 3                                   # facing the attacker (front)
     attacker.position = LAYOUT.neighbor(Hex(5, 5), 3)
     attacker.facing = LAYOUT.direction_to(attacker.position, defender.position)
-    state = GameState(arena, [attacker, defender], dice=Dice(scripted=[6] + [3] * 12))
+    # defense roll 6, then a to-hit of 18 that would auto-MISS without force_hit;
+    # the free hit must land anyway (#126), so the attacker takes damage.
+    state = GameState(arena, [attacker, defender], dice=Dice(scripted=[6] + [6] * 12))
     assert state.hth_attack(attacker, defender) == "free_hit"
     assert not attacker.in_hth                            # no grapple took hold
+    assert attacker.damage_taken > 0                      # the automatic hit landed
 
 
 def test_cannot_grapple_a_standing_equal_foe_from_the_front() -> None:
@@ -365,13 +368,18 @@ def test_situational_to_hit_modifiers() -> None:
         spear, charger, SPEAR, False)
     assert mods == 2 and "vs charge" in note
 
-    # a foe standing in a fallen body's hex: -2
+    # the ATTACKER fighting from a fallen body's hex has bad footing: -2 (#125)
     corpse = create_human("Corpse", 12, 12, "c", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
-    corpse.position = charger.position
+    corpse.position = spear.position                  # the body is under the attacker
     corpse.damage_taken = corpse.strength + 5
     _, note2 = GameState(arena, [spear, charger, corpse])._situational_mods(
         spear, charger, SPEAR, False)
     assert "-2 over body" in note2
+    # a body under the TARGET must NOT confer the penalty (wrong subject before #125)
+    corpse.position = charger.position
+    _, note_t = GameState(arena, [spear, charger, corpse])._situational_mods(
+        spear, charger, SPEAR, False)
+    assert "over body" not in note_t
 
     # a missile shot at a foe sheltering behind a body: -4
     shooter = create_human("Bow", 12, 12, "a", weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)

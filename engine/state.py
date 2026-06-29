@@ -568,10 +568,13 @@ class GameState:
                 self.log.append(narrate_hth(attacker, defender, "shrug"))
                 return "shrugged"
             if roll == 6:                               # free hit, attacker thrown back
+                # The defender "automatically gets a hit" (p.17) — it doesn't roll
+                # to-hit, so force the hit rather than letting it whiff (#126).
                 counter = self.rules.resolve_attack(
                     self.dice, defender, attacker,
                     zone=attack_zone(self.arena.layout, defender, attacker),
-                    dice_count=self.rules.attack_dice_count(attacker))
+                    dice_count=self.rules.attack_dice_count(attacker),
+                    force_hit=True)
                 self.log.append(narrate_hth(attacker, defender, "free_hit"))
                 self._apply(defender, attacker, counter)
                 return "free_hit"
@@ -802,8 +805,9 @@ class GameState:
                 and target.current_option == Option.CHARGE_ATTACK
                 and attacker.current_option != Option.CHARGE_ATTACK):
             mods += 2; notes.append("+2 vs charge")
-        # The target standing in a fallen body's hex fights awkwardly: -2.
-        if target.position is not None and self._body_in_hex(target.position, exclude=target):
+        # The ATTACKER fighting from a fallen body's hex has bad footing: -2 to its
+        # own to-hit (p.16, "Standing in a hex with a fallen body") — #125.
+        if attacker.position is not None and self._body_in_hex(attacker.position, exclude=attacker):
             mods -= 2; notes.append("-2 over body")
         # A missile shot at a foe sheltering behind a body: -4.
         if (is_missile and attacker.position is not None
