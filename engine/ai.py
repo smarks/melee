@@ -96,10 +96,17 @@ def take_movement(state: GameState, side: str) -> None:
             h for h in charge.reachable_hexes()
             if layout.distance(h, target.position) == 1
         ]
+        # A multi-hex figure may translate OR turn-in-place, but not both in one
+        # move (the engine defers combined rotation+translation, #153). So when it
+        # moves along a path it keeps its facing; a single-hex figure still turns
+        # to face its target.
+        def _move_facing(dest):
+            return None if figure.size > 1 else _facing_toward(layout, dest, target.position)
+
         if contact:
             dest = min(contact, key=lambda h: layout.distance(h, target.position))
             state.move(figure, Option.CHARGE_ATTACK, path=charge.path_to(dest),
-                       facing=_facing_toward(layout, dest, target.position))
+                       facing=_move_facing(dest))
             continue
 
         run = state.reach_for(figure, Option.MOVE)
@@ -107,7 +114,7 @@ def take_movement(state: GameState, side: str) -> None:
         if approach:
             dest = min(approach, key=lambda h: layout.distance(h, target.position))
             state.move(figure, Option.MOVE, path=run.path_to(dest),
-                       facing=_facing_toward(layout, dest, target.position))
+                       facing=_move_facing(dest))
         else:
             state.move(figure, Option.MOVE, facing=facing)  # boxed in; just face the foe
 

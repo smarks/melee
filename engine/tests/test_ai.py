@@ -35,6 +35,27 @@ def test_ai_closes_the_distance() -> None:
     assert after < before                    # it moved toward the enemy
 
 
+def test_ai_drives_a_multihex_giant_without_crashing() -> None:
+    # Regression (#153): the AI used to pass a facing change together with a path
+    # for a multi-hex figure, which the engine rejects (turn-while-move is deferred
+    # for giants), crashing mid-turn. It must drive a giant with only legal moves.
+    from engine.monsters import create_monster
+    arena = Arena(cols=13, rows=13)
+    layout = arena.layout
+    foe = create_human("Foe", 12, 12, "blue", weapons=[BROADSWORD],
+                       ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    giant = create_monster("Giant", "Grond", "red")
+    foe.position, foe.facing = Hex(2, 2), 0
+    giant.position, giant.facing = Hex(9, 9), 0       # far off, facing away from the foe
+    state = GameState(arena, [giant, foe], dice=Dice(seed=1))
+
+    assert giant.size > 1                              # really multi-hex
+    before = layout.distance(giant.position, foe.position)
+    ai.take_movement(state, "red")                    # must not raise IllegalAction
+    after = layout.distance(giant.position, foe.position)
+    assert after <= before                            # made a legal move toward the foe
+
+
 def test_ai_engaged_attacks_and_resolves() -> None:
     arena = Arena(cols=7, rows=7)
     layout = arena.layout
