@@ -80,6 +80,7 @@ class PendingAttack:
     situational: int = 0      # circumstantial DX mod (prone, pole-vs-charge, bodies)
     situational_note: str = ""
     damage_dice_bonus: int = 0  # extra damage dice (pole weapon in/against a charge)
+    charge_resolve_first: bool = False  # pole weapon used in/against a charge: strikes first
     thrown: bool = False        # a hurled weapon — it leaves the thrower's hand
     hth_damage: object | None = None  # DamageDice override for a grapple (HTH) attack
     weapon: object | None = None  # Weapon override (off-hand main-gauche jab); else ready
@@ -380,18 +381,28 @@ class GameState:
                 continue                                  # flew past this one
             self._flight_strike(pending, blocker, dist, results)
             return
-        # 2) the intended target — a normal thrown/missile attack.
+        # 2) the intended target — a normal thrown/missile attack. A thrown
+        # weapon takes the target's facing bonus (ignore_facing False); a missile
+        # never does (p.16) — both are carried on the pending attack.
         result = self.rules.resolve_attack(
-            self.dice, attacker, target, zone=pending.zone, ignore_facing=True,
-            dice_count=self.rules.attack_dice_count(target),
+            self.dice, attacker, target, zone=pending.zone,
+            ignore_facing=pending.ignore_facing,
+            dice_count=self.rules.attack_dice_count(target, ranged=True),
             range_penalty=pending.range_penalty,
             situational=pending.situational,
-            situational_note=pending.situational_note)
+            situational_note=pending.situational_note,
+            ranged=True)
         result.thrown = pending.thrown
         self._apply(attacker, target, result)
         results.append(result)
         if result.hit:
             self._land_flight(pending, target.position)
+            return
+        if result.dropped_weapon or result.broke_weapon:
+            # A 17 drops the weapon (in the target hex for a throw), an 18 breaks
+            # it (p.10) — either way it has left the hand and does NOT fly on to
+            # strike a figure behind the target. ``_apply`` already placed the
+            # dropped weapon or removed the broken one, so nothing lands here.
             return
         # 3) a clean miss — the weapon flies on up to ten hexes (p.15).
         direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
@@ -415,7 +426,7 @@ class GameState:
         result = self.rules.resolve_attack(
             self.dice, attacker, victim,
             zone=attack_zone(self.arena.layout, attacker, victim),
-            ignore_facing=True, range_penalty=-dist, force_hit=True)
+            ignore_facing=True, range_penalty=-dist, force_hit=True, ranged=True)
         result.thrown = pending.thrown
         self._apply(attacker, victim, result)
         results.append(result)
@@ -573,7 +584,7 @@ class GameState:
                 counter = self.rules.resolve_attack(
                     self.dice, defender, attacker,
                     zone=attack_zone(self.arena.layout, defender, attacker),
-                    dice_count=self.rules.attack_dice_count(attacker),
+                    dice_count=self.rules.attack_dice_count(attacker, ranged=False),
                     force_hit=True)
                 self.log.append(narrate_hth(attacker, defender, "free_hit"))
                 self._apply(defender, attacker, counter)
@@ -737,7 +748,7 @@ class GameState:
         attacker.attacked_this_turn = True        # the rush replaces its attack
         zone = attack_zone(layout, attacker, target)
         needed = self.rules.to_hit_number(attacker, zone=zone)
-        dice_count = self.rules.attack_dice_count(target)
+        dice_count = self.rules.attack_dice_count(target, ranged=False)
         rolled = self.dice.total(dice_count)
         hit, _multiplier, _dropped, _broke = self.rules.classify_roll(
             rolled, dice_count, needed)
@@ -766,15 +777,33 @@ class GameState:
                           weapon, adjacent: bool) -> int:
         """Extra damage dice for a pole weapon in/against a charge (p.12).
 
-        A pole used against a charging foe — or in a charge of three-plus hexes —
-        does one extra die. A jab (non-adjacent strike) never earns it.
+        A pole used against a charging foe always does one extra die. Used *in* a
+        charge it earns the die only when the attacker moved three-plus hexes in a
+        STRAIGHT line (p.12), not merely three hexes. A jab (non-adjacent strike)
+        never earns it.
         """
         if weapon is None or weapon.kind != WeaponKind.POLE or not adjacent:
             return 0
         against_charge = target.current_option == Option.CHARGE_ATTACK
         in_charge = (attacker.current_option == Option.CHARGE_ATTACK
-                     and attacker.moved_this_turn >= 3)
+                     and attacker.moved_this_turn >= 3
+                     and attacker.moved_straight)
         return 1 if (against_charge or in_charge) else 0
+
+    def _pole_charge_resolve_first(self, attacker: Figure, target: Figure,
+                                   weapon, adjacent: bool) -> bool:
+        """Whether a pole weapon used in or against a charge resolves before all
+        other attacks (p.12).
+
+        This holds for ANY pole weapon used in a charge attack OR against one,
+        independent of how far the charger moved and of whether the strike earns
+        the +1 damage die — so even a one-hex pole charge strikes first. A jab
+        (non-adjacent strike) is a regular attack and never resolves first.
+        """
+        if weapon is None or weapon.kind != WeaponKind.POLE or not adjacent:
+            return False
+        return (attacker.current_option == Option.CHARGE_ATTACK
+                or target.current_option == Option.CHARGE_ATTACK)
 
     def _situational_mods(self, attacker: Figure, target: Figure,
                           weapon, is_missile: bool,
@@ -798,12 +827,16 @@ class GameState:
         if (attacker.posture == Posture.PRONE and is_missile
                 and weapon is not None and weapon.reload > 0):
             mods += 1; notes.append("+1 prone")
-        # A braced pole weapon punishes a charging foe: +2 (not on a 2-hex jab).
+        # A braced pole weapon punishes a charging foe: +2 — but only for a figure
+        # that "stands still (or simply changes facing)" (p.12). A pole user that
+        # took a shift moving a hex (or charged itself) does not get it. Not on a
+        # 2-hex jab.
         adjacent = (attacker.position is not None and target.position is not None
                     and layout.distance(attacker.position, target.position) == 1)
         if (weapon is not None and weapon.kind == WeaponKind.POLE and adjacent
                 and target.current_option == Option.CHARGE_ATTACK
-                and attacker.current_option != Option.CHARGE_ATTACK):
+                and attacker.current_option != Option.CHARGE_ATTACK
+                and attacker.moved_this_turn == 0):
             mods += 2; notes.append("+2 vs charge")
         # The ATTACKER fighting from a fallen body's hex has bad footing: -2 to its
         # own to-hit (p.16, "Standing in a hex with a fallen body") — #125.
@@ -856,18 +889,26 @@ class GameState:
         if ready is not None and option != Option.PICK_UP:
             self._validate_ready(figure, option, ready)
         if path:
+            # Record straightness for the pole-charge extra-die rule (p.12): the
+            # +1 damage die needs a charge of three-plus hexes "in a straight
+            # line", not merely three hexes moved. A path is straight when every
+            # step runs in the same hex direction (computed over start -> path).
+            figure.moved_straight = self._path_is_straight(figure.position, path)
             figure.position = path[-1]
             figure.moved_this_turn = len(path)
         if facing is not None:
             figure.facing = facing % 6
         figure.current_option = option
         figure.dodging = option_spec.sets_dodge
-        if option == Option.STAND_UP:
-            figure.posture = Posture.STANDING
-        elif option == Option.GO_PRONE:
+        figure.defending = option_spec.sets_defend
+        if option == Option.GO_PRONE:
             figure.posture = Posture.PRONE
         elif option == Option.KNEEL:
             figure.posture = Posture.KNEELING
+        # STAND UP is NOT applied here: a figure rises "at the end of the combat
+        # phase" (p.6-7, option g), so it stays prone/kneeling through this turn's
+        # combat — still struck as having no front (+4) — and end_turn performs
+        # the rise. (Crawl keeps it grounded and is handled by the path move.)
         if ready is not None:
             if option == Option.PICK_UP:
                 self.pick_up_weapon(figure, ready)
@@ -966,6 +1007,23 @@ class GameState:
                     )
             previous = step
 
+    def _path_is_straight(self, start: Hex, path: list[Hex]) -> bool:
+        """Whether ``start`` + ``path`` runs in a single, unchanging direction.
+
+        A move of zero or one step is trivially straight. Otherwise every
+        consecutive pair of hexes must share the same direction index (p.12, the
+        pole-charge "straight line" diagram).
+        """
+        if len(path) < 2:
+            return True
+        layout = self.arena.layout
+        points = [start, *path]
+        directions = [
+            layout.direction_to(points[index], points[index + 1])
+            for index in range(len(points) - 1)
+        ]
+        return all(direction == directions[0] for direction in directions)
+
     # ---- combat ----
     def in_front_arc(self, attacker: Figure, point: Hex) -> bool:
         """Whether ``point`` lies in ``attacker``'s front arc, ignoring posture.
@@ -1047,14 +1105,17 @@ class GameState:
                     self.arena.layout, attacker.position, target.position)
                 range_penalty = self.rules.missile_range_penalty(megahexes)
                 shots = max_missile_shots(weapon, attacker.base_adj_dx)
-            # zone is carried so a ready shield still stops frontal missiles,
-            # but ignore_facing suppresses the to-hit facing bonus (missiles
-            # and thrown weapons never get a facing add, p.16). The line-of-flight
-            # is traced from attacker to target, so intervening figures and fly-on
-            # are resolved directionally regardless.
+            # zone is carried so a ready shield still stops frontal fire, and it
+            # is the target's zone (as for melee) so a thrown weapon striking an
+            # exposed flank/rear earns the +2/+4 facing bonus -- a thrown attack
+            # is "treated exactly like a regular attack" (p.15). Only true missile
+            # weapons "never get a bonus for the target's facing" (p.16), so the
+            # facing add is suppressed for missiles alone (ignore_facing). The
+            # line-of-flight is traced from attacker to target either way, so
+            # intervening figures and fly-on resolve directionally regardless.
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
-                              ignore_facing=True, range_penalty=range_penalty,
+                              ignore_facing=is_missile, range_penalty=range_penalty,
                               shots=shots, thrown=is_throw,
                               situational=situational, situational_note=situational_note)
             )
@@ -1069,6 +1130,8 @@ class GameState:
                               ignore_facing=False, range_penalty=0,
                               situational=situational, situational_note=situational_note,
                               damage_dice_bonus=self._pole_charge_dice(
+                                  attacker, target, weapon, adjacent),
+                              charge_resolve_first=self._pole_charge_resolve_first(
                                   attacker, target, weapon, adjacent))
             )
         if with_main_gauche:
@@ -1109,7 +1172,9 @@ class GameState:
         def ordering_key(pending: PendingAttack) -> int:
             # Pole weapons used in/against a charge strike first, then by adjDX
             # (p.12) — so a polearm can drop a charger before it lands its blow.
-            charge_first = 0 if pending.damage_dice_bonus > 0 else 1
+            # This is independent of the +1 damage die: even a one-hex pole charge
+            # (no extra die) resolves first.
+            charge_first = 0 if pending.charge_resolve_first else 1
             return (charge_first, -self.rules.order_dx(
                 pending.attacker, zone=pending.zone,
                 ignore_facing=pending.ignore_facing,
@@ -1160,7 +1225,9 @@ class GameState:
                 result = self.rules.resolve_attack(
                     self.dice, attacker, pending.target,
                     zone=zone, weapon=weapon,
-                    dice_count=self.rules.attack_dice_count(pending.target),
+                    dice_count=self.rules.attack_dice_count(
+                        pending.target, ranged=False),
+                    ranged=False,
                     ignore_facing=pending.ignore_facing,
                     range_penalty=pending.range_penalty,
                     situational=pending.situational,
@@ -1201,7 +1268,10 @@ class GameState:
             if attacker.ready_weapon in attacker.weapons:
                 attacker.weapons.remove(attacker.ready_weapon)
             if result.dropped_weapon:           # dropped lands intact; broken is gone
-                self._drop_to_ground(attacker.ready_weapon, attacker.position)
+                # A fumbled melee weapon drops in the attacker's own hex; a thrown
+                # weapon (a 17 in flight) drops in the TARGET hex instead (p.10).
+                landing = target.position if result.thrown else attacker.position
+                self._drop_to_ground(attacker.ready_weapon, landing)
             attacker.ready_weapon = None
         else:
             self.log.append(narrate_attack(attacker, target, result))
@@ -1257,13 +1327,22 @@ class GameState:
     def end_turn(self) -> None:
         """Settle injury flags and reset per-turn state, then advance the turn."""
         for figure in self.figures:
+            # Option (g): a STAND UP chosen in movement takes effect now, at the
+            # end of the combat phase (p.6-7). The figure stayed prone/kneeling
+            # through this turn's combat and only now rises to its feet. (Crawl
+            # keeps it grounded and never sets this option.)
+            if (figure.current_option == Option.STAND_UP
+                    and figure.posture != Posture.STANDING):
+                figure.posture = Posture.STANDING
             figure.wounded_last_turn = (
                 figure.hits_this_turn >= figure.wound_hits_threshold
             )
             figure.hits_this_turn = 0
             figure.attacked_this_turn = False
             figure.moved_this_turn = 0
+            figure.moved_straight = False
             figure.dodging = False
+            figure.defending = False
             figure.current_option = None
             figure.dealt_st_damage_this_turn = False
             # A crossbow reloads a turn closer — but an engaged figure cannot

@@ -138,7 +138,9 @@ class Figure:
     wounded_last_turn: bool = False  # took 5+ hits last turn -> -2 DX this turn
     attacked_this_turn: bool = False
     moved_this_turn: int = 0         # hexes moved this turn (for half-MA limit)
-    dodging: bool = False            # chose dodge/defend this turn
+    moved_straight: bool = False     # this turn's move ran in a straight line (pole charge)
+    dodging: bool = False            # chose DODGE (4 dice to hit it with a missile/thrown)
+    defending: bool = False          # chose SHIFT_DEFEND (4 dice to hit it in melee)
     unconscious: bool = False
     dead: bool = False
     uid: str = ""                    # stable id for UI / occupancy

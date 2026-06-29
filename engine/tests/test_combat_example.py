@@ -131,7 +131,7 @@ def test_flavius_versus_wulf_full_combat_example() -> None:
     # --- Turn 7: Flavius defends (adjDX 6, -2); Wulf's swing misses on four dice
     _aim(state, flavius, wulf)
     assert flavius.base_adj_dx + flavius.wound_dx_penalty() == 6
-    flavius.dodging = True
+    flavius.defending = True              # engaged: defend forces 4 dice in melee
     wulf.current_option = Option.SHIFT_ATTACK
     dice.feed(5, 5, 4, 2)              # four-dice total 16 -> miss
     state.queue_attack(wulf, flavius)

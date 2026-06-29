@@ -260,7 +260,7 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list, list]:
             and figure.position is not None):
         return [], [], []
     option = figure.current_option
-    if option is not None and spec(option).sets_dodge:
+    if option is not None and (spec(option).sets_dodge or spec(option).sets_defend):
         return [], [], []
     # A figure that chose to disengage moves instead of attacking (option n,
     # p.19); it may never attack the turn it disengages.
@@ -1137,7 +1137,9 @@ def _update_figure(game: dict, uid: str, spec: dict) -> None:
     rebuilt.current_option = figure.current_option
     rebuilt.attacked_this_turn = figure.attacked_this_turn
     rebuilt.moved_this_turn = figure.moved_this_turn
+    rebuilt.moved_straight = figure.moved_straight
     rebuilt.dodging = figure.dodging
+    rebuilt.defending = figure.defending
     rebuilt.dealt_st_damage_this_turn = figure.dealt_st_damage_this_turn
     # Injury carried into the rest of the fight (wounds + the DX-penalty flags).
     rebuilt.damage_taken = min(figure.damage_taken, rebuilt.strength)
