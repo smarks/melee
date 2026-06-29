@@ -1,0 +1,36 @@
+# Melee — Green Environment
+#
+# Part of the blue-green deployment setup (see deploy.sh).
+# Green runs on port 9071.
+#
+# Install once on datahorde:
+#   sudo cp melee-green.service /etc/systemd/system/melee-green.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now melee-green
+#
+# NOTE: --workers 1 is deliberate. Live games are an in-memory store
+# (board/views.py), so multiple workers would not share game state and the #85
+# multiplayer shared view would break across workers. Raise the worker count
+# only after a shared/DB-backed game store lands (#132 follow-up).
+[Unit]
+Description=Melee (Green)
+After=network.target
+
+[Service]
+Type=simple
+User=sam
+Group=sam
+WorkingDirectory=/home/sam/dev/melee
+EnvironmentFile=/home/sam/dev/melee/.env
+Environment="PATH=/home/sam/dev/melee/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/sam/dev/melee/.venv/bin/gunicorn \
+    --workers 1 \
+    --bind 127.0.0.1:9071 \
+    --access-logfile - \
+    --error-logfile - \
+    melee_game.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
