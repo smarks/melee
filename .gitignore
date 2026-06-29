@@ -7,6 +7,12 @@ staticfiles/
 build/
 dist/
 
+# Deploy-host artifacts (never commit): secrets, the virtualenv, and the
+# host-specific blue/green state file written by deploy.sh.
+.env
+.venv/
+.deploy-state
+
 # Reference rulebook PDFs are kept local only (large binaries); the distilled
 # specs in docs/reference/*.md are tracked instead.
 docs/reference/*.pdf
