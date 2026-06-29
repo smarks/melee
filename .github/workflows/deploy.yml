@@ -1,0 +1,31 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "deploy.sh subcommand: leave blank for a normal deploy, or 'rollback' / 'status'."
+        required: false
+        default: ""
+
+jobs:
+  deploy:
+    uses: smarks/ops-workflows/.github/workflows/deploy-blue-green.yml@main
+    with:
+      app-dir: /home/sam/dev/melee
+      command: ${{ inputs.command || '' }}
+    secrets:
+      ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+  notify:
+    needs: [deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Email on failure or green-after-red
+        uses: smarks/base_repo_template/.github/actions/notify@main
+        with:
+          job-status: ${{ needs.deploy.result }}
+          mail-password: ${{ secrets.MAIL_PASSWORD }}
