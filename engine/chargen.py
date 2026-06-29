@@ -149,11 +149,16 @@ def validate(profile_name: str, spec: dict) -> list[str]:
     return errors
 
 
-def build(profile_name: str, spec: dict) -> Figure:
-    """Build a fighter from a validated spec; raises ValueError if illegal."""
-    problems = validate(profile_name, spec)
-    if problems:
-        raise ValueError("; ".join(problems))
+def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figure:
+    """Build a fighter from a spec; raises ValueError if illegal.
+
+    The spec is checked against the point budget and rules first, unless
+    ``validate_spec`` is False — admins may edit a fighter outside the rules (#86).
+    """
+    if validate_spec:
+        problems = validate(profile_name, spec)
+        if problems:
+            raise ValueError("; ".join(problems))
 
     weapon = WEAPONS[spec["weapon"]]
     second_name = spec.get("weapon2")
@@ -180,4 +185,5 @@ def build(profile_name: str, spec: dict) -> Figure:
             weapon_skill=skills, **gear)
     race, _ = _race_from_spec(spec)
     return create_fighter(spec["name"], spec["strength"], spec["dexterity"],
-                          spec["side"], race=race or Race.HUMAN, **gear)
+                          spec["side"], race=race or Race.HUMAN,
+                          validate=validate_spec, **gear)

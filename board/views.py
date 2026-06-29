@@ -439,7 +439,9 @@ def _persist_game(gid: str, game: dict) -> None:
 
 # ---- views ------------------------------------------------------------------
 @ensure_csrf_cookie
-def index(request):
+def index(request, gid=None):
+    # gid (from the /game/<gid> deep link) is read client-side from the URL; the
+    # view just serves the page either way.
     return render(request, "board/board.html")
 
 
@@ -555,8 +557,11 @@ def api_new_game(request):
         arena, figures = scenario.skirmish_for(profile.name)
         computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
     pid = _player_id(request) or secrets.token_hex(16)
-    response = JsonResponse(_start_game(
-        arena, figures, profile, computer_sides, request.GET.get("seed"), pid))
+    payload = _start_game(
+        arena, figures, profile, computer_sides, request.GET.get("seed"), pid)
+    payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
+    payload["is_admin"] = _is_admin(request)
+    response = JsonResponse(payload)
     if _player_id(request) is None:
         _set_player_cookie(response, pid)
     return response
@@ -644,8 +649,11 @@ def api_new_custom(request):
     except (ValueError, KeyError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     pid = _player_id(request) or secrets.token_hex(16)
-    response = JsonResponse(_start_game(
-        arena, figures, profile, computer_sides, body.get("seed"), pid))
+    payload = _start_game(
+        arena, figures, profile, computer_sides, body.get("seed"), pid)
+    payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
+    payload["is_admin"] = _is_admin(request)
+    response = JsonResponse(payload)
     if _player_id(request) is None:
         _set_player_cookie(response, pid)
     return response
@@ -897,7 +905,7 @@ def api_action(request, gid):
 
     try:
         _authorize_action(game, request, body)
-        result = _dispatch(game, body)
+        result = _dispatch(game, body, is_admin=_is_admin(request))
         _advance_computer(game)
         _auto_end_if_idle(game)
     except IllegalAction as exc:
@@ -967,7 +975,7 @@ def api_seat(request, gid):
     return response
 
 
-def _dispatch(game: dict, body: dict):
+def _dispatch(game: dict, body: dict, *, is_admin: bool = False):
     state: GameState = game["state"]
     action = body.get("type")
 
@@ -1091,13 +1099,14 @@ def _dispatch(game: dict, body: dict):
         return None
 
     if action == "update_figure":
-        _update_figure(game, body.get("uid", ""), body.get("spec") or {})
+        _update_figure(game, body.get("uid", ""), body.get("spec") or {},
+                       allow_invalid=is_admin)
         return None
 
     raise IllegalAction(f"unknown action {action!r}")
 
 
-def _update_figure(game: dict, uid: str, spec: dict) -> None:
+def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = False) -> None:
     """Rebuild a live figure from an edited spec, in place.
 
     The new stats and gear take effect immediately, while the figure keeps its
@@ -1107,6 +1116,9 @@ def _update_figure(game: dict, uid: str, spec: dict) -> None:
     accumulated wounds and the injury flags that drive DX penalties; an unspent
     missile reload; and any hand-to-hand grapple the figure is locked in. Side
     is fixed.
+
+    ``allow_invalid`` (admins, #86) skips point-budget/rules validation so a
+    fighter can be edited outside the rules.
     """
     state: GameState = game["state"]
     figure = _figure(state, uid)
@@ -1114,7 +1126,7 @@ def _update_figure(game: dict, uid: str, spec: dict) -> None:
     spec["side"] = figure.side
     spec.setdefault("name", figure.name)
     try:
-        rebuilt = chargen.build(game["profile"], spec)
+        rebuilt = chargen.build(game["profile"], spec, validate_spec=not allow_invalid)
     except (ValueError, KeyError) as exc:
         raise IllegalAction(str(exc))
 

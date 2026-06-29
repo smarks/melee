@@ -25,6 +25,13 @@ def test_new_game_has_four_figures_in_initiative(client: Client) -> None:
     assert sides == {"red", "blue"}
 
 
+def test_game_deep_link_serves_the_board_page(client: Client) -> None:
+    # #85: /game/<gid> serves the board page (the shareable join link). The gid
+    # is read client-side; the view just renders the template either way.
+    data = _new(client)
+    assert client.get(f"/game/{data['gid']}").status_code == 200
+
+
 def test_options_endpoint_returns_options_and_reach(client: Client) -> None:
     data = _new(client)
     gid = data["gid"]
@@ -747,6 +754,78 @@ def test_admin_bypasses_seat_ownership(client: Client, django_user_model) -> Non
                        data=json.dumps({"type": "move", "uid": blue_uid, "option": "move"}),
                        content_type="application/json")
     assert moved.status_code != 403
+
+
+def test_new_game_and_state_responses_carry_ownership_fields(client: Client) -> None:
+    # Regression: the creator's new-game response (and api_state) must include
+    # you_control / open_seats / is_admin. api_new_game was missing them, so the
+    # creator's Players panel started out wrong until a poll happened to correct it.
+    created = _new(client)
+    assert sorted(created["you_control"]) == ["blue", "red"]   # hot-seat: owns both
+    assert created["open_seats"] == []
+    assert created["is_admin"] is False
+
+    state = client.get(f"/api/game/{created['gid']}").json()
+    assert sorted(state["you_control"]) == ["blue", "red"]
+    assert state["open_seats"] == []
+    assert "is_admin" in state
+
+
+def test_spectator_sees_open_seat_then_claims_and_can_play(client: Client) -> None:
+    # The full share-link flow across two browsers (#85): the creator opens a seat,
+    # a fresh session sees it as open via a plain GET (the shared view that was
+    # broken when the poll ignored seat changes), is blocked from acting until it
+    # claims, then controls that side.
+    creator = client
+    gid = _new(creator)["gid"]
+    creator.post(f"/api/game/{gid}/seat",
+                 data=json.dumps({"action": "open", "side": "blue"}),
+                 content_type="application/json")
+
+    spectator = Client()                                   # a different browser
+    seen = spectator.get(f"/api/game/{gid}").json()        # deep-link GET
+    assert seen["open_seats"] == ["blue"]                  # sees the open seat
+    assert seen["you_control"] == []                       # owns nothing yet
+
+    blocked = spectator.post(f"/api/game/{gid}/action",    # a spectator can't drive
+                             data=json.dumps({"type": "roll_initiative"}),
+                             content_type="application/json")
+    assert blocked.status_code == 403
+
+    spectator.post(f"/api/game/{gid}/seat",                # ...until it claims a seat
+                   data=json.dumps({"action": "claim", "side": "blue"}),
+                   content_type="application/json")
+    played = spectator.post(f"/api/game/{gid}/action",
+                            data=json.dumps({"type": "roll_initiative"}),
+                            content_type="application/json")
+    assert played.status_code == 200
+    assert played.json()["you_control"] == ["blue"]
+
+
+@pytest.mark.django_db
+def test_admin_can_edit_a_figure_outside_the_rules(client: Client, django_user_model) -> None:
+    # #86: an admin may edit a fighter past the point budget; a regular owner is
+    # still held to the rules.
+    data = _new(client)                          # creator owns both sides (hot-seat)
+    gid = data["gid"]
+    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+    over_budget = dict(red["edit_spec"])
+    over_budget["strength"] = 99                 # blows the ST+DX point budget
+
+    def edit(who: Client):
+        return who.post(f"/api/game/{gid}/action",
+                        data=json.dumps({"type": "update_figure",
+                                         "uid": red["uid"], "spec": over_budget}),
+                        content_type="application/json")
+
+    assert edit(client).status_code == 400       # the owner is bound by the rules
+
+    admin_user = django_user_model.objects.create_user(
+        username="gm2", password="gm-pass-98765", is_staff=True)
+    admin = Client()
+    admin.force_login(admin_user)
+    res = edit(admin)                            # the admin's out-of-rules edit lands
+    assert res.status_code == 200
 
 
 def _victory_duel(gid: str):

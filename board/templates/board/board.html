@@ -154,6 +154,8 @@
       <div class="banner" id="phaseBanner">Loading…</div>
       <div class="hint" id="hint"></div>
     </div>
+    <div class="seclabel">Players</div>
+    <div class="pad" id="seats"></div>
     <div class="seclabel">Game status</div>
     <div id="log"></div>
     <div class="seclabel">Characters</div>
@@ -223,7 +225,19 @@ let PLAN = {};           // uid -> pending action for this phase (executed on Co
 let warnKind = null;     // "move" | "combat" while showing the "not everyone set" warning
 let lastPhase = null;    // detect phase changes to clear the plan
 let frAdvance = {};      // "attackerUid>targetUid" -> follow-into-vacated-hex toggle
-const myControlled = f => (S.controllers || {})[f.side] !== "computer";
+let YOU_CONTROL = [];    // sides this browser may act on (server-authoritative, #74/#85)
+let OPEN_SEATS = [];     // sides currently open to claim (#85)
+let IS_ADMIN = false;    // logged-in admin: may act on any figure (#86)
+// A figure is yours iff its side is in YOU_CONTROL (admins control all). Fall back
+// to the hot-seat rule (any non-computer side) only if the server sent no seats.
+const myControlled = f => IS_ADMIN ? true
+  : YOU_CONTROL.length ? YOU_CONTROL.includes(f.side)
+  : (S.controllers || {})[f.side] !== "computer";
+function captureOwnership(data) {
+  if ("you_control" in data) YOU_CONTROL = data.you_control || [];
+  if ("open_seats" in data) OPEN_SEATS = data.open_seats || [];
+  if ("is_admin" in data) IS_ADMIN = !!data.is_admin;
+}
 
 const $ = id => document.getElementById(id);
 const api = (path, opts) => fetch(path, opts).then(r => r.json());
@@ -240,6 +254,7 @@ function postJSON(path, body) {
 async function startGame(query) {
   const data = await api(`/api/game/new?${query}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
+  captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
   optCache = {};
   resetSelection(); ensureGameCatalog(); render();
 }
@@ -254,7 +269,12 @@ async function startSetup() {
 }
 async function refresh() {
   const data = await api(`/api/game/${GID}`);
-  LAYOUT = data.layout; S = data.state; optCache = {}; render();
+  if (data.error) {                 // game gone (it ended or the dev server restarted)
+    $("phaseBanner").textContent = "Game not found — it ended or the server restarted. Start a New game.";
+    flash("This game is no longer available.");
+    return;
+  }
+  LAYOUT = data.layout; S = data.state; captureOwnership(data); optCache = {}; render();
 }
 async function act(body) {
   const data = await api(`/api/game/${GID}/action`, {
@@ -262,10 +282,39 @@ async function act(body) {
     body: JSON.stringify(body)
   });
   if (data.error) { flash(data.error); return null; }
-  S = data.state; LAYOUT = data.layout; optCache = {};
+  S = data.state; LAYOUT = data.layout; captureOwnership(data); optCache = {};
   return data;
 }
 function flash(msg) { $("hint").textContent = msg; }
+function drawSeats() {
+  const el = $("seats"); if (!el || !S) return;
+  const controllers = S.controllers || {};
+  const b = (side, a, t) =>
+    `<button style="margin-left:6px;padding:1px 7px;cursor:pointer" onclick="seatAction('${a}','${side}')">${t}</button>`;
+  const rows = Object.keys(controllers).map(side => {
+    const computer = controllers[side] === "computer";
+    const mine = YOU_CONTROL.includes(side), open = OPEN_SEATS.includes(side);
+    let tag = "taken", btn = "";
+    if (computer) tag = "computer";
+    else if (mine) { tag = "you"; if (YOU_CONTROL.length > 1) btn = b(side, "open", "Open"); }
+    else if (open) { tag = "open"; btn = b(side, "claim", "Claim"); }
+    return `<div style="margin:2px 0"><b style="text-transform:capitalize">${side}</b> <span class="muted">— ${tag}</span>${btn}</div>`;
+  }).join("");
+  const copy = `<button style="margin-top:6px;padding:1px 7px;cursor:pointer" onclick="copyLink()">Copy invite link</button>`;
+  const adminTag = IS_ADMIN
+    ? `<div style="margin-bottom:5px;color:#e6b800"><b>★ Admin</b> <span class="muted">— you control every figure and can edit them outside the rules.</span></div>`
+    : "";
+  el.innerHTML = adminTag + rows + copy;
+}
+async function seatAction(action, side) {
+  const data = await postJSON(`/api/game/${GID}/seat`, {action, side});
+  if (data && data.error) { flash(data.error); return; }
+  await refresh();   // reload with the new ownership (a joiner's cookie is now set)
+}
+function copyLink() {
+  if (navigator.clipboard) navigator.clipboard.writeText(location.href);
+  flash("Invite link copied — send it to another player, who clicks Claim.");
+}
 function resetSelection() { sel = null; optInfo = null; chosenOption = null; pendingDest = null; pendingFacing = null; pendingReady = null; }
 
 function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
@@ -375,6 +424,7 @@ function render() {
     lastPhase = S.phase; PLAN = {}; warnKind = null; resetSelection(); closeMenu();
   }
   drawArena();
+  drawSeats();
   drawControls();
   drawSelInfo();
   drawRoster();
@@ -1238,6 +1288,7 @@ async function startCustom() {
     body: JSON.stringify(body)});
   if (data.error) { $("editorErr").textContent = "Can't start: " + data.error; return; }
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
+  captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
   closeEditor(); closeSetup(); resetSelection(); render();
 }
 
@@ -1298,7 +1349,23 @@ function resetTheme() {
 }
 
 applyTheme();
-bootGame();
+// Deep link: /game/<gid> joins or spectates an existing game; otherwise start fresh.
+const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
+if (urlGid) { GID = urlGid; refresh(); } else { bootGame(); }
+// Shared view: poll so every browser on this game sees moves as they happen.
+// Re-render only when the server state actually changed, to avoid flicker.
+let _lastStateJSON = "";
+const POLL = setInterval(async () => {
+  if (!GID) return;
+  const data = await api(`/api/game/${GID}`);
+  if (data.error) { clearInterval(POLL); return; }   // game gone — stop polling
+  // Include the seat/ownership fields: opening or claiming a seat changes these
+  // but NOT data.state, so a state-only signature would miss seat updates (#85).
+  const sig = JSON.stringify([data.state, data.you_control, data.open_seats, data.is_admin]);
+  if (sig === _lastStateJSON) return;
+  _lastStateJSON = sig;
+  LAYOUT = data.layout; S = data.state; captureOwnership(data); optCache = {}; render();
+}, 2000);
 // Arriving from login (LOGIN_REDIRECT_URL = "/?setup") opens the wizard straight away.
 if (new URLSearchParams(location.search).has("setup")) openSetup();
 </script>
