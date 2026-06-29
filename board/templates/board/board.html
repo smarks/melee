@@ -182,7 +182,7 @@
       <label>Mode
         <select id="mode">
           <option value="pxai">Player vs Computer</option>
-          <option value="pxp">Player vs Player (hot-seat)</option>
+          <option value="pxp">Player vs Player (same screen)</option>
         </select>
       </label>
     </div>
@@ -229,7 +229,7 @@ let YOU_CONTROL = [];    // sides this browser may act on (server-authoritative,
 let OPEN_SEATS = [];     // sides currently open to claim (#85)
 let IS_ADMIN = false;    // logged-in admin: may act on any figure (#86)
 // A figure is yours iff its side is in YOU_CONTROL (admins control all). Fall back
-// to the hot-seat rule (any non-computer side) only if the server sent no seats.
+// to the same screen rule (any non-computer side) only if the server sent no seats.
 const myControlled = f => IS_ADMIN ? true
   : YOU_CONTROL.length ? YOU_CONTROL.includes(f.side)
   : (S.controllers || {})[f.side] !== "computer";
@@ -430,7 +430,7 @@ function render() {
   drawRoster();
   drawLog();
   const vsComputer = S.controllers && Object.values(S.controllers).includes("computer");
-  $("turnInfo").textContent = (PROFILE || "") + (vsComputer ? " · vs Computer" : " · hot-seat");
+  $("turnInfo").textContent = (PROFILE || "") + (vsComputer ? " · vs Computer" : " · same screen");
 }
 
 function drawArena() {

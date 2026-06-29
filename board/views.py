@@ -7,7 +7,7 @@ Section IV turn structure as a small phase machine (initiative -> move -> combat
 wire as "CCRR" labels matching :mod:`board.geometry`.
 
 State is authoritative on the server; the browser only renders and issues
-actions. This is hot-seat play -- every side is driven by a human.
+actions. This is same screen play -- every side is driven by a human.
 """
 from __future__ import annotations
 
@@ -488,7 +488,7 @@ def _start_game(arena, figures, profile, computer_sides, seed, owner_key) -> dic
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
     # Seats record who may drive each side. The creating session owns every human
-    # side, so hot-seat (one player, all sides) just works; computer sides are the
+    # side, so same screen (one player, all sides) just works; computer sides are the
     # AI's. #85 lets the creator open human seats for others to claim over a shared
     # link; #86 adds an admin override.
     seats = {side: ("computer" if side in computer_sides else owner_key)
