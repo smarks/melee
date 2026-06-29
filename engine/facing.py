@@ -154,24 +154,16 @@ def is_engaged_by(layout: HexLayout, figure: Figure, enemy: Figure) -> bool:
 
 
 def _engages(layout: HexLayout, figure: Figure, enemy: Figure) -> bool:
-    """Whether this one ``enemy`` is in melee contact with ``figure`` (mutual).
+    """Whether ``enemy`` engages ``figure`` -- i.e. ``figure`` stands in the
+    enemy's front hex (p.9).
 
-    Contact is mutual: it holds if ``figure`` stands in the enemy's front, or a
-    standing enemy stands in the figure's own front (adjacent and facing it).
+    Engagement is one-directional: you are engaged only by a foe whose front hex
+    you occupy. A figure that has slipped behind or beside an enemy is NOT
+    engaged by it, even while turned to face it -- it stays free to move and may
+    strike the enemy's exposed flank or rear. Two figures standing face-to-face
+    are each still engaged, because each occupies the other's front.
     """
-    if enemy.posture == Posture.PRONE or enemy.collapsed or enemy.flying:
-        return False
-    if is_engaged_by(layout, figure, enemy):
-        return True  # the enemy faces the figure
-    if (figure.posture == Posture.PRONE or figure.collapsed or figure.flying
-            or figure.position is None or enemy.position is None):
-        return False
-    if not _footprints_adjacent(layout, figure, enemy):
-        return False
-    return any(
-        zone_toward(layout, figure, hex_position) == FRONT
-        for hex_position in enemy.footprint(layout)
-    )
+    return is_engaged_by(layout, figure, enemy)
 
 
 def engagement_count(layout: HexLayout, figure: Figure, enemies) -> int:
@@ -182,9 +174,11 @@ def engagement_count(layout: HexLayout, figure: Figure, enemies) -> int:
 def is_engaged(layout: HexLayout, figure: Figure, enemies) -> bool:
     """True if ``figure`` is in melee contact with enough standing enemies.
 
-    Contact is mutual (see :func:`_engages`): two figures face-to-face both count
-    as engaged, and both may Shift & Attack. A normal figure is engaged by a
-    single foe; a giant needs **two** distinct foes in its front to be engaged
+    Engagement is one-directional (see :func:`_engages`): ``figure`` is engaged
+    only by foes whose front hex it occupies. Two figures face-to-face are each
+    engaged (each is in the other's front) and both may Shift & Attack; but a
+    figure behind or beside a foe is free. A normal figure is engaged by a single
+    such foe; a giant needs **two** distinct foes in its front to be engaged
     (``needs_two_to_engage``) -- one lone figure cannot pin it (p.20). An
     airborne figure is never engaged.
     """
