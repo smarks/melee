@@ -25,6 +25,13 @@ def test_new_game_has_four_figures_in_initiative(client: Client) -> None:
     assert sides == {"red", "blue"}
 
 
+def test_game_deep_link_serves_the_board_page(client: Client) -> None:
+    # #85: /game/<gid> serves the board page (the shareable join link). The gid
+    # is read client-side; the view just renders the template either way.
+    data = _new(client)
+    assert client.get(f"/game/{data['gid']}").status_code == 200
+
+
 def test_options_endpoint_returns_options_and_reach(client: Client) -> None:
     data = _new(client)
     gid = data["gid"]

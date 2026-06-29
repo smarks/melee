@@ -409,7 +409,9 @@ def _persist_game(gid: str, game: dict) -> None:
 
 # ---- views ------------------------------------------------------------------
 @ensure_csrf_cookie
-def index(request):
+def index(request, gid=None):
+    # gid (from the /game/<gid> deep link) is read client-side from the URL; the
+    # view just serves the page either way.
     return render(request, "board/board.html")
 
 
@@ -525,8 +527,11 @@ def api_new_game(request):
         arena, figures = scenario.skirmish_for(profile.name)
         computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
     pid = _player_id(request) or secrets.token_hex(16)
-    response = JsonResponse(_start_game(
-        arena, figures, profile, computer_sides, request.GET.get("seed"), pid))
+    payload = _start_game(
+        arena, figures, profile, computer_sides, request.GET.get("seed"), pid)
+    payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
+    payload["is_admin"] = _is_admin(request)
+    response = JsonResponse(payload)
     if _player_id(request) is None:
         _set_player_cookie(response, pid)
     return response
@@ -614,8 +619,11 @@ def api_new_custom(request):
     except (ValueError, KeyError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     pid = _player_id(request) or secrets.token_hex(16)
-    response = JsonResponse(_start_game(
-        arena, figures, profile, computer_sides, body.get("seed"), pid))
+    payload = _start_game(
+        arena, figures, profile, computer_sides, body.get("seed"), pid)
+    payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
+    payload["is_admin"] = _is_admin(request)
+    response = JsonResponse(payload)
     if _player_id(request) is None:
         _set_player_cookie(response, pid)
     return response
