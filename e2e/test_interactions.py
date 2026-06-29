@@ -20,7 +20,7 @@ def test_new_game_via_setup_dialog(live_server, page: Page) -> None:
 
     page.get_by_role("button", name="New game").click()
     expect(page.locator("#setup")).to_be_visible()
-    page.locator("#mode").select_option("pxp")          # hot-seat: both sides human
+    page.locator("#mode").select_option("pxp")          # same screen: both sides human
     page.locator("#teams").select_option("2")
     page.locator("#perTeam").select_option("2")
     page.get_by_role("button", name="Begin game").click()
@@ -37,7 +37,7 @@ def test_initiative_roll_advances_to_movement(live_server, page: Page) -> None:
     banner = page.locator("#phaseBanner")
     expect(banner).to_contain_text("Turn", timeout=20_000)
 
-    # A fresh hot-seat game so the human drives initiative (no computer auto-roll).
+    # A fresh same screen game so the human drives initiative (no computer auto-roll).
     page.get_by_role("button", name="New game").click()
     page.locator("#mode").select_option("pxp")
     page.get_by_role("button", name="Begin game").click()

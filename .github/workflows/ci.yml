@@ -24,13 +24,45 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+  # Browser-level end-to-end tests (Playwright). Kept in a separate job so the
+  # fast unit gate above isn't slowed, but run here on Linux — where Playwright
+  # is reliable — instead of only locally (where it hangs on the dev Mac), so
+  # SPA/UI regressions are actually caught (#143).
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run end-to-end tests
+        run: pytest e2e/ -q
+
+      - name: Upload match videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-videos
+          path: e2e/videos/
+          if-no-files-found: ignore
+
   notify:
-    needs: [test]
+    needs: [test, e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Email on failure or green-after-red
         uses: smarks/base_repo_template/.github/actions/notify@main
         with:
-          job-status: ${{ needs.test.result }}
+          job-status: ${{ (needs.test.result == 'success' && needs.e2e.result == 'success') && 'success' || 'failure' }}
           mail-password: ${{ secrets.MAIL_PASSWORD }}
