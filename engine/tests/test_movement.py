@@ -42,6 +42,70 @@ def test_cannot_move_more_than_option_allows() -> None:
         state.move(fighter, Option.CHARGE_ATTACK, path=far)
 
 
+def test_entering_a_fallen_body_hex_costs_three_movement_points() -> None:
+    # p.8: a fallen body is an obstacle — entering its hex costs 3 MA, not 1.
+    # A 1-wide corridor makes the body the only route southward, so the budget
+    # thresholds are unambiguous.
+    from engine.movement import reachable_moves
+    arena = Arena(cols=9, rows=15)
+    arena.walls = {Hex(col, row) for col in range(1, 10) for row in range(1, 16)
+                   if col != 5}                          # leave only column 5 open
+    start = Hex(5, 8)
+    body = Hex(5, 9)
+    # MA just under 3 (budget 2): the body hex is out of reach.
+    reach2 = reachable_moves(arena, start, 2, body_hexes={body})
+    assert body not in reach2.cost
+    # MA 3: the body hex is reachable, costing the full 3 — and the move stops
+    # there (the next hex south, reachable only through the body, would be 4).
+    reach3 = reachable_moves(arena, start, 3, body_hexes={body})
+    assert reach3.cost[body] == 3
+    assert Hex(5, 10) not in reach3.cost
+    # a clear hex 3 away (north, no body) is still reached at the normal 1/hex.
+    assert reach3.cost[Hex(5, 5)] == 3
+
+
+def test_normal_step_costs_one_but_a_body_step_costs_three() -> None:
+    # The engine's path-cost (used by the move-budget check) agrees with the
+    # reachability cost: a body hex is 3 MA, an ordinary hex 1 (p.8).
+    state, fighter = _solo_state()
+    body = create_human("Body", 12, 12, "b", weapons=[SHORTSWORD],
+                        ready_weapon=SHORTSWORD)
+    body.position = state.arena.layout.neighbor(fighter.position, 0)
+    body.damage_taken = 999                              # dead — now a fallen body
+    assert body.is_dead
+    state.figures.append(body)
+    clear_hex = state.arena.layout.neighbor(fighter.position, 3)
+    assert state._path_cost(fighter, [clear_hex]) == 1          # normal move unchanged
+    assert state._path_cost(fighter, [body.position]) == 3      # 3 MA onto the body
+    # With full MA the cautious move onto the body is legal and the fighter ends
+    # on the body's hex (a body does not block entry, only costs more).
+    state.move(fighter, Option.MOVE, path=[body.position])
+    assert fighter.position == body.position
+
+
+def test_move_budget_rejects_a_body_step_that_overruns_ma() -> None:
+    # A figure whose remaining budget is below 3 cannot step onto a body. Half
+    # MA here is 4; a two-hex path that first crosses a body costs 3 + 1 = 4,
+    # which fits, but adding a third clear hex (cost 5) overruns half-MA.
+    state, fighter = _solo_state()                       # leather -> MA 8, half 4
+    layout = state.arena.layout
+    first = layout.neighbor(fighter.position, 0)
+    body = create_human("Body", 12, 12, "b", weapons=[SHORTSWORD],
+                        ready_weapon=SHORTSWORD)
+    body.position = first
+    body.damage_taken = 999
+    state.figures.append(body)
+    beyond = layout.neighbor(first, 0)
+    third = layout.neighbor(beyond, 0)
+    # [body(3), beyond(1)] = 4 MA: fits half-MA exactly.
+    state.move(fighter, Option.HALF_MOVE, path=[first, beyond])
+    assert fighter.position == beyond
+    # reset and try to go one hex further: [body(3), beyond(1), third(1)] = 5 > 4.
+    fighter.position = layout.neighbor(first, 3)          # back to the start side
+    with pytest.raises(IllegalAction):
+        state.move(fighter, Option.HALF_MOVE, path=[first, beyond, third])
+
+
 def test_must_stop_on_entering_enemy_front_hex() -> None:
     arena = Arena(cols=9, rows=15)
     mover = create_human("Mover", 12, 12, "a", weapons=[SHORTSWORD],

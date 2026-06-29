@@ -23,7 +23,7 @@ from hexarena.hex import Hex
 
 from hexarena.pathfinding import Reach
 
-from .arena import Arena
+from .arena import BODY_COST, CLEAR_COST, Arena
 from .combat import AttackResult
 from .facing import (
     FRONT,
@@ -270,9 +270,12 @@ class GameState:
             return reach
         blocked = set(occupied)
         stop_hexes = self._enemy_front_hexes(figure)
+        # A fallen body is a 3-MA obstacle on the ground (p.8); a flyer passing
+        # overhead ignores it (handled in the flight branch above).
+        body_hexes = self._body_hexes(exclude=figure)
         reach = reachable_moves(
             self.arena, figure.position, budget,
-            blocked=blocked, stop_hexes=stop_hexes,
+            blocked=blocked, stop_hexes=stop_hexes, body_hexes=body_hexes,
         )
         if figure.size > 1:
             # A multi-hex figure can only finish where its whole footprint fits.
@@ -352,6 +355,12 @@ class GameState:
         """A fallen body (dead/collapsed figure) lies in ``hex_position``."""
         return any(f is not exclude and f.position == hex_position
                    and (f.is_dead or f.collapsed) for f in self.figures)
+
+    def _body_hexes(self, *, exclude: Figure | None = None) -> set[Hex]:
+        """Every hex holding a fallen body — the costly-to-enter obstacles (p.8)."""
+        return {f.position for f in self.figures
+                if f is not exclude and f.position is not None
+                and (f.is_dead or f.collapsed)}
 
     def _hth_pile_at(self, hex_position: Hex | None) -> list[Figure]:
         """The figures grappling in the HTH pile that shares ``hex_position``.
@@ -897,10 +906,11 @@ class GameState:
         budget = self.rules.movement_budget(
             figure.movement_allowance, option_spec.movement_cap
         )
-        if len(path) > budget:
+        path_cost = self._path_cost(figure, path)
+        if path_cost > budget:
             raise IllegalAction(
-                f"{figure.name} may move at most {budget} hex(es) on "
-                f"{option.value}, not {len(path)}"
+                f"{figure.name} may spend at most {budget} MA on "
+                f"{option.value}, but that path costs {path_cost}"
             )
         self._validate_path(figure, path)
         if figure.size > 1:
@@ -990,6 +1000,20 @@ class GameState:
         if weapon.two_handed and figure.shield_ready:
             figure.shield_ready = False   # a two-handed weapon needs both hands
         self.log.append(narrate_ready(figure, weapon))
+
+    def _path_cost(self, figure: Figure, path: list[Hex]) -> int:
+        """Total MA a move along ``path`` consumes (p.8).
+
+        Each step normally costs :data:`~engine.arena.CLEAR_COST`; entering a hex
+        that holds a fallen body costs :data:`~engine.arena.BODY_COST` instead. A
+        flyer overhead ignores bodies, so every step costs the clear rate. This
+        mirrors the cost function :func:`~engine.movement.reachable_moves` uses, so
+        the move-budget check and the reachability highlight always agree.
+        """
+        if figure.flying:
+            return len(path) * CLEAR_COST
+        body_hexes = self._body_hexes(exclude=figure)
+        return sum(BODY_COST if step in body_hexes else CLEAR_COST for step in path)
 
     def _validate_path(self, figure: Figure, path: list[Hex]) -> None:
         """Validate each step of ``figure``'s move.
