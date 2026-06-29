@@ -33,7 +33,7 @@ run leaves a watchable artifact of the match.
   plays its side, until one side *wins the field*. Drives the entire stack and
   exercises the AI's movement/combat decisions and most of the action API.
 - **`test_interactions.py`** — the human-control entry points: starting a game
-  from the setup dialog (hot-seat), and rolling initiative through to the
+  from the setup dialog (same screen), and rolling initiative through to the
   movement phase.
 
 ## Coverage
