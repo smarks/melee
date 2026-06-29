@@ -1,7 +1,7 @@
 # Melee — Green Environment
 #
 # Part of the blue-green deployment setup (see deploy.sh).
-# Green runs on port 9071.
+# Green runs on port 9073.
 #
 # Install once on datahorde:
 #   sudo cp melee-green.service /etc/systemd/system/melee-green.service
@@ -24,7 +24,7 @@ EnvironmentFile=/home/sam/dev/melee/.env
 Environment="PATH=/home/sam/dev/melee/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStart=/home/sam/dev/melee/.venv/bin/gunicorn \
     --workers 1 \
-    --bind 127.0.0.1:9071 \
+    --bind 127.0.0.1:9073 \
     --access-logfile - \
     --error-logfile - \
     melee_game.wsgi:application

@@ -19,8 +19,8 @@ set -e
 
 cd /home/sam/dev/melee
 
-BLUE_PORT=9070
-GREEN_PORT=9071
+BLUE_PORT=9072
+GREEN_PORT=9073
 VENV="/home/sam/dev/melee/.venv"
 UPSTREAM_CONF="/etc/nginx/conf.d/melee-upstream.conf"
 STATE_FILE="/home/sam/dev/melee/.deploy-state"
@@ -68,7 +68,10 @@ verify_environment() {
 
     log "Waiting for $env environment on port $port..."
     while [ $attempt -le $max_attempts ]; do
-        if curl -sf "http://127.0.0.1:$port/" > /dev/null 2>&1; then
+        # Send the real Host header: DJANGO_ALLOWED_HOSTS is melee.origamisoftware.com,
+        # so a bare 127.0.0.1 request returns 400 (DisallowedHost) and the check would
+        # never pass. A 3xx (Django's HTTPS redirect) still counts as healthy here.
+        if curl -sf -H "Host: melee.origamisoftware.com" "http://127.0.0.1:$port/" > /dev/null 2>&1; then
             log "$env environment is serving on port $port."
             return 0
         fi
