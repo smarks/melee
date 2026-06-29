@@ -75,7 +75,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "tarmar_auth",
+    "origami_auth",
     "board",
 ]
 
@@ -128,9 +128,9 @@ STORAGES = {
 }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Shared login app (tarmar-auth). Accounts are optional: the game is playable
+# Shared auth app (origami-auth). Accounts are optional: the game is playable
 # anonymously; logging in unlocks saving characters.
-AUTH_USER_MODEL = "tarmar_auth.User"
+AUTH_USER_MODEL = "origami_auth.User"
 LOGIN_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/?setup"   # land on the board with the New-game wizard open
 LOGOUT_REDIRECT_URL = "/"

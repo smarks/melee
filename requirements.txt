@@ -14,12 +14,11 @@ hexarena @ git+https://github.com/smarks/hexarena.git@main
 # tarmar-studio. Local dev:  pip install -e ../tarmar-rules
 tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@main
 
-# Shared Django login app (user model + register/login/logout/profile).
-# PINNED TO A RELEASE TAG — treat tarmar-auth as a library, not a live checkout.
-# It is being refactored for tarmar-studio on `main`; do NOT `pip install -e
-# ../tarmar-auth` for melee (its in-progress edits will break melee). Upgrade the
-# pin deliberately when a new release is cut. To restore the pinned version in a
-# shared env:
-#   pip install --force-reinstall --no-deps \
-#     "tarmar-auth @ git+https://github.com/smarks/tarmar-auth.git@v0.1.0"
-tarmar-auth @ git+https://github.com/smarks/tarmar-auth.git@v0.1.0
+# Shared Django auth app (AbstractOrigamiUser: user model + register/login/
+# logout/profile/users-admin). PINNED TO A RELEASE TAG — treat origami-auth as a
+# library, not a live checkout. Upgrade the pin deliberately when a new release
+# is cut. origami-common is origami-auth's own dependency, but pip does not
+# resolve a git dependency's transitive git deps automatically, so it must be
+# listed explicitly here (and before origami-auth).
+origami-common @ git+https://github.com/smarks/origami-common.git@v0.2.0
+origami-auth @ git+https://github.com/smarks/origami-auth.git@v0.2.0
