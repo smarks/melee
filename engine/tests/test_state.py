@@ -1510,3 +1510,21 @@ def test_hth_back_to_the_wall_lets_a_frontal_grapple_through() -> None:
     arena.walls.pop()
     assert not state._has_back_to_wall(attacker, defender)
     assert defender not in state.hth_targets(attacker)
+
+
+def test_end_turn_readies_a_dagger_drawn_in_a_grapple() -> None:
+    from engine.rules_data import DAGGER
+    arena = Arena(cols=9, rows=15)
+    grappler = create_human("Grappler", 12, 12, "a",
+                            weapons=[BROADSWORD, DAGGER], ready_weapon=BROADSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    grappler.position = Hex(5, 5)
+    foe.position = Hex(5, 9)                       # apart, so nothing else triggers
+    state = GameState(arena, [grappler, foe])
+    grappler.hth_drew_dagger = True               # drew it on a 3-4 defense roll
+    before = len(state.log)
+
+    state.end_turn()
+    assert grappler.ready_weapon is DAGGER         # dagger now in hand
+    assert not grappler.hth_drew_dagger            # flag consumed
+    assert any("readies" in line.lower() for line in state.log[before:])

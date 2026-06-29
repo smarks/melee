@@ -1,0 +1,6 @@
+# Test-only dependencies, NOT installed by the deploy (which uses requirements.txt).
+# The e2e/ suite needs a browser; install these locally / in a CI e2e job:
+#   pip install -r requirements-dev.txt
+#   python -m playwright install chromium
+-r requirements.txt
+pytest-playwright>=0.5
