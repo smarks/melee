@@ -146,6 +146,13 @@ def narrate_hth(attacker: Figure, target: Figure, kind: str) -> str | None:
     return None
 
 
+def narrate_cascade(attacker: Figure, intended: Figure, struck: Figure) -> str:
+    """A blow that missed its downed target in an HTH pile and caught someone
+    else instead (Hitting Your Friends, p.17)."""
+    return _cap(f"{_name(attacker)}'s blow goes wide of {_name(intended)} "
+                f"and strikes {_name(struck)} instead!")
+
+
 def narrate_hth_disengage(figure: Figure, broke_free: bool) -> str:
     """A figure's attempt to wrench free of a grapple (p.19)."""
     if broke_free:
