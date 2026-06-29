@@ -139,6 +139,7 @@ class Figure:
     hits_this_turn: int = 0          # hits taken so far this turn
     wounded_last_turn: bool = False  # took 5+ hits last turn -> -2 DX this turn
     attacked_this_turn: bool = False
+    knocked_down_this_turn: bool = False  # knocked prone by damage this turn (p.20)
     moved_this_turn: int = 0         # hexes moved this turn (for half-MA limit)
     moved_straight: bool = False     # this turn's move ran in a straight line (pole charge)
     dodging: bool = False            # chose DODGE (4 dice to hit it with a missile/thrown)

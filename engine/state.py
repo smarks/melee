@@ -1299,9 +1299,15 @@ class GameState:
                 continue        # killed/knocked out before its turn to strike
             # Prone figures can't fight — except a prone crossbowman who may fire,
             # or a figure grappling on the ground in hand-to-hand.
+            # A prone crossbowman may fire steadied (p.16) — but NOT if it was
+            # knocked prone by damage earlier this same combat phase: a figure
+            # knocked down "may not attack that turn" if it has not already (p.20).
+            # A crossbowman that was already prone (chose to go prone/kneel last
+            # turn, or dropped prone to fire this turn via option f) still fires.
             crossbow = (attacker.ready_weapon is not None
                         and attacker.ready_weapon.kind == WeaponKind.MISSILE
-                        and attacker.ready_weapon.reload > 0)
+                        and attacker.ready_weapon.reload > 0
+                        and not attacker.knocked_down_this_turn)
             if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
                 continue
             # A flying weapon — hurled or fired — traces a line-of-flight: anyone
@@ -1444,6 +1450,10 @@ class GameState:
             target.unconscious = True
         elif status == KNOCKDOWN:
             target.posture = Posture.PRONE
+            # Knocked down by damage this turn: it "may not attack that turn" if
+            # it has not already (p.20). This also revokes the prone-crossbow
+            # firing exception for a crossbowman floored mid-phase.
+            target.knocked_down_this_turn = True
         aftermath = narrate_status(target, status)
         if aftermath:
             self.log.append(aftermath)
@@ -1496,6 +1506,7 @@ class GameState:
             )
             figure.hits_this_turn = 0
             figure.attacked_this_turn = False
+            figure.knocked_down_this_turn = False
             figure.moved_this_turn = 0
             figure.moved_straight = False
             figure.dodging = False

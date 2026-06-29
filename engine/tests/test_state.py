@@ -1403,3 +1403,72 @@ def test_situational_mods_shift_attack_resolution_order() -> None:
     assert len(results) == 2
     assert "-2 over body" not in results[0].to_hit_breakdown   # clean resolved first
     assert "-2 over body" in results[1].to_hit_breakdown       # penalised resolved second
+
+
+def test_crossbowman_knocked_prone_this_turn_cannot_fire() -> None:
+    # p.20: a figure knocked down (8+ hits in a turn) "may not attack that turn"
+    # if it has not already. A crossbowman floored mid-phase by a higher-adjDX
+    # foe loses the prone-crossbow firing exception (p.16) and does not shoot.
+    from engine.rules_data import BROADSWORD, LIGHT_CROSSBOW
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    crossbow = create_human("Bow", 12, 12, "a", armor=NO_ARMOR,
+                            weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    far_foe = create_human("Far", 12, 12, "b", armor=NO_ARMOR,
+                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    # A hitter striking the crossbowman from the rear (+4) has the higher
+    # ordering adjDX, so it resolves first and floors the crossbowman.
+    hitter = create_human("Hit", 12, 12, "b", armor=NO_ARMOR,
+                          weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+
+    crossbow.position = Hex(5, 8)
+    far_foe.position = Hex(5, 5)               # two hexes ahead -> in range, same MH
+    _aim(crossbow, far_foe)
+    hitter.position = layout.neighbor(crossbow.position, 3)   # the crossbowman's rear
+    _aim(hitter, crossbow)
+
+    from engine.facing import REAR, attack_zone
+    assert attack_zone(layout, hitter, crossbow) == REAR     # rear strike, +4 -> first
+
+    # Hitter: to-hit total 6 (a normal hit at adjDX 12 +4 rear), broadsword 4+4=8
+    # hits -> 8 >= knockdown threshold, but the crossbowman keeps ST 4 (alive).
+    state = GameState(arena, [crossbow, far_foe, hitter],
+                      dice=Dice(scripted=[2, 2, 2, 4, 4]))
+    crossbow.current_option = Option.MISSILE_ATTACK
+    hitter.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(crossbow, far_foe)      # declared first, but lower adjDX
+    state.queue_attack(hitter, crossbow)
+
+    results = state.resolve_combat()
+    assert crossbow.posture == Posture.PRONE
+    assert crossbow.knocked_down_this_turn is True
+    assert crossbow.current_st == 4            # floored but conscious
+    # Only the hitter's blow resolved; the crossbow shot was skipped.
+    assert len(results) == 1
+    assert far_foe.damage_taken == 0           # the crossbowman never fired
+
+
+def test_crossbowman_prone_from_a_previous_turn_still_fires() -> None:
+    # A crossbowman already prone (it went prone on an earlier turn, not floored
+    # by damage this turn) keeps the prone-crossbow firing exception (p.16).
+    from engine.rules_data import LIGHT_CROSSBOW
+
+    arena = Arena(cols=9, rows=15)
+    crossbow = create_human("Bow", 12, 12, "a", armor=NO_ARMOR,
+                            weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    foe = create_human("Foe", 12, 12, "b", armor=NO_ARMOR,
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    crossbow.position = Hex(5, 8)
+    foe.position = Hex(5, 6)                    # two hexes ahead, same megahex
+    _aim(crossbow, foe)
+    crossbow.posture = Posture.PRONE            # prone from last turn
+    crossbow.knocked_down_this_turn = False     # NOT floored this turn
+
+    # A normal hit (to-hit 6 at adjDX 12 +1 prone), crossbow 2d damage 3+3=6.
+    state = GameState(arena, [crossbow, foe], dice=Dice(scripted=[2, 2, 2, 3, 3]))
+    crossbow.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(crossbow, foe)
+    results = state.resolve_combat()
+    assert len(results) == 1 and results[0].hit
+    assert foe.damage_taken > 0                 # the prone crossbowman fired
