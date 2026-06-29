@@ -6,9 +6,9 @@ from hexarena.hex import Hex
 
 from engine import ai
 from engine.arena import Arena
-from engine.figure import create_human
-from engine.options import spec
-from engine.rules_data import BROADSWORD, DAGGER, NO_ARMOR
+from engine.figure import Posture, create_human
+from engine.options import Option, spec
+from engine.rules_data import BROADSWORD, DAGGER, NO_ARMOR, SMALL_BOW
 from engine.state import GameState
 
 
@@ -52,6 +52,104 @@ def test_ai_engaged_attacks_and_resolves() -> None:
     results = state.resolve_combat()
     assert results and results[0].hit
     assert blue.current_st < blue.strength             # blue took damage
+
+
+def _archer(name: str, side: str, **kw):
+    return create_human(name, 12, 12, side, weapons=[SMALL_BOW, DAGGER],
+                        ready_weapon=SMALL_BOW, armor=NO_ARMOR, **kw)
+
+
+def test_ai_fires_a_missile_in_movement() -> None:
+    arena = Arena(cols=7, rows=9)
+    layout = arena.layout
+    archer = _archer("Archer", "red")
+    foe = _fighter("Foe", "blue")
+    archer.position = Hex(3, 4)
+    foe.position = archer.position
+    for _ in range(3):                       # foe stands three hexes down range
+        foe.position = layout.neighbor(foe.position, 0)
+    foe.facing = 3
+    archer.missile_cooldown = 0              # bow is loaded
+    state = GameState(arena, [archer, foe], dice=Dice(seed=1))
+    assert not state.engaged(archer)         # out of contact, so it can loose
+
+    ai.take_movement(state, "red")
+    assert archer.current_option == Option.MISSILE_ATTACK
+    assert state.in_front_arc(archer, foe.position)   # it faced the lane first
+
+
+def test_ai_holds_and_faces_while_reloading() -> None:
+    arena = Arena(cols=7, rows=9)
+    layout = arena.layout
+    archer = _archer("Archer", "red")
+    foe = _fighter("Foe", "blue")
+    archer.position = Hex(3, 4)
+    foe.position = archer.position
+    for _ in range(3):                       # distant foe
+        foe.position = layout.neighbor(foe.position, 0)
+    foe.facing = 3
+    archer.missile_cooldown = 1              # mid-reload: cannot fire this turn
+    state = GameState(arena, [archer, foe], dice=Dice(seed=1))
+    held = archer.position
+
+    ai.take_movement(state, "red")
+    assert archer.current_option == Option.MOVE       # held, did not charge
+    assert archer.position == held                    # stayed put
+    assert state.in_front_arc(archer, foe.position)   # faced the foe
+
+
+def test_ai_hth_focus_fires_the_weaker_grappler() -> None:
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    grappler = _fighter("Grappler", "red")
+    strong = _fighter("Strong", "blue")
+    weak = _fighter("Weak", "blue")
+    grappler.position = Hex(3, 3)
+    strong.position = grappler.position
+    weak.position = layout.neighbor(grappler.position, 1)
+    weak.damage_taken = 8                    # current_st 4 vs strong's 12
+    state = GameState(arena, [grappler, strong, weak])
+    # Lock all three into one grapple on the ground (uids assigned by GameState).
+    grappler.hth_opponents = [strong.uid, weak.uid]
+    strong.hth_opponents = [grappler.uid]
+    weak.hth_opponents = [grappler.uid]
+    grappler.posture = strong.posture = weak.posture = Posture.PRONE
+
+    ai.queue_attacks(state, "red")
+    assert grappler.current_option == Option.HTH_ATTACK
+    assert state._pending[-1].target is weak          # struck the lower-ST foe
+
+
+def test_ai_queues_a_missile_attack_in_combat() -> None:
+    arena = Arena(cols=7, rows=9)
+    layout = arena.layout
+    archer = _archer("Archer", "red")
+    foe = _fighter("Foe", "blue")
+    archer.position = Hex(3, 4)
+    foe.position = archer.position
+    for _ in range(3):                       # foe down range, in the front arc
+        foe.position = layout.neighbor(foe.position, 0)
+    foe.facing = 3
+    state = GameState(arena, [archer, foe], dice=Dice(seed=1))
+    ai.take_movement(state, "red")           # faces and chooses MISSILE_ATTACK
+    assert archer.current_option == Option.MISSILE_ATTACK
+
+    ai.queue_attacks(state, "red")
+    assert state._pending and state._pending[-1].target is foe
+
+
+def test_ai_stands_a_prone_figure() -> None:
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    downed = _fighter("Downed", "red")
+    foe = _fighter("Foe", "blue")
+    downed.position = Hex(3, 3)
+    foe.position = layout.neighbor(downed.position, 0)
+    downed.posture = Posture.PRONE
+    state = GameState(arena, [downed, foe], dice=Dice(seed=1))
+
+    ai.take_movement(state, "red")
+    assert downed.current_option == Option.STAND_UP
 
 
 def test_ai_focus_fires_the_wounded() -> None:

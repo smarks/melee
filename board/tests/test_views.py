@@ -102,6 +102,25 @@ def test_illegal_move_is_rejected(client: Client) -> None:
     assert "error" in out
 
 
+def test_move_to_an_unreachable_hex_is_rejected(client: Client) -> None:
+    """A destination outside the figure's reach under that option comes back 400
+    'destination not reachable' rather than silently teleporting it."""
+    data = _new(client)
+    gid = data["gid"]
+    _post(client, gid, {"type": "roll_initiative"})
+    moved = _post(client, gid, {"type": "choose_first", "side": "red"})
+    assert moved["state"]["moving_side"] == "red"
+    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+    out = client.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "move", "uid": red["uid"], "option": "move",
+                         "dest": "0000", "facing": 0}),   # far corner, beyond its MA
+        content_type="application/json",
+    )
+    assert out.status_code == 400
+    assert out.json()["error"] == "destination not reachable under that option"
+
+
 def test_default_profile_is_classic_melee(client: Client) -> None:
     data = _new(client)
     assert data["profile"] == "Classic Melee"
@@ -958,3 +977,116 @@ def test_combat_actionable_excludes_a_figure_with_no_action() -> None:
     actionable = _combat_actionable(state)
     assert shooter.uid in actionable                   # has a missile target
     assert loner.uid not in actionable                 # nothing to do -> auto do-nothing
+
+
+def _hth_grapple_duel():
+    """``_combat_duel`` red & blue, already locked into a grapple on the ground."""
+    from engine.figure import Posture
+
+    red, blue = _combat_duel()
+    red.hth_opponents = [blue.uid]
+    blue.hth_opponents = [red.uid]
+    red.posture = blue.posture = Posture.PRONE
+    return red, blue
+
+
+def test_combat_action_endpoints_reject_the_wrong_phase(client: Client) -> None:
+    """Every combat-only action guards its phase (#79): POSTing one during the
+    movement phase comes back 400 'not the combat phase'."""
+    data = _new(client)
+    gid = data["gid"]
+    figures = data["state"]["figures"]
+    red = next(f for f in figures if f["side"] == "red")
+    blue = next(f for f in figures if f["side"] == "blue")
+    _post(client, gid, {"type": "roll_initiative"})
+    _post(client, gid, {"type": "choose_first", "side": "red"})   # now in the move phase
+
+    for body in (
+        {"type": "queue_hth", "uid": red["uid"], "target": blue["uid"]},
+        {"type": "shield_rush", "uid": red["uid"], "target": blue["uid"]},
+        {"type": "hth_disengage", "uid": red["uid"]},
+        {"type": "disengage_move", "uid": red["uid"], "dest": "0303"},
+    ):
+        out = client.post(f"/api/game/{gid}/action",
+                          data=json.dumps(body), content_type="application/json")
+        assert out.status_code == 400
+        assert out.json()["error"] == "not the combat phase"
+
+
+def test_queue_hth_action_strikes_a_grappled_foe(client: Client) -> None:
+    from board.views import GAMES
+    from engine.options import Option
+
+    red, blue = _hth_grapple_duel()
+    try:
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "queue_hth", "uid": red.uid,
+                                           "target": blue.uid}),
+                          content_type="application/json")
+        assert out.status_code == 200 and "error" not in out.json()
+        assert red.current_option == Option.HTH_ATTACK
+        pending = GAMES["duel-test"]["state"]._pending
+        assert pending and pending[-1].target is blue       # a grapple strike is queued
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_hth_disengage_action_breaks_a_grapple(client: Client) -> None:
+    from board.views import GAMES
+    from hexarena.dice import Dice
+
+    red, blue = _hth_grapple_duel()
+    try:
+        GAMES["duel-test"]["state"].dice = Dice(scripted=[1])   # equal DX -> a 1 frees it
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "hth_disengage", "uid": red.uid}),
+                          content_type="application/json")
+        assert out.status_code == 200 and "error" not in out.json()
+        assert not red.in_hth                                # slipped the grapple
+        assert blue.hth_opponents == []                     # link cleared both ways
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_disengage_move_action_steps_a_figure_clear(client: Client) -> None:
+    from board.views import GAMES
+    from board.geometry import label_of
+    from engine.options import Option
+
+    red, blue = _combat_duel()
+    try:
+        layout = GAMES["duel-test"]["state"].arena.layout
+        held = {blue.position}
+        dest = next(neighbor for d in range(6)
+                    if (neighbor := layout.neighbor(red.position, d)) not in held
+                    and GAMES["duel-test"]["state"].arena.contains(neighbor))
+        red.current_option = Option.DISENGAGE              # chose to disengage this turn
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "disengage_move", "uid": red.uid,
+                                           "dest": label_of(dest.col, dest.row)}),
+                          content_type="application/json")
+        assert out.status_code == 200 and "error" not in out.json()
+        # The disengage step is the durable effect: it left no attack queued, so
+        # the combat phase auto-ends (end_turn clears per-turn flags) but the move
+        # to the vacated hex persists.
+        assert red.position == dest                         # stepped one hex clear
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_shield_rush_action_replaces_the_attack(client: Client) -> None:
+    from board.views import GAMES
+    from engine.rules_data import LARGE_SHIELD
+
+    red, blue = _combat_duel()
+    try:
+        red.shield = LARGE_SHIELD                           # give the rusher a ready shield
+        red.shield_ready = True
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "shield_rush", "uid": red.uid,
+                                           "target": blue.uid}),
+                          content_type="application/json")
+        assert out.status_code == 200 and "error" not in out.json()
+        assert red.attacked_this_turn                       # the rush consumed its action
+    finally:
+        del GAMES["duel-test"]
