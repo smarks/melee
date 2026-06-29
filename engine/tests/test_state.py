@@ -1322,3 +1322,31 @@ def test_stand_up_takes_effect_at_end_of_combat_not_during_movement() -> None:
 
     state.end_turn()                                     # end of the combat phase
     assert riser.posture == Posture.STANDING             # finally on its feet next turn
+
+
+def test_engaged_shift_must_stay_adjacent_to_its_engager() -> None:
+    """A shift moves one hex but must stay adjacent to every foe engaging the
+    figure (p.8) -- it can't Shift & Attack its way out of engagement (#120)."""
+    import pytest
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    me = create_human("Me", 12, 12, "a", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe.position = Hex(5, 5)
+    me.position = layout.neighbor(Hex(5, 5), 0)              # in the foe's front hex
+    foe.facing = layout.direction_to(foe.position, me.position)   # foe faces me -> engages me
+    me.facing = layout.direction_to(me.position, foe.position)
+    state = GameState(arena, [me, foe])
+    assert state.engaged(me)
+
+    reachable = state.reachable(me, Option.SHIFT_ATTACK)
+    assert reachable                                         # staying / flanking hexes remain
+    # every offered shift keeps me adjacent to the foe...
+    assert all(layout.distance(h, foe.position) == 1 for h in reachable)
+    # ...and a one-hex step that would break adjacency is neither offered nor legal.
+    far = next(h for h in layout.neighbors(me.position)
+               if arena.contains(h) and layout.distance(h, foe.position) == 2
+               and h != foe.position)
+    assert far not in reachable
+    with pytest.raises(IllegalAction):
+        state.move(me, Option.SHIFT_ATTACK, path=[far])

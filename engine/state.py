@@ -31,6 +31,7 @@ from .facing import (
     attack_zone,
     front_hexes,
     is_engaged,
+    is_engaged_by,
     zone_of_direction,
     zone_toward,
 )
@@ -64,6 +65,13 @@ from .rules_data import (
     max_missile_shots,
     missile_reload_turns,
 )
+
+# Engaged moves that are a "shift": they keep the figure engaged, so the
+# destination must stay adjacent to every foe engaging it (p.8, #120). DISENGAGE
+# is excluded -- it is the one engaged move allowed to break away.
+_SHIFT_OPTIONS = frozenset({
+    Option.SHIFT_ATTACK, Option.SHIFT_DEFEND, Option.CHANGE_WEAPONS,
+})
 
 
 class IllegalAction(Exception):
@@ -280,7 +288,44 @@ class GameState:
         if figure.size > 1:
             # A multi-hex figure can only finish where its whole footprint fits.
             self._drop_unfittable(figure, reach, occupied)
+        if option in _SHIFT_OPTIONS:
+            # A shift keeps the figure engaged, so drop any destination that would
+            # break adjacency to a foe engaging it (p.8, #120).
+            self._restrict_shift_to_engagers(figure, reach)
         return reach
+
+    def _engagers(self, figure: Figure) -> list[Figure]:
+        """Enemies currently engaging ``figure`` -- those whose front hex it
+        stands in (p.9). A shift must stay adjacent to all of them (p.8)."""
+        layout = self.arena.layout
+        return [enemy for enemy in self.enemies_of(figure)
+                if is_engaged_by(layout, figure, enemy)]
+
+    def _stays_adjacent_to_engagers(
+        self, figure: Figure, dest: Hex, engagers: list[Figure]
+    ) -> bool:
+        """Whether ``figure`` ending a shift on ``dest`` keeps it adjacent to
+        every engaging enemy (p.8). Footprint-aware for multi-hex figures."""
+        if not engagers:
+            return True
+        layout = self.arena.layout
+        dest_footprint = footprint_for(layout, dest, figure.facing, figure.size)
+        return all(
+            any(layout.distance(here, there) == 1
+                for here in dest_footprint for there in enemy.footprint(layout))
+            for enemy in engagers
+        )
+
+    def _restrict_shift_to_engagers(self, figure: Figure, reach: Reach) -> None:
+        """Drop shift destinations that would break adjacency to an engager
+        (p.8, #120). Only DISENGAGE may break away. Mutates ``reach``."""
+        engagers = self._engagers(figure)
+        if not engagers:
+            return
+        for hex_position in list(reach.cost):
+            if not self._stays_adjacent_to_engagers(figure, hex_position, engagers):
+                reach.cost.pop(hex_position, None)
+                reach.came_from.pop(hex_position, None)
 
     def _drop_unfittable(
         self, figure: Figure, reach: Reach, occupied: dict[Hex, Figure]
@@ -913,6 +958,15 @@ class GameState:
                 f"{option.value}, but that path costs {path_cost}"
             )
         self._validate_path(figure, path)
+        if option in _SHIFT_OPTIONS and path:
+            # A shift must keep the figure adjacent to every foe engaging it
+            # (p.8, #120); use DISENGAGE to break away instead.
+            if not self._stays_adjacent_to_engagers(
+                    figure, path[-1], self._engagers(figure)):
+                raise IllegalAction(
+                    f"{figure.name}'s shift must stay adjacent to the foe(s) "
+                    f"engaging it -- use Disengage to break away"
+                )
         if figure.size > 1:
             self._validate_multihex_turn(figure, path, facing)
         # Validate a weapon SWITCH before mutating the board, so a rejected ready
