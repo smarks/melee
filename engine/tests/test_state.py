@@ -1046,14 +1046,19 @@ def test_disengage_can_step_into_a_grapple() -> None:
     arena = Arena(cols=9, rows=15)
     runner = create_human("Runner", 12, 12, "a",
                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
-    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    from engine.rules_data import PLATE
+    # The foe engages the runner from the front; its heavy armour gives it a lower
+    # MA, which is what makes the grapple-step onto it eligible (p.17). (Equal base
+    # DX, so the foe's plate-lowered adjDX means no free strike on the disengage.)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD,
+                       armor=PLATE)
     foe.position = Hex(5, 5)
-    foe.facing = 0                                       # rear hex is direction 3
-    runner.position = LAYOUT.neighbor(Hex(5, 5), 3)      # standing at the foe's rear
-    runner.facing = LAYOUT.direction_to(runner.position, foe.position)  # faces -> engaged
+    runner.position = LAYOUT.neighbor(Hex(5, 5), 0)      # in the foe's front hex -> engaged
+    foe.facing = LAYOUT.direction_to(foe.position, runner.position)     # foe faces the runner
+    runner.facing = LAYOUT.direction_to(runner.position, foe.position)
     # The defender's fresh-grapple roll of 2 lets the hold take; 3s for any strike.
     state = GameState(arena, [runner, foe], dice=Dice(scripted=[2] + [3] * 12))
-    assert state.engaged(runner)
+    assert state.engaged(runner)                         # in the foe's front (one-directional)
 
     runner.current_option = Option.DISENGAGE
     assert foe.position in state.disengage_destinations(runner)   # offered as a grapple step

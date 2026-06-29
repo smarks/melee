@@ -74,14 +74,24 @@ def test_prone_figure_engages_no_one() -> None:
     assert not is_engaged_by(LAYOUT, attacker, target)
 
 
-def test_engagement_is_mutual_facing_an_adjacent_enemy_counts() -> None:
+def test_engagement_is_one_directional_behind_a_foe_is_free() -> None:
     enemy = _place("E", Hex(5, 5), facing=0)          # the enemy faces direction 0
-    behind = LAYOUT.neighbor(Hex(5, 5), 3)            # stand behind it (its rear)
-    me = _place("M", behind, facing=0)                # but I turn to face the enemy
+    behind = LAYOUT.neighbor(Hex(5, 5), 3)            # stand in its rear hex
+    me = _place("M", behind, facing=0)                # turned to face the enemy's back
     # I'm in the enemy's rear, so it does not engage me...
     assert not is_engaged_by(LAYOUT, me, enemy)
-    # ...yet the enemy stands in MY front hex, so I am engaged and may Shift & Attack.
-    assert is_engaged(LAYOUT, me, [enemy])
+    # ...and engagement is one-directional (p.9), so I am NOT engaged either, even
+    # though the enemy sits in my front. I stay free to move and strike its rear.
+    assert not is_engaged(LAYOUT, me, [enemy])
+
+
+def test_face_to_face_figures_are_both_engaged() -> None:
+    a = _place("A", Hex(5, 5), facing=0)              # faces direction 0
+    ahead = LAYOUT.neighbor(Hex(5, 5), 0)
+    b = _place("B", ahead, facing=3)                  # directly ahead, facing back at A
+    # Each occupies the other's front hex, so both are engaged and may Shift & Attack.
+    assert is_engaged(LAYOUT, a, [b])
+    assert is_engaged(LAYOUT, b, [a])
 
 
 def test_not_engaged_when_neither_faces_the_other() -> None:
