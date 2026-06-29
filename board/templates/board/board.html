@@ -115,22 +115,27 @@
   .fig text { fill: #100f15; font-weight: 700; font-size: 13px; text-anchor: middle;
               dominant-baseline: central; pointer-events: none; }
   .hint { color: var(--accent); font-size: 12.5px; min-height: 18px; }
-  #editor, #setup { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
+  #editor, #setup, #admin { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
             flex-direction: column; align-items: center; overflow: auto; }
-  #editor { z-index: 55; }   /* the editor opens on top of the setup panel */
-  #editorBox, #setupBox { background: var(--panel); border: 1px solid var(--line);
+  #editor, #admin { z-index: 55; }   /* opens on top of the setup panel */
+  #editorBox, #setupBox, #adminBox { background: var(--panel); border: 1px solid var(--line);
                border-radius: 10px; margin: 24px; padding: 16px 18px; width: min(700px, 94vw); }
   #editorRoster .card { border: 1px solid var(--line); border-radius: 8px;
                         padding: 10px 12px; margin: 8px 0; }
-  #editor input, #editor select { background: #2f2b3b; color: var(--ink);
+  #editor input, #editor select, #admin input { background: #2f2b3b; color: var(--ink);
     border: 1px solid var(--line); border-radius: 5px; padding: 3px 5px; margin: 1px; }
   #editor label { white-space: nowrap; }
+  .adminRow { display: flex; align-items: center; gap: 8px; padding: 3px 0;
+              border-bottom: 1px solid var(--line); }
+  button.link { background: none; border: none; color: var(--accent); cursor: pointer;
+                padding: 0; font: inherit; text-decoration: underline; }
 </style>
 </head>
 <body>
 <header>
   <h1>Melee</h1>
   <button class="primary" onclick="openSetup()">New game</button>
+  {% if request.user.is_staff %}<button onclick="openAdmin()" title="Manage users and characters">⚙ Admin</button>{% endif %}
   <span class="sub">The Fantasy Trip — man-to-man combat</span>
   <span class="sub" id="turnInfo"></span>
   <span class="sub" style="margin-left:auto">
@@ -212,6 +217,26 @@
     </div>
   </div>
 </div>
+<div id="admin">
+  <div id="adminBox">
+    <div class="banner">Admin</div>
+    <div class="muted">Create or delete users, and manage any player's saved characters.</div>
+    <div style="margin-top:10px">
+      <b>Create user</b><br>
+      <input id="adminNewUser" placeholder="username" autocomplete="off">
+      <input id="adminNewPass" type="password" placeholder="password" autocomplete="new-password">
+      <label style="margin-left:4px"><input type="checkbox" id="adminNewStaff"> admin</label>
+      <button class="primary" onclick="adminCreateUser()">Create user</button>
+    </div>
+    <div class="hint" id="adminErr"></div>
+    <div style="margin-top:12px"><b>Users</b> <span class="muted">— click a user to manage their characters</span></div>
+    <div id="adminUsers" class="pad"></div>
+    <div id="adminChars"></div>
+    <div style="margin-top:10px">
+      <button onclick="closeAdmin()">Close</button>
+    </div>
+  </div>
+</div>
 <script>
 const SVG = "http://www.w3.org/2000/svg";
 let GID = null, S = null, LAYOUT = null, PROFILE = null;
@@ -241,6 +266,8 @@ function captureOwnership(data) {
 
 const $ = id => document.getElementById(id);
 const api = (path, opts) => fetch(path, opts).then(r => r.json());
+const escapeHtml = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 
 const LOGGED_IN = {{ request.user.is_authenticated|yesno:"true,false" }};
 const csrftoken = () => (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || "";
@@ -1179,7 +1206,76 @@ async function openEditor() {
   closeSetup();                       // the editor replaces the setup panel
   $("editor").style.display = "flex";
 }
-function closeEditor() { $("editor").style.display = "none"; }
+function closeEditor() { $("editor").style.display = "none"; EDIT_FOR_USER = null; }
+
+// ---- admin powers: users + their saved characters (#140; staff only) -------
+let ADMIN_USERS = [];        // last-loaded user list (for id -> name lookup)
+let ADMIN_SEL = null;        // {id, username} whose characters are being managed
+let EDIT_FOR_USER = null;    // when set, the fighter editor's Save targets this user
+
+function openAdmin() {
+  $("admin").style.display = "flex"; $("adminErr").textContent = "";
+  $("adminChars").innerHTML = ""; ADMIN_SEL = null; adminLoadUsers();
+}
+function closeAdmin() { $("admin").style.display = "none"; }
+
+async function adminLoadUsers() {
+  const data = await api("/api/admin/users");
+  ADMIN_USERS = data.users || [];
+  $("adminUsers").innerHTML = ADMIN_USERS.map(u => `
+    <div class="adminRow">
+      <button class="link" onclick="adminSelectUser(${u.id})">${escapeHtml(u.username)}</button>
+      <span class="muted">${u.is_staff ? "admin · " : ""}${u.character_count} character(s)</span>
+      <button onclick="adminDeleteUser(${u.id})" title="Delete user">🗑</button>
+    </div>`).join("") || `<div class="muted">No users.</div>`;
+}
+
+function _adminName(id) { const u = ADMIN_USERS.find(x => x.id === id); return u ? u.username : "user"; }
+
+async function adminCreateUser() {
+  const username = $("adminNewUser").value.trim();
+  const password = $("adminNewPass").value;
+  const is_staff = $("adminNewStaff").checked;
+  const data = await postJSON("/api/admin/users", {username, password, is_staff});
+  if (data.error) { $("adminErr").textContent = data.error; return; }
+  $("adminErr").textContent = `Created “${data.username}”.`;
+  $("adminNewUser").value = ""; $("adminNewPass").value = ""; $("adminNewStaff").checked = false;
+  adminLoadUsers();
+}
+
+async function adminDeleteUser(id) {
+  if (!confirm(`Delete “${_adminName(id)}”? This also removes their saved characters.`)) return;
+  const data = await postJSON(`/api/admin/users/${id}/delete`, {});
+  if (data.error) { $("adminErr").textContent = data.error; return; }
+  if (ADMIN_SEL && ADMIN_SEL.id === id) { ADMIN_SEL = null; $("adminChars").innerHTML = ""; }
+  adminLoadUsers();
+}
+
+async function adminSelectUser(id) {
+  ADMIN_SEL = {id, username: _adminName(id)};
+  const data = await api(`/api/admin/users/${id}/characters`);
+  const rows = (data.characters || []).map(c => `
+    <div class="adminRow">${escapeHtml(c.name)} <span class="muted">${escapeHtml(c.profile)}</span>
+      <button onclick="adminDeleteChar(${c.id})" title="Delete character">🗑</button>
+    </div>`).join("") || `<div class="muted">No saved characters.</div>`;
+  $("adminChars").innerHTML =
+    `<div style="margin-top:12px"><b>${escapeHtml(ADMIN_SEL.username)}’s characters</b>
+       <button onclick="adminCreateCharFor()">＋ new character</button></div>${rows}`;
+}
+
+async function adminDeleteChar(pk) {
+  const data = await postJSON(`/api/admin/characters/${pk}/delete`, {});
+  if (data.error) { $("adminErr").textContent = data.error; return; }
+  if (ADMIN_SEL) adminSelectUser(ADMIN_SEL.id);
+  adminLoadUsers();                 // keep the per-user counts current
+}
+
+function adminCreateCharFor() {
+  if (!ADMIN_SEL) return;
+  EDIT_FOR_USER = ADMIN_SEL;        // the fighter editor's Save will target this user
+  closeAdmin();
+  openEditor();
+}
 
 function savedCharacterOptions() {   // was loadOptions — collided with the game
   return `<option value="">Load saved…</option>`   // options fetch (issue #115)
@@ -1194,8 +1290,15 @@ function applySpecToCard(card, spec) {        // fill a card from a saved spec (
 }
 async function saveCharacter(card) {
   const spec = readCard(card);
-  const data = await postJSON("/api/characters", {name: spec.name, profile: $("profile").value, spec});
+  // An admin building a character for a player (#140) saves to that user's
+  // collection; otherwise it's the signed-in player's own save.
+  const url = EDIT_FOR_USER ? `/api/admin/users/${EDIT_FOR_USER.id}/characters` : "/api/characters";
+  const data = await postJSON(url, {name: spec.name, profile: $("profile").value, spec});
   if (data.error) { $("editorErr").textContent = "Save failed: " + data.error; return; }
+  if (EDIT_FOR_USER) {
+    $("editorErr").textContent = `Saved “${data.name}” to ${escapeHtml(EDIT_FOR_USER.username)}.`;
+    return;
+  }
   const idx = SAVED.findIndex(c => c.id === data.id);
   if (idx >= 0) SAVED[idx] = data; else SAVED.push(data);
   $("editorErr").textContent = `Saved “${data.name}”.`;

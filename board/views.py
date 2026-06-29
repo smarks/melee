@@ -18,6 +18,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Iterator, MutableMapping
 
+from django.contrib.auth import get_user_model
 from django.core.signing import BadSignature
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
@@ -477,6 +478,117 @@ def api_character_delete(request, pk):
     if request.method != "POST":
         return HttpResponse(status=405)
     request.user.saved_characters.filter(pk=pk).delete()
+    return JsonResponse({"ok": True})
+
+
+# ---- admin powers (logged-in staff accounts) --------------------------------
+# Create/delete users and manage any player's saved characters. All gated on the
+# is_staff "admin" role from #86. (#140)
+def _require_admin(request):
+    """``None`` if the requester is an admin, else the 403 response to return."""
+    if not _is_admin(request):
+        return JsonResponse({"error": "admin only"}, status=403)
+    return None
+
+
+def _user_dict(user) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "is_staff": user.is_staff,
+        "is_active": user.is_active,
+        "character_count": user.saved_characters.count(),
+    }
+
+
+@csrf_exempt
+def api_admin_users(request):
+    """List (GET) or create (POST) user accounts -- admin only (#140)."""
+    denied = _require_admin(request)
+    if denied:
+        return denied
+    user_model = get_user_model()
+    if request.method == "GET":
+        users = user_model.objects.all().order_by("username")
+        return JsonResponse({"users": [_user_dict(u) for u in users]})
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "bad JSON"}, status=400)
+        username = (body.get("username") or "").strip()
+        password = body.get("password") or ""
+        if not username or not password:
+            return JsonResponse({"error": "username and password are required"},
+                                status=400)
+        if user_model.objects.filter(username=username).exists():
+            return JsonResponse({"error": "that username is taken"}, status=400)
+        user = user_model.objects.create_user(
+            username=username, password=password,
+            is_staff=bool(body.get("is_staff")))
+        return JsonResponse(_user_dict(user), status=201)
+    return HttpResponse(status=405)
+
+
+@csrf_exempt
+def api_admin_user_delete(request, uid):
+    """Delete a user account -- admin only; an admin can't delete itself (#140)."""
+    denied = _require_admin(request)
+    if denied:
+        return denied
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    if request.user.id == uid:
+        return JsonResponse({"error": "you can't delete your own account"},
+                            status=400)
+    deleted, _ = get_user_model().objects.filter(pk=uid).delete()
+    if not deleted:
+        return JsonResponse({"error": "no such user"}, status=404)
+    return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+def api_admin_user_characters(request, uid):
+    """List (GET) or create (POST) a specific user's saved characters -- admin
+    only. This is how an admin creates/inspects characters on a player's behalf
+    (#140)."""
+    denied = _require_admin(request)
+    if denied:
+        return denied
+    try:
+        owner = get_user_model().objects.get(pk=uid)
+    except get_user_model().DoesNotExist:
+        return JsonResponse({"error": "no such user"}, status=404)
+    if request.method == "GET":
+        characters = [c.as_dict() for c in owner.saved_characters.all()]
+        return JsonResponse({"characters": characters})
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "bad JSON"}, status=400)
+        name = (body.get("name") or "").strip()
+        if not name:
+            return JsonResponse({"error": "a name is required"}, status=400)
+        obj, _ = SavedCharacter.objects.update_or_create(
+            owner=owner, name=name,
+            defaults={"profile": body.get("profile", ""),
+                      "spec": body.get("spec", {})})
+        return JsonResponse(obj.as_dict(), status=201)
+    return HttpResponse(status=405)
+
+
+@csrf_exempt
+def api_admin_character_delete(request, pk):
+    """Delete any saved character by id, whoever owns it -- admin only (#140)."""
+    denied = _require_admin(request)
+    if denied:
+        return denied
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    deleted, _ = SavedCharacter.objects.filter(pk=pk).delete()
+    if not deleted:
+        return JsonResponse({"error": "no such character"}, status=404)
     return JsonResponse({"ok": True})
 
 
