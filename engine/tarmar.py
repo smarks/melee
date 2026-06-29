@@ -212,7 +212,8 @@ class TarmarRuleset(Ruleset):
             if extra_dice:                       # pole weapon in/against a charge
                 weapon_total += dice.total(extra_dice)
             raw_damage = max(0, weapon_total) * multiplier
-            stops = target.hits_stopped(from_front=(zone == FRONT))
+            stops = target.hits_stopped(
+                from_front=(zone == FRONT), from_rear=(zone == REAR))
             damage = tarmar_rules.damage_after_armour(
                 raw_damage, stops, weapon_class, tier)
             damage = max(0, damage - main_gauche_parry(target, weapon, zone))
@@ -241,7 +242,8 @@ class TarmarRuleset(Ruleset):
         raw_damage = damage = 0
         if outcome["hit"]:
             raw_damage = max(0, dice.total(hth_damage.count) + hth_damage.modifier) * multiplier
-            damage = max(0, raw_damage - target.hits_stopped(from_front=(zone == FRONT)))
+            damage = max(0, raw_damage - target.hits_stopped(
+                from_front=(zone == FRONT), from_rear=(zone == REAR)))
         return AttackResult(
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
             multiplier=multiplier, raw_damage=raw_damage, damage=damage,

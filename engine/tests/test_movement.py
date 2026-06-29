@@ -127,3 +127,43 @@ def test_must_stop_on_entering_enemy_front_hex() -> None:
     path = [entering, beyond[0]]
     with pytest.raises(IllegalAction):
         state.move(mover, Option.MOVE, path=path)
+
+
+def test_kneeling_enemy_creates_no_front_stop_hexes() -> None:
+    # A KNEELING figure engages no one (it has no front, like a prone figure),
+    # so a mover may pass through the hex in front of it without being forced to
+    # halt (matches the engagement logic in facing.is_engaged_by).
+    from engine.figure import Posture
+
+    arena = Arena(cols=9, rows=15)
+    mover = create_human("Mover", 12, 12, "a", weapons=[SHORTSWORD],
+                         ready_weapon=SHORTSWORD)
+    mover.position = Hex(5, 5)
+    mover.facing = 0
+    enemy = create_human("Guard", 12, 12, "b", weapons=[SHORTSWORD],
+                         ready_weapon=SHORTSWORD)
+    enemy.position = Hex(5, 9)
+    enemy.facing = 3  # facing back toward the mover
+    state = GameState(arena, [mover, enemy])
+
+    # Standing: the hex in front of the guard is a stop-hex.
+    standing_front = state._enemy_front_hexes(mover)
+    assert standing_front
+
+    enemy.posture = Posture.KNEELING
+    kneeling_front = state._enemy_front_hexes(mover)
+    assert kneeling_front == set()
+
+    # A path passing through what WAS the front hex no longer forces a stop.
+    layout = state.arena.layout
+    front_hex = next(iter(standing_front))
+    # Approach the front hex along the guard's facing axis so the step into it
+    # and the step past it are collinear and both adjacent.
+    approach = layout.neighbor(front_hex, (enemy.facing + 3) % 6)  # behind the front hex
+    beyond = layout.neighbor(front_hex, enemy.facing)              # ahead of it
+    mover.position = approach
+    assert arena.distance(approach, front_hex) == 1
+    assert arena.distance(front_hex, beyond) == 1
+    assert beyond != enemy.position and arena.contains(beyond)
+    state.move(mover, Option.MOVE, path=[front_hex, beyond])
+    assert mover.position == beyond

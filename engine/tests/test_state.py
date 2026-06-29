@@ -1350,3 +1350,163 @@ def test_engaged_shift_must_stay_adjacent_to_its_engager() -> None:
     assert far not in reachable
     with pytest.raises(IllegalAction):
         state.move(me, Option.SHIFT_ATTACK, path=[far])
+
+
+def test_situational_mods_shift_attack_resolution_order() -> None:
+    # p.16: "Attacks come off in order of adjDX counting everything BUT missile
+    # and thrown weapon range." Two attackers of equal base adjDX, but one stands
+    # in a hex with a fallen body (-2 to its to-hit, a situational mod). The
+    # un-penalised attacker has the higher effective adjDX and must resolve first,
+    # even though the penalised attacker is declared first.
+    arena = Arena(cols=12, rows=10)
+    layout = arena.layout
+
+    clean = create_human("Clean", 12, 12, "a", armor=NO_ARMOR,
+                         weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    penalized = create_human("Penalized", 12, 12, "a", armor=NO_ARMOR,
+                             weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    target_clean = create_human("TC", 12, 12, "b", armor=NO_ARMOR,
+                                weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    target_pen = create_human("TP", 12, 12, "b", armor=NO_ARMOR,
+                              weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+
+    clean.position = Hex(2, 5)
+    clean.facing = 0
+    target_clean.position = layout.neighbor(clean.position, 0)
+
+    penalized.position = Hex(8, 5)
+    penalized.facing = 0
+    target_pen.position = layout.neighbor(penalized.position, 0)
+
+    # A fallen body shares the penalised attacker's hex -> bad footing, -2 (p.16).
+    body = create_human("Body", 12, 12, "b", armor=NO_ARMOR)
+    body.position = penalized.position
+    body.damage_taken = 999
+    assert body.is_dead
+
+    # Equal base adjDX (both 12, no armor / no ready shield).
+    assert clean.base_adj_dx == penalized.base_adj_dx
+
+    # Each 3d6 attack totals 16 -> a clean miss (no kills, no fumble drops), so
+    # both attacks resolve and the only thing under test is their ORDER.
+    state = GameState(arena, [penalized, clean, target_pen, target_clean, body],
+                      dice=Dice(scripted=[6, 6, 4, 6, 6, 4]))
+    penalized.current_option = Option.SHIFT_ATTACK
+    clean.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(penalized, target_pen)   # declared FIRST
+    state.queue_attack(clean, target_clean)
+
+    results = state.resolve_combat()
+    # The penalised attack is the one carrying the -2 over-body situational mod;
+    # the clean attack carries no such note. With situational mods folded into
+    # the ordering, the clean (higher effective adjDX) attack resolves first.
+    assert len(results) == 2
+    assert "-2 over body" not in results[0].to_hit_breakdown   # clean resolved first
+    assert "-2 over body" in results[1].to_hit_breakdown       # penalised resolved second
+
+
+def test_crossbowman_knocked_prone_this_turn_cannot_fire() -> None:
+    # p.20: a figure knocked down (8+ hits in a turn) "may not attack that turn"
+    # if it has not already. A crossbowman floored mid-phase by a higher-adjDX
+    # foe loses the prone-crossbow firing exception (p.16) and does not shoot.
+    from engine.rules_data import BROADSWORD, LIGHT_CROSSBOW
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    crossbow = create_human("Bow", 12, 12, "a", armor=NO_ARMOR,
+                            weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    far_foe = create_human("Far", 12, 12, "b", armor=NO_ARMOR,
+                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    # A hitter striking the crossbowman from the rear (+4) has the higher
+    # ordering adjDX, so it resolves first and floors the crossbowman.
+    hitter = create_human("Hit", 12, 12, "b", armor=NO_ARMOR,
+                          weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+
+    crossbow.position = Hex(5, 8)
+    far_foe.position = Hex(5, 5)               # two hexes ahead -> in range, same MH
+    _aim(crossbow, far_foe)
+    hitter.position = layout.neighbor(crossbow.position, 3)   # the crossbowman's rear
+    _aim(hitter, crossbow)
+
+    from engine.facing import REAR, attack_zone
+    assert attack_zone(layout, hitter, crossbow) == REAR     # rear strike, +4 -> first
+
+    # Hitter: to-hit total 6 (a normal hit at adjDX 12 +4 rear), broadsword 4+4=8
+    # hits -> 8 >= knockdown threshold, but the crossbowman keeps ST 4 (alive).
+    state = GameState(arena, [crossbow, far_foe, hitter],
+                      dice=Dice(scripted=[2, 2, 2, 4, 4]))
+    crossbow.current_option = Option.MISSILE_ATTACK
+    hitter.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(crossbow, far_foe)      # declared first, but lower adjDX
+    state.queue_attack(hitter, crossbow)
+
+    results = state.resolve_combat()
+    assert crossbow.posture == Posture.PRONE
+    assert crossbow.knocked_down_this_turn is True
+    assert crossbow.current_st == 4            # floored but conscious
+    # Only the hitter's blow resolved; the crossbow shot was skipped.
+    assert len(results) == 1
+    assert far_foe.damage_taken == 0           # the crossbowman never fired
+
+
+def test_crossbowman_prone_from_a_previous_turn_still_fires() -> None:
+    # A crossbowman already prone (it went prone on an earlier turn, not floored
+    # by damage this turn) keeps the prone-crossbow firing exception (p.16).
+    from engine.rules_data import LIGHT_CROSSBOW
+
+    arena = Arena(cols=9, rows=15)
+    crossbow = create_human("Bow", 12, 12, "a", armor=NO_ARMOR,
+                            weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    foe = create_human("Foe", 12, 12, "b", armor=NO_ARMOR,
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    crossbow.position = Hex(5, 8)
+    foe.position = Hex(5, 6)                    # two hexes ahead, same megahex
+    _aim(crossbow, foe)
+    crossbow.posture = Posture.PRONE            # prone from last turn
+    crossbow.knocked_down_this_turn = False     # NOT floored this turn
+
+    # A normal hit (to-hit 6 at adjDX 12 +1 prone), crossbow 2d damage 3+3=6.
+    state = GameState(arena, [crossbow, foe], dice=Dice(scripted=[2, 2, 2, 3, 3]))
+    crossbow.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(crossbow, foe)
+    results = state.resolve_combat()
+    assert len(results) == 1 and results[0].hit
+    assert foe.damage_taken > 0                 # the prone crossbowman fired
+
+
+def test_hth_back_to_the_wall_lets_a_frontal_grapple_through() -> None:
+    # p.17 case (a): a figure may grapple a foe that has its "back to the wall" —
+    # no hex to give ground into away from the attacker — even head-on against a
+    # standing, equal-MA foe (which clauses b/c/d would otherwise forbid).
+    from engine.rules_data import DAGGER
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    attacker = create_human("Atk", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    defender = create_human("Def", 12, 12, "b",
+                            weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    defender.position = Hex(5, 5)
+    attacker.position = layout.neighbor(defender.position, 0)
+    defender.facing = layout.direction_to(defender.position, attacker.position)  # faces attacker
+    attacker.facing = layout.direction_to(attacker.position, defender.position)
+    state = GameState(arena, [attacker, defender])
+
+    # Sanity: a frontal grapple on a standing equal-MA foe with open space is
+    # NOT allowed (only clause (a) is in question here).
+    from engine.facing import FRONT, attack_zone
+    assert attack_zone(layout, attacker, defender) == FRONT
+    assert defender.movement_allowance == attacker.movement_allowance
+    assert defender not in state.hth_targets(attacker)
+
+    # Wall off every hex the defender could give ground into (those farther from
+    # the attacker) -> its back is to the wall.
+    start = layout.distance(attacker.position, defender.position)
+    arena.walls = {neighbor for neighbor in layout.neighbors(defender.position)
+                   if layout.distance(attacker.position, neighbor) > start}
+    assert state._has_back_to_wall(attacker, defender)
+    assert defender in state.hth_targets(attacker)
+
+    # Re-open one retreat hex: the defender is no longer pinned.
+    arena.walls.pop()
+    assert not state._has_back_to_wall(attacker, defender)
+    assert defender not in state.hth_targets(attacker)

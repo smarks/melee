@@ -8,6 +8,7 @@ from engine.rules_data import (
     BROADSWORD,
     CHAINMAIL,
     LARGE_SHIELD,
+    LEATHER,
     LONGBOW,
     NO_ARMOR,
     SHORTSWORD,
@@ -46,6 +47,33 @@ def test_adjusted_dx_from_armor_and_shield() -> None:
     assert flavius.movement_allowance == 6      # chainmail
     assert flavius.hits_stopped(from_front=True) == 5   # 3 armor + 2 shield
     assert flavius.hits_stopped(from_front=False) == 3  # shield is frontal only
+    # A ready shield covers only the front, not the rear (p.12).
+    assert flavius.hits_stopped(from_front=False, from_rear=True) == 3
+
+
+def test_unready_shield_protects_the_rear_only() -> None:
+    # p.12: a slung (unready) shield protects against attacks from the rear hex
+    # and does not subtract from DX. It still stops its full hit count there, but
+    # gives nothing to the front or side.
+    fighter = create_human(
+        "Slung", 12, 12, "a",
+        armor=LEATHER, shield=LARGE_SHIELD, shield_ready=False,
+        weapons=[SHORTSWORD], ready_weapon=SHORTSWORD,
+    )
+    # Unready shield: no DX penalty (leather -2 only, not the shield's -1).
+    assert fighter.base_adj_dx == 10
+    assert fighter.hits_stopped(from_rear=True, from_front=False) == 4   # 2 armor + 2 shield
+    assert fighter.hits_stopped(from_front=True) == 2                    # front: armor only
+    assert fighter.hits_stopped(from_front=False) == 2                   # side: armor only
+    # The ruleset threads the zone through to the rear: a rear blow is absorbed
+    # by the slung shield, a frontal one is not.
+    from engine.facing import FRONT, REAR, SIDE
+    from engine.ruleset import Ruleset
+
+    rules = Ruleset()
+    assert rules.absorbed(fighter, zone=REAR) == 4
+    assert rules.absorbed(fighter, zone=FRONT) == 2
+    assert rules.absorbed(fighter, zone=SIDE) == 2
 
 
 def test_low_st_and_wound_penalties() -> None:

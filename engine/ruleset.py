@@ -146,7 +146,8 @@ class Ruleset:
 
     def absorbed(self, target: Figure, *, zone: str | None) -> int:
         """Hits stopped by armor (and a frontal shield). Override for new armor."""
-        return target.hits_stopped(from_front=(zone == FRONT))
+        return target.hits_stopped(
+            from_front=(zone == FRONT), from_rear=(zone == REAR))
 
     def resolve_attack(
         self,

@@ -17,7 +17,15 @@ from engine.facing import FRONT, REAR, attack_zone
 from engine.figure import Figure, Race, create_fighter
 from engine.monsters import MONSTERS, create_monster
 from engine.options import Option
-from engine.rules_data import DAGGER, DamageDice, SHORTSWORD
+from engine.rules_data import (
+    CLOTH,
+    DAGGER,
+    DamageDice,
+    LEATHER,
+    NO_ARMOR,
+    PLATE,
+    SHORTSWORD,
+)
 from engine.state import GameState
 
 LAYOUT = HexLayout(orientation=FLAT, odd=True)
@@ -37,6 +45,24 @@ def test_each_race_builds_at_its_minimum_legal_spread() -> None:
     assert create_fighter("Orc", 16, 8, "a", race=Race.ORC).strength == 16
     assert create_fighter("Goblin", 14, 8, "a", race=Race.GOBLIN).strength == 14
     assert create_fighter("Hobgoblin", 14, 6, "a", race=Race.HOBGOBLIN).dexterity == 6
+
+
+def test_elf_movement_allowance_bonus_in_light_armor() -> None:
+    # p.21: an elf moves 12 in cloth or no armor, 10 in leather, and the same as
+    # a man in heavier armor.
+    def elf(armor):
+        return create_fighter("Elf", 6, 18, "a", race=Race.ELF, armor=armor)
+
+    def man(armor):
+        return create_fighter("Man", 8, 16, "a", race=Race.HUMAN, armor=armor)
+
+    assert elf(NO_ARMOR).movement_allowance == 12
+    assert elf(CLOTH).movement_allowance == 12
+    assert elf(LEATHER).movement_allowance == 10
+    # Plate: an elf moves the same as a man (no bonus).
+    assert elf(PLATE).movement_allowance == man(PLATE).movement_allowance
+    # The bonus is elf-only — a human in cloth still moves 10.
+    assert man(CLOTH).movement_allowance == 10
 
 
 def test_race_minimum_attributes_are_enforced() -> None:
@@ -101,6 +127,48 @@ def test_halfling_gets_plus_two_to_hit_when_throwing() -> None:
     assert "halfling throw" not in human_breakdown
     # Same DX, same -2 range: the halfling's to-hit number is exactly 2 higher.
     assert halfling_needed == human_needed + 2
+
+
+def _ready_and_throw(race: Race):
+    """Set up a ``race`` figure holding a dagger but carrying a javelin, two
+    hexes from a foe, then attempt to ready the javelin and throw it the same
+    turn via a charge-attack option. Returns (state, thrower, target)."""
+    from engine.rules_data import JAVELIN
+
+    arena = Arena(cols=9, rows=15)
+    # ST 10 satisfies the javelin's min ST 9; both legal spreads total their own.
+    strength, dexterity = (10, 12) if race == Race.HALFLING else (10, 14)
+    thrower = create_fighter("Thrower", strength, dexterity, "a", race=race,
+                             weapons=[DAGGER, JAVELIN], ready_weapon=DAGGER)
+    target = create_fighter("Target", 12, 12, "b",
+                            weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    thrower.position = Hex(5, 5)
+    target.position = Hex(5, 7)                  # two hexes away -> the javelin is hurled
+    _aim(thrower, target)
+    state = GameState(arena, [thrower, target], dice=Dice(scripted=[3, 3, 3] + [3] * 9))
+    return state, thrower, target
+
+
+def test_halfling_may_ready_and_throw_the_same_turn() -> None:
+    # p.22: a halfling may throw any weapon on the same turn he readies it.
+    import pytest
+
+    from engine.state import IllegalAction
+
+    state, halfling, target = _ready_and_throw(Race.HALFLING)
+    state.move(halfling, Option.CHARGE_ATTACK, ready="Javelin")
+    assert halfling.ready_weapon.name == "Javelin"   # readied as part of the attack
+    state.queue_attack(halfling, target)
+    results = state.resolve_combat()
+    assert results and results[0].weapon.name == "Javelin"
+    assert results[0].thrown                          # it was hurled, not jabbed
+    # Having left the hand, the javelin is gone and the dagger is back in hand.
+    assert halfling.ready_weapon is not None and halfling.ready_weapon.name == "Dagger"
+
+    # A human cannot ready-and-throw in one turn: readying ends the action.
+    state, human, target = _ready_and_throw(Race.HUMAN)
+    with pytest.raises(IllegalAction):
+        state.move(human, Option.CHARGE_ATTACK, ready="Javelin")
 
 
 # ---- monsters (p.21) -------------------------------------------------------

@@ -28,6 +28,8 @@ from .rules_data import (
     WOUND_DX_PENALTY,
     WOUND_HITS_THRESHOLD,
     Armor,
+    CLOTH,
+    LEATHER,
     NO_ARMOR,
     NO_SHIELD,
     Shield,
@@ -137,6 +139,7 @@ class Figure:
     hits_this_turn: int = 0          # hits taken so far this turn
     wounded_last_turn: bool = False  # took 5+ hits last turn -> -2 DX this turn
     attacked_this_turn: bool = False
+    knocked_down_this_turn: bool = False  # knocked prone by damage this turn (p.20)
     moved_this_turn: int = 0         # hexes moved this turn (for half-MA limit)
     moved_straight: bool = False     # this turn's move ran in a straight line (pole charge)
     dodging: bool = False            # chose DODGE (4 dice to hit it with a missile/thrown)
@@ -195,10 +198,17 @@ class Figure:
 
         A figure that is airborne moves at its flying allowance instead (the
         gargoyle: MA 8 on the ground, 16 in the air, p.21).
+
+        An ELF is fleeter in light armor (p.21): its MA is 12 in cloth or no
+        armor and 10 in leather (a flat +2 over the man's 10/10/8). In any
+        heavier armor an elf "moves the same as a man".
         """
         if self.flying and self.fly_movement_allowance:
             return self.fly_movement_allowance
-        return self.armor.movement_allowance
+        base = self.armor.movement_allowance
+        if self.race == Race.ELF and self.armor in (NO_ARMOR, CLOTH, LEATHER):
+            base += 2
+        return base
 
     @property
     def can_fly(self) -> bool:
@@ -250,10 +260,18 @@ class Figure:
             penalty += LOW_ST_DX_PENALTY
         return penalty
 
-    def hits_stopped(self, *, from_front: bool) -> int:
-        """Hits absorbed per attack by armor plus a ready frontal shield."""
+    def hits_stopped(self, *, from_front: bool, from_rear: bool = False) -> int:
+        """Hits absorbed per attack by armor plus a shield.
+
+        A *ready* shield covers the three front hexes; an *unready* (slung)
+        shield instead covers the single rear hex (p.12). Either way the shield
+        stops the same number of hits; only the protected arc differs.
+        """
         stopped = self.armor.stops
-        if self.shield_ready and from_front:
+        if self.shield_ready:
+            if from_front:
+                stopped += self.shield.stops
+        elif from_rear:
             stopped += self.shield.stops
         return stopped
 

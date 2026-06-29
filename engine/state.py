@@ -349,7 +349,11 @@ class GameState:
     def _enemy_front_hexes(self, figure: Figure) -> set[Hex]:
         fronts: set[Hex] = set()
         for enemy in self.enemies_of(figure):
-            if enemy.posture == Posture.PRONE:
+            # A grounded enemy (prone OR kneeling) has no front: it engages no
+            # one (see ``is_engaged_by`` / ``zone_toward``, which treat a
+            # non-standing figure as having no front), so a mover is not forced
+            # to halt entering its "front" hex.
+            if enemy.posture != Posture.STANDING:
                 continue
             fronts.update(front_hexes(self.arena.layout, enemy))
         return fronts
@@ -561,9 +565,10 @@ class GameState:
     def _can_initiate_hth(self, attacker: Figure, defender: Figure) -> bool:
         """Whether ``attacker`` may move onto ``defender``'s hex to grapple (p.17).
 
-        Allowed when the defender is down/kneeling, has a lower MA, or is taken
-        from the rear. A foe already in a brawl can always be piled onto (p.18).
-        (Mutual agreement — case (d) — is a table call we skip.)
+        Allowed when the defender (a) has its back to the wall, (b) is
+        down/kneeling, (c) has a lower MA, or (d) is taken from the rear. A foe
+        already in a brawl can always be piled onto (p.18). (Mutual agreement —
+        the rulebook's case (d) — is a table call we skip.)
         """
         if attacker.position is None or defender.position is None:
             return False
@@ -579,7 +584,29 @@ class GameState:
             return True
         if defender.movement_allowance < attacker.movement_allowance:
             return True
+        if self._has_back_to_wall(attacker, defender):
+            return True           # (a) nowhere to give ground — pinned (p.17)
         return attack_zone(self.arena.layout, attacker, defender) == REAR
+
+    def _has_back_to_wall(self, attacker: Figure, defender: Figure) -> bool:
+        """Whether ``defender`` has its "back to the wall" against ``attacker`` —
+        no hex to give ground into away from the attacker (p.17, HTH case a).
+
+        Conservatively defined to mirror force-retreat: the defender is pinned
+        when every neighbouring hex that lies farther from the attacker than the
+        defender now stands is off-board or occupied. The attacker's own hex
+        counts as occupied (it is, by the attacker), so a foe backed into a board
+        edge or wall of figures cannot retreat and may be grappled head-on.
+        """
+        layout = self.arena.layout
+        occupied = set(self.occupied(exclude=defender))
+        start_distance = layout.distance(attacker.position, defender.position)
+        return not any(
+            self.arena.contains(neighbor)
+            and neighbor not in occupied
+            and layout.distance(attacker.position, neighbor) > start_distance
+            for neighbor in self.arena.neighbors(defender.position)
+        )
 
     def hth_targets(self, attacker: Figure) -> list[Figure]:
         """Enemies ``attacker`` could grapple (or, if already grappling, strike)."""
@@ -1038,9 +1065,17 @@ class GameState:
     def _validate_ready(self, figure: Figure, option: Option, weapon_name: str) -> None:
         """Check a weapon switch is legal, mutating nothing. Called both up front
         (before the board is touched, #77) and again inside :meth:`_ready_weapon`."""
+        weapon = next((w for w in figure.weapons if w.name == weapon_name), None)
+        # A Halfling "may throw any weapon on the same turn he readies it" (p.22):
+        # readying ordinarily ends the action, but a halfling may ready a
+        # THROWABLE weapon as part of a (non-missile) attack option and then hurl
+        # it. Every other figure must ready on its own turn (option e/m).
+        if (figure.race == Race.HALFLING and weapon is not None
+                and weapon.throwable
+                and spec(option).is_attack and not spec(option).is_missile):
+            return
         if option not in (Option.READY_WEAPON, Option.CHANGE_WEAPONS):
             raise IllegalAction(f"{option.value} cannot change weapons")
-        weapon = next((w for w in figure.weapons if w.name == weapon_name), None)
         if weapon is None:
             raise IllegalAction(f"{figure.name} is not carrying {weapon_name}")
         if option == Option.CHANGE_WEAPONS and weapon.kind == WeaponKind.MISSILE:
@@ -1270,16 +1305,23 @@ class GameState:
         declares first, so declaration order is the faithful stand-in and keeps
         the dice stream clean for deterministic resolution.
         """
-        def ordering_key(pending: PendingAttack) -> int:
+        def ordering_key(pending: PendingAttack) -> tuple[int, int]:
             # Pole weapons used in/against a charge strike first, then by adjDX
             # (p.12) — so a polearm can drop a charger before it lands its blow.
             # This is independent of the +1 damage die: even a one-hex pole charge
             # (no extra die) resolves first.
             charge_first = 0 if pending.charge_resolve_first else 1
-            return (charge_first, -self.rules.order_dx(
+            # Ordering uses the full adjDX "counting everything BUT missile and
+            # thrown weapon range" (p.16): the situational mods (prone-crossbow
+            # +1, over-body -2, sheltering -4, halfling +2 throw, pole +2 vs
+            # charge) shift the order, but the range penalty does not — a distant
+            # target makes you less accurate, not slower. ``pending.situational``
+            # already excludes range (that lives in ``range_penalty``).
+            order_dx = self.rules.order_dx(
                 pending.attacker, zone=pending.zone,
                 ignore_facing=pending.ignore_facing,
-            ))
+            ) + pending.situational
+            return (charge_first, -order_dx)
 
         results: list[AttackResult] = []
         for pending in sorted(self._pending, key=ordering_key):
@@ -1288,9 +1330,15 @@ class GameState:
                 continue        # killed/knocked out before its turn to strike
             # Prone figures can't fight — except a prone crossbowman who may fire,
             # or a figure grappling on the ground in hand-to-hand.
+            # A prone crossbowman may fire steadied (p.16) — but NOT if it was
+            # knocked prone by damage earlier this same combat phase: a figure
+            # knocked down "may not attack that turn" if it has not already (p.20).
+            # A crossbowman that was already prone (chose to go prone/kneel last
+            # turn, or dropped prone to fire this turn via option f) still fires.
             crossbow = (attacker.ready_weapon is not None
                         and attacker.ready_weapon.kind == WeaponKind.MISSILE
-                        and attacker.ready_weapon.reload > 0)
+                        and attacker.ready_weapon.reload > 0
+                        and not attacker.knocked_down_this_turn)
             if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
                 continue
             # A flying weapon — hurled or fired — traces a line-of-flight: anyone
@@ -1433,6 +1481,10 @@ class GameState:
             target.unconscious = True
         elif status == KNOCKDOWN:
             target.posture = Posture.PRONE
+            # Knocked down by damage this turn: it "may not attack that turn" if
+            # it has not already (p.20). This also revokes the prone-crossbow
+            # firing exception for a crossbowman floored mid-phase.
+            target.knocked_down_this_turn = True
         aftermath = narrate_status(target, status)
         if aftermath:
             self.log.append(aftermath)
@@ -1485,6 +1537,7 @@ class GameState:
             )
             figure.hits_this_turn = 0
             figure.attacked_this_turn = False
+            figure.knocked_down_this_turn = False
             figure.moved_this_turn = 0
             figure.moved_straight = False
             figure.dodging = False
