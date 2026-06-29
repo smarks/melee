@@ -756,6 +756,52 @@ def test_admin_bypasses_seat_ownership(client: Client, django_user_model) -> Non
     assert moved.status_code != 403
 
 
+def test_new_game_and_state_responses_carry_ownership_fields(client: Client) -> None:
+    # Regression: the creator's new-game response (and api_state) must include
+    # you_control / open_seats / is_admin. api_new_game was missing them, so the
+    # creator's Players panel started out wrong until a poll happened to correct it.
+    created = _new(client)
+    assert sorted(created["you_control"]) == ["blue", "red"]   # hot-seat: owns both
+    assert created["open_seats"] == []
+    assert created["is_admin"] is False
+
+    state = client.get(f"/api/game/{created['gid']}").json()
+    assert sorted(state["you_control"]) == ["blue", "red"]
+    assert state["open_seats"] == []
+    assert "is_admin" in state
+
+
+def test_spectator_sees_open_seat_then_claims_and_can_play(client: Client) -> None:
+    # The full share-link flow across two browsers (#85): the creator opens a seat,
+    # a fresh session sees it as open via a plain GET (the shared view that was
+    # broken when the poll ignored seat changes), is blocked from acting until it
+    # claims, then controls that side.
+    creator = client
+    gid = _new(creator)["gid"]
+    creator.post(f"/api/game/{gid}/seat",
+                 data=json.dumps({"action": "open", "side": "blue"}),
+                 content_type="application/json")
+
+    spectator = Client()                                   # a different browser
+    seen = spectator.get(f"/api/game/{gid}").json()        # deep-link GET
+    assert seen["open_seats"] == ["blue"]                  # sees the open seat
+    assert seen["you_control"] == []                       # owns nothing yet
+
+    blocked = spectator.post(f"/api/game/{gid}/action",    # a spectator can't drive
+                             data=json.dumps({"type": "roll_initiative"}),
+                             content_type="application/json")
+    assert blocked.status_code == 403
+
+    spectator.post(f"/api/game/{gid}/seat",                # ...until it claims a seat
+                   data=json.dumps({"action": "claim", "side": "blue"}),
+                   content_type="application/json")
+    played = spectator.post(f"/api/game/{gid}/action",
+                            data=json.dumps({"type": "roll_initiative"}),
+                            content_type="application/json")
+    assert played.status_code == 200
+    assert played.json()["you_control"] == ["blue"]
+
+
 def _victory_duel(gid: str):
     """A red knight standing over a slain blue knight, registered at game over.
 
