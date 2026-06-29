@@ -17,7 +17,15 @@ from engine.facing import FRONT, REAR, attack_zone
 from engine.figure import Figure, Race, create_fighter
 from engine.monsters import MONSTERS, create_monster
 from engine.options import Option
-from engine.rules_data import DAGGER, DamageDice, SHORTSWORD
+from engine.rules_data import (
+    CLOTH,
+    DAGGER,
+    DamageDice,
+    LEATHER,
+    NO_ARMOR,
+    PLATE,
+    SHORTSWORD,
+)
 from engine.state import GameState
 
 LAYOUT = HexLayout(orientation=FLAT, odd=True)
@@ -37,6 +45,24 @@ def test_each_race_builds_at_its_minimum_legal_spread() -> None:
     assert create_fighter("Orc", 16, 8, "a", race=Race.ORC).strength == 16
     assert create_fighter("Goblin", 14, 8, "a", race=Race.GOBLIN).strength == 14
     assert create_fighter("Hobgoblin", 14, 6, "a", race=Race.HOBGOBLIN).dexterity == 6
+
+
+def test_elf_movement_allowance_bonus_in_light_armor() -> None:
+    # p.21: an elf moves 12 in cloth or no armor, 10 in leather, and the same as
+    # a man in heavier armor.
+    def elf(armor):
+        return create_fighter("Elf", 6, 18, "a", race=Race.ELF, armor=armor)
+
+    def man(armor):
+        return create_fighter("Man", 8, 16, "a", race=Race.HUMAN, armor=armor)
+
+    assert elf(NO_ARMOR).movement_allowance == 12
+    assert elf(CLOTH).movement_allowance == 12
+    assert elf(LEATHER).movement_allowance == 10
+    # Plate: an elf moves the same as a man (no bonus).
+    assert elf(PLATE).movement_allowance == man(PLATE).movement_allowance
+    # The bonus is elf-only — a human in cloth still moves 10.
+    assert man(CLOTH).movement_allowance == 10
 
 
 def test_race_minimum_attributes_are_enforced() -> None:

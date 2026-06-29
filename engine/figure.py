@@ -28,6 +28,8 @@ from .rules_data import (
     WOUND_DX_PENALTY,
     WOUND_HITS_THRESHOLD,
     Armor,
+    CLOTH,
+    LEATHER,
     NO_ARMOR,
     NO_SHIELD,
     Shield,
@@ -195,10 +197,17 @@ class Figure:
 
         A figure that is airborne moves at its flying allowance instead (the
         gargoyle: MA 8 on the ground, 16 in the air, p.21).
+
+        An ELF is fleeter in light armor (p.21): its MA is 12 in cloth or no
+        armor and 10 in leather (a flat +2 over the man's 10/10/8). In any
+        heavier armor an elf "moves the same as a man".
         """
         if self.flying and self.fly_movement_allowance:
             return self.fly_movement_allowance
-        return self.armor.movement_allowance
+        base = self.armor.movement_allowance
+        if self.race == Race.ELF and self.armor in (NO_ARMOR, CLOTH, LEATHER):
+            base += 2
+        return base
 
     @property
     def can_fly(self) -> bool:
