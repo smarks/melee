@@ -1001,3 +1001,42 @@ def test_disengage_can_step_into_a_grapple() -> None:
     assert runner.in_hth and foe.uid in runner.hth_opponents      # locked together
     assert runner.position == foe.position                        # moved onto the foe
     assert runner.posture == Posture.PRONE and foe.posture == Posture.PRONE
+
+
+def test_thrown_weapon_earns_the_facing_bonus_but_a_missile_does_not() -> None:
+    """A thrown attack is "treated exactly like a regular attack" (p.15), so a
+    hurl into an exposed flank/rear takes the +2/+4 facing bonus. A true missile
+    "never gets a bonus for the target's facing" (p.16) — #124."""
+    from engine.rules_data import DAGGER, SHORTSWORD, SMALL_BOW
+
+    arena = Arena(cols=9, rows=15)
+
+    # a thrown dagger into the target's exposed rear -> +4 rear in the breakdown
+    thrower = create_human("Thrower", 12, 12, "a",
+                           weapons=[DAGGER], ready_weapon=DAGGER)
+    target = create_human("Target", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    thrower.position = Hex(5, 5)
+    target.position = Hex(5, 8)                       # three hexes away -> a throw
+    _aim(thrower, target)
+    target.facing = thrower.facing                   # back turned -> thrower at its rear
+    state = GameState(arena, [thrower, target], dice=Dice(scripted=[3] * 12))
+    thrower.current_option = Option.CHARGE_ATTACK
+    state.queue_attack(thrower, target)
+    thrown_result = state.resolve_combat()[0]
+    assert thrown_result.thrown is True
+    assert "rear" in thrown_result.to_hit_breakdown   # the hurl earned the +4
+
+    # the same exposed rear, but a fired arrow gets no facing bonus
+    archer = create_human("Archer", 12, 12, "c",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    foe = create_human("Foe", 12, 12, "d", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(2, 2)
+    foe.position = Hex(2, 5)
+    _aim(archer, foe)
+    foe.facing = archer.facing                        # back turned to the archer
+    bow_game = GameState(arena, [archer, foe], dice=Dice(scripted=[3] * 12))
+    archer.current_option = Option.MISSILE_ATTACK
+    bow_game.queue_attack(archer, foe)
+    missile_result = bow_game.resolve_combat()[0]
+    assert "rear" not in missile_result.to_hit_breakdown   # missiles never get facing

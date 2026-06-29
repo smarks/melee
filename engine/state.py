@@ -380,9 +380,12 @@ class GameState:
                 continue                                  # flew past this one
             self._flight_strike(pending, blocker, dist, results)
             return
-        # 2) the intended target — a normal thrown/missile attack.
+        # 2) the intended target — a normal thrown/missile attack. A thrown
+        # weapon takes the target's facing bonus (ignore_facing False); a missile
+        # never does (p.16) — both are carried on the pending attack.
         result = self.rules.resolve_attack(
-            self.dice, attacker, target, zone=pending.zone, ignore_facing=True,
+            self.dice, attacker, target, zone=pending.zone,
+            ignore_facing=pending.ignore_facing,
             dice_count=self.rules.attack_dice_count(target),
             range_penalty=pending.range_penalty,
             situational=pending.situational,
@@ -1047,14 +1050,17 @@ class GameState:
                     self.arena.layout, attacker.position, target.position)
                 range_penalty = self.rules.missile_range_penalty(megahexes)
                 shots = max_missile_shots(weapon, attacker.base_adj_dx)
-            # zone is carried so a ready shield still stops frontal missiles,
-            # but ignore_facing suppresses the to-hit facing bonus (missiles
-            # and thrown weapons never get a facing add, p.16). The line-of-flight
-            # is traced from attacker to target, so intervening figures and fly-on
-            # are resolved directionally regardless.
+            # zone is carried so a ready shield still stops frontal fire, and it
+            # is the target's zone (as for melee) so a thrown weapon striking an
+            # exposed flank/rear earns the +2/+4 facing bonus -- a thrown attack
+            # is "treated exactly like a regular attack" (p.15). Only true missile
+            # weapons "never get a bonus for the target's facing" (p.16), so the
+            # facing add is suppressed for missiles alone (ignore_facing). The
+            # line-of-flight is traced from attacker to target either way, so
+            # intervening figures and fly-on resolve directionally regardless.
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
-                              ignore_facing=True, range_penalty=range_penalty,
+                              ignore_facing=is_missile, range_penalty=range_penalty,
                               shots=shots, thrown=is_throw,
                               situational=situational, situational_note=situational_note)
             )
