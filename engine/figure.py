@@ -280,6 +280,22 @@ class Figure:
         return not self.collapsed and not self.dead
 
 
+# The per-turn flags reset at end of turn, listed once (name -> reset default) so
+# end_turn, the figure rebuild (board.views._update_figure), and the save/load
+# round-trip (board.persistence) share one source and can't drift (#155).
+# current_option and wounded_last_turn reset differently and stay explicit.
+PER_TURN_FLAGS: dict[str, int | bool] = {
+    "hits_this_turn": 0,
+    "attacked_this_turn": False,
+    "knocked_down_this_turn": False,
+    "moved_this_turn": 0,
+    "moved_straight": False,
+    "dodging": False,
+    "defending": False,
+    "dealt_st_damage_this_turn": False,
+}
+
+
 def create_fighter(
     name: str,
     strength: int,

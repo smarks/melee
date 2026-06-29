@@ -35,7 +35,7 @@ from .facing import (
     zone_of_direction,
     zone_toward,
 )
-from .figure import Figure, Posture, Race, footprint_for
+from .figure import PER_TURN_FLAGS, Figure, Posture, Race, footprint_for
 from .megahex import megahex_distance
 from .movement import reachable_moves
 from .narrative import (
@@ -1547,15 +1547,9 @@ class GameState:
             figure.wounded_last_turn = (
                 figure.hits_this_turn >= figure.wound_hits_threshold
             )
-            figure.hits_this_turn = 0
-            figure.attacked_this_turn = False
-            figure.knocked_down_this_turn = False
-            figure.moved_this_turn = 0
-            figure.moved_straight = False
-            figure.dodging = False
-            figure.defending = False
+            for flag, default in PER_TURN_FLAGS.items():
+                setattr(figure, flag, default)
             figure.current_option = None
-            figure.dealt_st_damage_this_turn = False
             # A crossbow reloads a turn closer — but an engaged figure cannot
             # reload (p.16), so its bolt stays unspent until it breaks free.
             if figure.missile_cooldown > 0 and not self.engaged(figure):
