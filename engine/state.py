@@ -1065,9 +1065,17 @@ class GameState:
     def _validate_ready(self, figure: Figure, option: Option, weapon_name: str) -> None:
         """Check a weapon switch is legal, mutating nothing. Called both up front
         (before the board is touched, #77) and again inside :meth:`_ready_weapon`."""
+        weapon = next((w for w in figure.weapons if w.name == weapon_name), None)
+        # A Halfling "may throw any weapon on the same turn he readies it" (p.22):
+        # readying ordinarily ends the action, but a halfling may ready a
+        # THROWABLE weapon as part of a (non-missile) attack option and then hurl
+        # it. Every other figure must ready on its own turn (option e/m).
+        if (figure.race == Race.HALFLING and weapon is not None
+                and weapon.throwable
+                and spec(option).is_attack and not spec(option).is_missile):
+            return
         if option not in (Option.READY_WEAPON, Option.CHANGE_WEAPONS):
             raise IllegalAction(f"{option.value} cannot change weapons")
-        weapon = next((w for w in figure.weapons if w.name == weapon_name), None)
         if weapon is None:
             raise IllegalAction(f"{figure.name} is not carrying {weapon_name}")
         if option == Option.CHANGE_WEAPONS and weapon.kind == WeaponKind.MISSILE:

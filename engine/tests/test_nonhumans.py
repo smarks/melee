@@ -129,6 +129,48 @@ def test_halfling_gets_plus_two_to_hit_when_throwing() -> None:
     assert halfling_needed == human_needed + 2
 
 
+def _ready_and_throw(race: Race):
+    """Set up a ``race`` figure holding a dagger but carrying a javelin, two
+    hexes from a foe, then attempt to ready the javelin and throw it the same
+    turn via a charge-attack option. Returns (state, thrower, target)."""
+    from engine.rules_data import JAVELIN
+
+    arena = Arena(cols=9, rows=15)
+    # ST 10 satisfies the javelin's min ST 9; both legal spreads total their own.
+    strength, dexterity = (10, 12) if race == Race.HALFLING else (10, 14)
+    thrower = create_fighter("Thrower", strength, dexterity, "a", race=race,
+                             weapons=[DAGGER, JAVELIN], ready_weapon=DAGGER)
+    target = create_fighter("Target", 12, 12, "b",
+                            weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    thrower.position = Hex(5, 5)
+    target.position = Hex(5, 7)                  # two hexes away -> the javelin is hurled
+    _aim(thrower, target)
+    state = GameState(arena, [thrower, target], dice=Dice(scripted=[3, 3, 3] + [3] * 9))
+    return state, thrower, target
+
+
+def test_halfling_may_ready_and_throw_the_same_turn() -> None:
+    # p.22: a halfling may throw any weapon on the same turn he readies it.
+    import pytest
+
+    from engine.state import IllegalAction
+
+    state, halfling, target = _ready_and_throw(Race.HALFLING)
+    state.move(halfling, Option.CHARGE_ATTACK, ready="Javelin")
+    assert halfling.ready_weapon.name == "Javelin"   # readied as part of the attack
+    state.queue_attack(halfling, target)
+    results = state.resolve_combat()
+    assert results and results[0].weapon.name == "Javelin"
+    assert results[0].thrown                          # it was hurled, not jabbed
+    # Having left the hand, the javelin is gone and the dagger is back in hand.
+    assert halfling.ready_weapon is not None and halfling.ready_weapon.name == "Dagger"
+
+    # A human cannot ready-and-throw in one turn: readying ends the action.
+    state, human, target = _ready_and_throw(Race.HUMAN)
+    with pytest.raises(IllegalAction):
+        state.move(human, Option.CHARGE_ATTACK, ready="Javelin")
+
+
 # ---- monsters (p.21) -------------------------------------------------------
 def test_bear_has_its_rulebook_statline() -> None:
     bear = create_monster("Bear", "Bruin", "wild")
