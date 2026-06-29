@@ -349,7 +349,11 @@ class GameState:
     def _enemy_front_hexes(self, figure: Figure) -> set[Hex]:
         fronts: set[Hex] = set()
         for enemy in self.enemies_of(figure):
-            if enemy.posture == Posture.PRONE:
+            # A grounded enemy (prone OR kneeling) has no front: it engages no
+            # one (see ``is_engaged_by`` / ``zone_toward``, which treat a
+            # non-standing figure as having no front), so a mover is not forced
+            # to halt entering its "front" hex.
+            if enemy.posture != Posture.STANDING:
                 continue
             fronts.update(front_hexes(self.arena.layout, enemy))
         return fronts
