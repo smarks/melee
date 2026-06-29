@@ -212,6 +212,8 @@ class GameState:
                 continue                       # no missile ready, or still reloading
             if option_spec.is_attack and not option_spec.is_missile and has_missile:
                 continue                       # a readied missile has no melee blow
+            if option == Option.SHIFT_DEFEND and has_missile:
+                continue                       # only a non-missile weapon can parry (p.20)
             if option == Option.PICK_UP and not self.dropped_in_reach(figure):
                 continue                       # nothing on the ground within reach
             if option in (Option.GO_PRONE, Option.KNEEL) and not has_missile:
@@ -247,6 +249,8 @@ class GameState:
                 reason = "must stand up first"
             elif spec(option).is_missile and not can_fire:
                 reason = "still reloading" if has_missile else "no missile weapon ready"
+            elif option == Option.SHIFT_DEFEND and has_missile:
+                reason = "nothing to parry with — missile weapon ready"
             elif option == Option.PICK_UP and not self.dropped_in_reach(figure):
                 reason = "nothing on the ground in reach"
             elif option in (Option.GO_PRONE, Option.KNEEL) and not has_missile:
@@ -1241,6 +1245,10 @@ class GameState:
                     self.arena.layout, attacker.position, target.position)
                 range_penalty = self.rules.missile_range_penalty(megahexes)
                 shots = max_missile_shots(weapon, attacker.base_adj_dx)
+                if option == Option.ONE_LAST_SHOT:
+                    shots = 1     # the parting shot looses a single arrow (p.7
+                                  # option l); two-shot fire belongs to option f
+
             # zone is carried so a ready shield still stops frontal fire, and it
             # is the target's zone (as for melee) so a thrown weapon striking an
             # exposed flank/rear earns the +2/+4 facing bonus -- a thrown attack
@@ -1472,7 +1480,11 @@ class GameState:
         if not result.hit:
             return
         self.rules.apply_damage(target, result.damage, body_hit=result.body_hit)
-        if result.damage > 0:
+        # Force-retreat eligibility (p.20) counts only melee damage: "missile or
+        # thrown weapon hits ... don't count." A missile/thrown hit deals ST damage
+        # but must not arm a force retreat.
+        if result.damage > 0 and not result.thrown and not (
+                result.weapon is not None and result.weapon.kind == WeaponKind.MISSILE):
             attacker.dealt_st_damage_this_turn = True
         status = self.rules.status_after_hit(target)
         if status == DEAD:

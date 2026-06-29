@@ -57,6 +57,60 @@ def test_drop_prone_to_fire_a_crossbow_at_plus_one() -> None:
     assert "+1 prone" in state.resolve_combat()[0].to_hit_breakdown
 
 
+def test_a_missile_only_figure_cannot_defend() -> None:
+    # p.20: "A figure may only defend with a non-missile weapon ready, to parry." (#149)
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 9, 15, "a", weapons=[SMALL_BOW],
+                          ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    foe = create_human("Foe", 14, 10, "b", weapons=[SHORTSWORD],
+                       ready_weapon=SHORTSWORD, armor=NO_ARMOR)
+    archer.position = Hex(5, 5); archer.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0); foe.facing = 3    # adjacent, engaged
+    state = GameState(arena, [archer, foe])
+    assert Option.SHIFT_DEFEND not in state.legal_options(archer)   # only a bow ready
+    assert dict(state.option_availability(archer))[Option.SHIFT_DEFEND] is not None
+    assert Option.SHIFT_DEFEND in state.legal_options(foe)          # a swordsman may parry
+
+
+def test_one_last_shot_looses_a_single_arrow() -> None:
+    # p.7 option l: One Last Shot is *one* shot, even for a bow that gets two on
+    # unhindered fire (p.14, option f). (#148)
+    from engine.rules_data import SMALL_BOW, max_missile_shots
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 9, 15, "a", weapons=[SMALL_BOW],
+                          ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    foe = create_human("Foe", 14, 10, "b", weapons=[SHORTSWORD],
+                       ready_weapon=SHORTSWORD, armor=NO_ARMOR)
+    archer.position = Hex(5, 5)
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)            # adjacent -> the parting shot
+    _aim(archer, foe)
+    state = GameState(arena, [archer, foe])
+    assert max_missile_shots(SMALL_BOW, archer.base_adj_dx) == 2    # two on option f
+    archer.current_option = Option.ONE_LAST_SHOT
+    state.queue_attack(archer, foe)
+    assert state._pending[0].shots == 1                    # but the parting shot is one
+
+
+def test_a_missile_hit_does_not_arm_a_force_retreat() -> None:
+    # p.20: "missile or thrown weapon hits ... don't count" toward forcing a retreat. (#150)
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 9, 15, "a", weapons=[SMALL_BOW],
+                          ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    foe = create_human("Foe", 14, 10, "b", weapons=[SHORTSWORD],
+                       ready_weapon=SHORTSWORD, armor=NO_ARMOR)
+    archer.position = Hex(5, 5)
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)            # adjacent
+    _aim(archer, foe)
+    state = GameState(arena, [archer, foe], dice=Dice(scripted=[1, 1, 1] + [3] * 12))
+    archer.current_option = Option.ONE_LAST_SHOT
+    state.queue_attack(archer, foe)
+    result = state.resolve_combat()[0]
+    assert result.hit and result.damage > 0                # the arrow landed and hurt
+    assert not state.can_force_retreat(archer, foe)        # but a missile hit doesn't arm it
+
+
 def test_kneeling_figure_has_no_front() -> None:
     from engine.facing import REAR, attack_zone
     arena = Arena(cols=9, rows=15)
