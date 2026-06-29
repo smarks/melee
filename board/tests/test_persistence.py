@@ -35,6 +35,7 @@ _FIGURE_FIELDS = (
     "moved_this_turn", "dodging", "unconscious", "dead", "current_option",
     "dealt_st_damage_this_turn", "missile_cooldown", "hth_opponents",
     "hth_drew_dagger", "shield_ready", "current_st",
+    "knocked_down_this_turn", "moved_straight", "defending",
     "experience", "added_st", "added_dx",
 )
 _TARMAR_FIELDS = (
@@ -75,6 +76,19 @@ def _two_figure_game(profile_name: str) -> GameState:
 def _fresh_arena():
     from engine.arena import Arena
     return Arena(cols=9, rows=15)
+
+
+def test_per_turn_flags_survive_a_round_trip() -> None:
+    # Regression (#155): defending / moved_straight / knocked_down_this_turn used to
+    # be dropped by the figure save/load round-trip (the flag list had drifted).
+    fig = chargen.build("Classic Melee", _spec("Classic Melee", "Red", "red"))
+    fig.defending = True
+    fig.moved_straight = True
+    fig.knocked_down_this_turn = True
+    restored = persistence._figure_from_json(persistence._figure_to_json(fig))
+    assert restored.defending is True
+    assert restored.moved_straight is True
+    assert restored.knocked_down_this_turn is True
 
 
 def _play_a_turn(state: GameState) -> None:

@@ -30,6 +30,7 @@ from hexarena.dice import Dice
 from hexarena.hex import Hex
 
 from engine import ai, chargen, experience
+from engine.figure import PER_TURN_FLAGS
 from engine.options import Option, spec
 from engine.profile import PROFILES
 from engine.rules_data import WEAPONS, WeaponKind
@@ -1259,15 +1260,11 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
     rebuilt.shield_ready = figure.shield_ready
     # This turn's declared action and the per-turn movement/attack flags.
     rebuilt.current_option = figure.current_option
-    rebuilt.attacked_this_turn = figure.attacked_this_turn
-    rebuilt.moved_this_turn = figure.moved_this_turn
-    rebuilt.moved_straight = figure.moved_straight
-    rebuilt.dodging = figure.dodging
-    rebuilt.defending = figure.defending
-    rebuilt.dealt_st_damage_this_turn = figure.dealt_st_damage_this_turn
+    # Per-turn flags carried verbatim from the single source, so they can't drift (#155).
+    for flag in PER_TURN_FLAGS:
+        setattr(rebuilt, flag, getattr(figure, flag))
     # Injury carried into the rest of the fight (wounds + the DX-penalty flags).
     rebuilt.damage_taken = min(figure.damage_taken, rebuilt.strength)
-    rebuilt.hits_this_turn = figure.hits_this_turn
     rebuilt.wounded_last_turn = figure.wounded_last_turn
     rebuilt.unconscious = figure.unconscious
     rebuilt.dead = figure.dead

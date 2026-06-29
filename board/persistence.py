@@ -43,7 +43,7 @@ from hexarena.dice import Dice
 from hexarena.hex import Hex
 
 from engine.arena import Arena
-from engine.figure import Figure, Posture, Race
+from engine.figure import PER_TURN_FLAGS, Figure, Posture, Race
 from engine.options import Option
 from engine.profile import PROFILES
 from engine.rules_data import ARMORS, SHIELDS, WEAPONS, DamageDice
@@ -96,16 +96,12 @@ def _figure_to_json(figure: Figure) -> dict:
         "facing": figure.facing,
         "posture": figure.posture.value,
         "damage_taken": figure.damage_taken,
-        "hits_this_turn": figure.hits_this_turn,
+        **{flag: getattr(figure, flag) for flag in PER_TURN_FLAGS},
         "wounded_last_turn": figure.wounded_last_turn,
-        "attacked_this_turn": figure.attacked_this_turn,
-        "moved_this_turn": figure.moved_this_turn,
-        "dodging": figure.dodging,
         "unconscious": figure.unconscious,
         "dead": figure.dead,
         "current_option": figure.current_option.value
         if figure.current_option is not None else None,
-        "dealt_st_damage_this_turn": figure.dealt_st_damage_this_turn,
         "missile_cooldown": figure.missile_cooldown,
         "hth_opponents": list(figure.hth_opponents),
         "hth_drew_dagger": figure.hth_drew_dagger,
@@ -166,16 +162,13 @@ def _figure_from_json(data: dict) -> Figure:
     figure.facing = data["facing"]
     figure.posture = Posture(data["posture"])
     figure.damage_taken = data["damage_taken"]
-    figure.hits_this_turn = data["hits_this_turn"]
+    for flag, default in PER_TURN_FLAGS.items():
+        setattr(figure, flag, data.get(flag, default))
     figure.wounded_last_turn = data["wounded_last_turn"]
-    figure.attacked_this_turn = data["attacked_this_turn"]
-    figure.moved_this_turn = data["moved_this_turn"]
-    figure.dodging = data["dodging"]
     figure.unconscious = data["unconscious"]
     figure.dead = data["dead"]
     option = data["current_option"]
     figure.current_option = Option(option) if option is not None else None
-    figure.dealt_st_damage_this_turn = data["dealt_st_damage_this_turn"]
     figure.missile_cooldown = data["missile_cooldown"]
     figure.hth_opponents = list(data["hth_opponents"])
     figure.hth_drew_dagger = data["hth_drew_dagger"]
