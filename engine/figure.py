@@ -259,10 +259,18 @@ class Figure:
             penalty += LOW_ST_DX_PENALTY
         return penalty
 
-    def hits_stopped(self, *, from_front: bool) -> int:
-        """Hits absorbed per attack by armor plus a ready frontal shield."""
+    def hits_stopped(self, *, from_front: bool, from_rear: bool = False) -> int:
+        """Hits absorbed per attack by armor plus a shield.
+
+        A *ready* shield covers the three front hexes; an *unready* (slung)
+        shield instead covers the single rear hex (p.12). Either way the shield
+        stops the same number of hits; only the protected arc differs.
+        """
         stopped = self.armor.stops
-        if self.shield_ready and from_front:
+        if self.shield_ready:
+            if from_front:
+                stopped += self.shield.stops
+        elif from_rear:
             stopped += self.shield.stops
         return stopped
 
