@@ -770,6 +770,14 @@ function openMenu(f) {
       const e = figByUid(uid);
       rows.push({label: `Attack ${e ? e.name : uid}`, act: () => setAttack(f, uid)});
     }
+    // #141: when there's no weapon target, show Attack disabled with the reason
+    // (matching the grapple/break-free rows) instead of silently omitting it. A
+    // grappler's attack is the Strike row below, so skip it while grappling.
+    if (!grappling && !(optInfo._targets || []).length) {
+      const missile = !!(f.weapon && missileReady(f, optInfo));
+      rows.push({label: missile ? "🏹 Shoot" : "⚔ Attack",
+                 reason: missile ? "no target in range" : "no foe in reach", disabled: true});
+    }
     for (const uid of (optInfo.hth_targets || [])) {
       const e = figByUid(uid);
       rows.push({label: `🤼 ${grappling ? "Strike" : "Grapple"} ${e ? e.name : uid}`,
