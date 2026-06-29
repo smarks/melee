@@ -71,7 +71,7 @@ python manage.py runserver                                        # http://127.0
 ```
 
 **New game** opens the wizard: **Rules** (Classic / Tarmar) → **Mode** (vs
-Computer / hot-seat) → **Teams** (2–5) → **Combatants** (1–3) → optionally
+Computer / same screen) → **Teams** (2–5) → **Combatants** (1–3) → optionally
 **Pick / generate / edit fighters…** (🎲 Generate; 💾 Save / Load saved when
 logged in) → **Begin**. Header **Log in** link → `/accounts/`. Game state is
 in-memory per game id; the DB holds only accounts + saved characters.

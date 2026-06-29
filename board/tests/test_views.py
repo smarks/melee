@@ -463,7 +463,7 @@ def test_new_custom_game_rejects_an_illegal_fighter(client: Client) -> None:
 
 
 def test_move_can_switch_the_ready_weapon(client: Client) -> None:
-    data = _new(client)            # hot-seat default skirmish
+    data = _new(client)            # same screen default skirmish
     gid = data["gid"]
     _post(client, gid, {"type": "roll_initiative"})
     _post(client, gid, {"type": "choose_first", "side": "red"})
@@ -675,7 +675,7 @@ def test_only_the_owning_session_can_drive_the_game(client: Client) -> None:
         content_type="application/json",
     )
     assert ok.status_code == 200
-    assert set(ok.json()["you_control"]) == {"red", "blue"}   # hot-seat: owns both
+    assert set(ok.json()["you_control"]) == {"red", "blue"}   # same screen: owns both
 
 
 def test_open_and_claim_a_seat_splits_control(client: Client) -> None:
@@ -761,7 +761,7 @@ def test_new_game_and_state_responses_carry_ownership_fields(client: Client) -> 
     # you_control / open_seats / is_admin. api_new_game was missing them, so the
     # creator's Players panel started out wrong until a poll happened to correct it.
     created = _new(client)
-    assert sorted(created["you_control"]) == ["blue", "red"]   # hot-seat: owns both
+    assert sorted(created["you_control"]) == ["blue", "red"]   # same screen: owns both
     assert created["open_seats"] == []
     assert created["is_admin"] is False
 
@@ -806,7 +806,7 @@ def test_spectator_sees_open_seat_then_claims_and_can_play(client: Client) -> No
 def test_admin_can_edit_a_figure_outside_the_rules(client: Client, django_user_model) -> None:
     # #86: an admin may edit a fighter past the point budget; a regular owner is
     # still held to the rules.
-    data = _new(client)                          # creator owns both sides (hot-seat)
+    data = _new(client)                          # creator owns both sides (same screen)
     gid = data["gid"]
     red = next(f for f in data["state"]["figures"] if f["side"] == "red")
     over_budget = dict(red["edit_spec"])
