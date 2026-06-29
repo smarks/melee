@@ -1040,3 +1040,48 @@ def test_thrown_weapon_earns_the_facing_bonus_but_a_missile_does_not() -> None:
     bow_game.queue_attack(archer, foe)
     missile_result = bow_game.resolve_combat()[0]
     assert "rear" not in missile_result.to_hit_breakdown   # missiles never get facing
+
+
+def _thrown_fumble_setup(to_hit_total):
+    """A thrower aimed at a target with an enemy standing two hexes behind it.
+
+    ``to_hit_total`` is the scripted 3-dice total for the strike at the intended
+    target (17 = drop, 18 = break)."""
+    from engine.rules_data import DAGGER, JAVELIN, SHORTSWORD
+    arena = Arena(cols=9, rows=15)
+    thrower = create_human("Thrower", 12, 12, "a",
+                           weapons=[JAVELIN, DAGGER], ready_weapon=JAVELIN)
+    target = create_human("Target", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    behind = create_human("Behind", 12, 12, "c",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    thrower.position = Hex(5, 5)
+    target.position = Hex(5, 7)                       # two hexes away -> a throw
+    behind.position = Hex(5, 9)                       # downrange, behind the target
+    _aim(thrower, target)
+    rolls = {17: [6, 6, 5], 18: [6, 6, 6]}[to_hit_total]
+    state = GameState(arena, [thrower, target, behind],
+                      dice=Dice(scripted=rolls + [3] * 12))
+    thrower.current_option = Option.CHARGE_ATTACK
+    return state, thrower, target, behind
+
+
+def test_thrown_seventeen_drops_in_the_target_hex_and_does_not_fly_on() -> None:
+    """A thrown 17 misses and the weapon drops in the TARGET hex (p.10); it has
+    left the hand, so it never flies on to strike a figure behind — #128."""
+    state, thrower, target, behind = _thrown_fumble_setup(17)
+    state.queue_attack(thrower, target)
+    state.resolve_combat()
+    assert target.damage_taken == 0 and behind.damage_taken == 0   # nobody struck
+    on_ground = [(hex_pos, weapon.name) for hex_pos, weapon in state.dropped]
+    assert (target.position, "Javelin") in on_ground              # dropped in target hex
+
+
+def test_thrown_eighteen_breaks_the_weapon_and_does_not_fly_on() -> None:
+    """A thrown 18 shatters the weapon (p.10): it strikes no one behind the
+    target and leaves nothing on the ground to recover — #128."""
+    state, thrower, target, behind = _thrown_fumble_setup(18)
+    state.queue_attack(thrower, target)
+    state.resolve_combat()
+    assert target.damage_taken == 0 and behind.damage_taken == 0   # nobody struck
+    assert "Javelin" not in [weapon.name for _, weapon in state.dropped]  # broken, gone

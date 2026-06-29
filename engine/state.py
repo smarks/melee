@@ -396,6 +396,12 @@ class GameState:
         if result.hit:
             self._land_flight(pending, target.position)
             return
+        if result.dropped_weapon or result.broke_weapon:
+            # A 17 drops the weapon (in the target hex for a throw), an 18 breaks
+            # it (p.10) — either way it has left the hand and does NOT fly on to
+            # strike a figure behind the target. ``_apply`` already placed the
+            # dropped weapon or removed the broken one, so nothing lands here.
+            return
         # 3) a clean miss — the weapon flies on up to ten hexes (p.15).
         direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
         current = target.position
@@ -1207,7 +1213,10 @@ class GameState:
             if attacker.ready_weapon in attacker.weapons:
                 attacker.weapons.remove(attacker.ready_weapon)
             if result.dropped_weapon:           # dropped lands intact; broken is gone
-                self._drop_to_ground(attacker.ready_weapon, attacker.position)
+                # A fumbled melee weapon drops in the attacker's own hex; a thrown
+                # weapon (a 17 in flight) drops in the TARGET hex instead (p.10).
+                landing = target.position if result.thrown else attacker.position
+                self._drop_to_ground(attacker.ready_weapon, landing)
             attacker.ready_weapon = None
         else:
             self.log.append(narrate_attack(attacker, target, result))
