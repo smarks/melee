@@ -1225,3 +1225,35 @@ def test_dodge_forces_four_dice_against_a_bow_but_three_in_melee() -> None:
     by_attacker = {result.weapon.name: result for result in state.resolve_combat()}
     assert by_attacker["Small bow"].dice_count == 4      # dodge vs the arrow
     assert by_attacker["Shortsword"].dice_count == 3     # but ordinary in melee
+
+
+def test_stand_up_takes_effect_at_end_of_combat_not_during_movement() -> None:
+    """Option (g): a figure rises "at the end of the combat phase" (p.6-7). It
+    must stay prone through that turn's combat — still struck as REAR (+4) — and
+    only be standing the next turn — #121."""
+    from engine.facing import REAR
+
+    arena = Arena(cols=9, rows=15)
+    riser = create_human("Riser", 12, 12, "a",
+                         weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    riser.position = Hex(5, 5)
+    riser.posture = Posture.PRONE
+    riser.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)         # adjacent
+    foe.facing = LAYOUT.direction_to(foe.position, riser.position)
+    state = GameState(arena, [riser, foe], dice=Dice(scripted=[3] * 12))
+
+    assert Option.STAND_UP in state.legal_options(riser)
+    state.move(riser, Option.STAND_UP)                   # chosen in the movement phase
+    assert riser.posture == Posture.PRONE                # deferred — NOT risen yet
+
+    foe.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(foe, riser)
+    result = state.resolve_combat()[0]
+    assert result.zone == REAR                           # prone -> no front, struck rear
+    assert "+4 rear" in result.to_hit_breakdown
+
+    state.end_turn()                                     # end of the combat phase
+    assert riser.posture == Posture.STANDING             # finally on its feet next turn

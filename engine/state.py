@@ -901,12 +901,14 @@ class GameState:
         figure.current_option = option
         figure.dodging = option_spec.sets_dodge
         figure.defending = option_spec.sets_defend
-        if option == Option.STAND_UP:
-            figure.posture = Posture.STANDING
-        elif option == Option.GO_PRONE:
+        if option == Option.GO_PRONE:
             figure.posture = Posture.PRONE
         elif option == Option.KNEEL:
             figure.posture = Posture.KNEELING
+        # STAND UP is NOT applied here: a figure rises "at the end of the combat
+        # phase" (p.6-7, option g), so it stays prone/kneeling through this turn's
+        # combat — still struck as having no front (+4) — and end_turn performs
+        # the rise. (Crawl keeps it grounded and is handled by the path move.)
         if ready is not None:
             if option == Option.PICK_UP:
                 self.pick_up_weapon(figure, ready)
@@ -1325,6 +1327,13 @@ class GameState:
     def end_turn(self) -> None:
         """Settle injury flags and reset per-turn state, then advance the turn."""
         for figure in self.figures:
+            # Option (g): a STAND UP chosen in movement takes effect now, at the
+            # end of the combat phase (p.6-7). The figure stayed prone/kneeling
+            # through this turn's combat and only now rises to its feet. (Crawl
+            # keeps it grounded and never sets this option.)
+            if (figure.current_option == Option.STAND_UP
+                    and figure.posture != Posture.STANDING):
+                figure.posture = Posture.STANDING
             figure.wounded_last_turn = (
                 figure.hits_this_turn >= figure.wound_hits_threshold
             )
