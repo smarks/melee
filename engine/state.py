@@ -387,10 +387,11 @@ class GameState:
         result = self.rules.resolve_attack(
             self.dice, attacker, target, zone=pending.zone,
             ignore_facing=pending.ignore_facing,
-            dice_count=self.rules.attack_dice_count(target),
+            dice_count=self.rules.attack_dice_count(target, ranged=True),
             range_penalty=pending.range_penalty,
             situational=pending.situational,
-            situational_note=pending.situational_note)
+            situational_note=pending.situational_note,
+            ranged=True)
         result.thrown = pending.thrown
         self._apply(attacker, target, result)
         results.append(result)
@@ -425,7 +426,7 @@ class GameState:
         result = self.rules.resolve_attack(
             self.dice, attacker, victim,
             zone=attack_zone(self.arena.layout, attacker, victim),
-            ignore_facing=True, range_penalty=-dist, force_hit=True)
+            ignore_facing=True, range_penalty=-dist, force_hit=True, ranged=True)
         result.thrown = pending.thrown
         self._apply(attacker, victim, result)
         results.append(result)
@@ -583,7 +584,7 @@ class GameState:
                 counter = self.rules.resolve_attack(
                     self.dice, defender, attacker,
                     zone=attack_zone(self.arena.layout, defender, attacker),
-                    dice_count=self.rules.attack_dice_count(attacker),
+                    dice_count=self.rules.attack_dice_count(attacker, ranged=False),
                     force_hit=True)
                 self.log.append(narrate_hth(attacker, defender, "free_hit"))
                 self._apply(defender, attacker, counter)
@@ -747,7 +748,7 @@ class GameState:
         attacker.attacked_this_turn = True        # the rush replaces its attack
         zone = attack_zone(layout, attacker, target)
         needed = self.rules.to_hit_number(attacker, zone=zone)
-        dice_count = self.rules.attack_dice_count(target)
+        dice_count = self.rules.attack_dice_count(target, ranged=False)
         rolled = self.dice.total(dice_count)
         hit, _multiplier, _dropped, _broke = self.rules.classify_roll(
             rolled, dice_count, needed)
@@ -899,6 +900,7 @@ class GameState:
             figure.facing = facing % 6
         figure.current_option = option
         figure.dodging = option_spec.sets_dodge
+        figure.defending = option_spec.sets_defend
         if option == Option.STAND_UP:
             figure.posture = Posture.STANDING
         elif option == Option.GO_PRONE:
@@ -1221,7 +1223,9 @@ class GameState:
                 result = self.rules.resolve_attack(
                     self.dice, attacker, pending.target,
                     zone=zone, weapon=weapon,
-                    dice_count=self.rules.attack_dice_count(pending.target),
+                    dice_count=self.rules.attack_dice_count(
+                        pending.target, ranged=False),
+                    ranged=False,
                     ignore_facing=pending.ignore_facing,
                     range_penalty=pending.range_penalty,
                     situational=pending.situational,
@@ -1329,6 +1333,7 @@ class GameState:
             figure.moved_this_turn = 0
             figure.moved_straight = False
             figure.dodging = False
+            figure.defending = False
             figure.current_option = None
             figure.dealt_st_damage_this_turn = False
             # A crossbow reloads a turn closer — but an engaged figure cannot

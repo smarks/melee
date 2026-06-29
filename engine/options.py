@@ -49,7 +49,8 @@ class OptionSpec:
     movement_cap: str     # "full" | "half" | "two" | "one" | "none"
     is_attack: bool       # title includes the word "attack"
     is_missile: bool      # the attack is a missile shot
-    sets_dodge: bool      # dodging/defending this turn (forces 4-dice to hit it)
+    sets_dodge: bool      # DODGE this turn (forces 4 dice to hit it with a missile/thrown)
+    sets_defend: bool = False  # SHIFT_DEFEND this turn (forces 4 dice to hit it in melee)
 
 
 _SPECS: dict[Option, OptionSpec] = {
@@ -67,7 +68,7 @@ _SPECS: dict[Option, OptionSpec] = {
     Option.SHIFT_ATTACK: OptionSpec(
         Option.SHIFT_ATTACK, ENGAGED, "one", True, False, False),
     Option.SHIFT_DEFEND: OptionSpec(
-        Option.SHIFT_DEFEND, ENGAGED, "one", False, False, True),
+        Option.SHIFT_DEFEND, ENGAGED, "one", False, False, False, sets_defend=True),
     Option.ONE_LAST_SHOT: OptionSpec(
         Option.ONE_LAST_SHOT, ENGAGED, "none", True, True, False),
     Option.CHANGE_WEAPONS: OptionSpec(

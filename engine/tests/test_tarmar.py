@@ -166,6 +166,31 @@ def test_knockdown_still_fires_when_a_turn_drains_most_of_fatigue() -> None:
     assert rules.status_after_hit(tgt) == KNOCKDOWN
 
 
+def test_dodge_and_defend_are_attack_type_specific() -> None:
+    """Tarmar: the +4 defend TN bonus applies to a dodging figure only against a
+    missile/thrown attack, and to a defending figure only against melee — #123."""
+    from engine.tarmar import DEFEND_TN_BONUS
+
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)
+
+    dodger = _target(armor=NO_ARMOR)
+    dodger.dodging = True
+    dodge_ranged = rules.resolve_attack(
+        Dice(scripted=[10, 3, 3]), atk, dodger, zone=FRONT, ranged=True).needed
+    dodge_melee = rules.resolve_attack(
+        Dice(scripted=[10, 3, 3]), atk, dodger, zone=FRONT, ranged=False).needed
+    assert dodge_ranged - dodge_melee == DEFEND_TN_BONUS   # +4 only vs the ranged shot
+
+    defender = _target(armor=NO_ARMOR)
+    defender.defending = True
+    defend_ranged = rules.resolve_attack(
+        Dice(scripted=[10, 3, 3]), atk, defender, zone=FRONT, ranged=True).needed
+    defend_melee = rules.resolve_attack(
+        Dice(scripted=[10, 3, 3]), atk, defender, zone=FRONT, ranged=False).needed
+    assert defend_melee - defend_ranged == DEFEND_TN_BONUS  # +4 only vs the melee blow
+
+
 def test_profiles_pair_model_with_ruleset() -> None:
     assert isinstance(CLASSIC.ruleset, Ruleset) and not isinstance(
         CLASSIC.ruleset, TarmarRuleset)

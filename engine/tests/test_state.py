@@ -1167,3 +1167,61 @@ def test_pole_plus_two_vs_charge_is_denied_after_a_shift_that_moved() -> None:
     spear.moved_this_turn = 1                            # shifted a hex
     mods_shift, note_shift = state._situational_mods(spear, charger, SPEAR, False)
     assert mods_shift == 0 and "vs charge" not in note_shift
+
+
+def test_dodge_defends_vs_ranged_and_defend_vs_melee_only() -> None:
+    """Four dice to hit a DODGING figure only with a missile/thrown weapon, and a
+    DEFENDING figure only with another (melee) attack (p.20) — #123."""
+    from engine.ruleset import Ruleset
+    from engine.rules_data import SHORTSWORD
+
+    rules = Ruleset()
+    dodger = create_human("Dodger", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    dodger.dodging = True
+    assert rules.attack_dice_count(dodger, ranged=True) == 4    # missile/thrown: hard
+    assert rules.attack_dice_count(dodger, ranged=False) == 3   # melee: ordinary
+
+    defender = create_human("Defender", 12, 12, "b",
+                            weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    defender.defending = True
+    assert rules.attack_dice_count(defender, ranged=False) == 4  # melee: hard
+    assert rules.attack_dice_count(defender, ranged=True) == 3   # missile/thrown: ordinary
+
+
+def test_dodge_and_defend_options_set_the_matching_flag() -> None:
+    """Option (c) DODGE sets only ``dodging``; option (k) SHIFT_DEFEND sets only
+    ``defending`` — the two are no longer conflated — #123."""
+    from engine.options import spec
+    assert spec(Option.DODGE).sets_dodge and not spec(Option.DODGE).sets_defend
+    assert spec(Option.SHIFT_DEFEND).sets_defend and not spec(Option.SHIFT_DEFEND).sets_dodge
+
+
+def test_dodge_forces_four_dice_against_a_bow_but_three_in_melee() -> None:
+    """Integration: a dodging figure makes a bow roll four dice, but a melee swing
+    still rolls three — #123."""
+    from engine.rules_data import SHORTSWORD, SMALL_BOW
+
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 12, 12, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    swinger = create_human("Swinger", 12, 12, "a",
+                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    dodger = create_human("Dodger", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(5, 5)
+    dodger.position = Hex(5, 8)
+    dodger.facing = 0
+    swinger.position = LAYOUT.neighbor(Hex(5, 8), 0)     # adjacent, in the dodger's front
+    swinger.facing = LAYOUT.direction_to(swinger.position, dodger.position)
+    _aim(archer, dodger)
+    dodger.dodging = True                                # chose DODGE this turn
+    state = GameState(arena, [archer, swinger, dodger], dice=Dice(scripted=[3] * 16))
+
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, dodger)
+    swinger.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(swinger, dodger)
+    by_attacker = {result.weapon.name: result for result in state.resolve_combat()}
+    assert by_attacker["Small bow"].dice_count == 4      # dodge vs the arrow
+    assert by_attacker["Shortsword"].dice_count == 3     # but ordinary in melee

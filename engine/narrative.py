@@ -55,7 +55,7 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
     approach = _approach(attacker, target, result.weapon, result.zone,
                          getattr(result, "thrown", False))
     if not result.hit:
-        if getattr(target, "dodging", False):
+        if getattr(target, "dodging", False) or getattr(target, "defending", False):
             body = f"{approach}, who dodges clear"
         elif result.note == "fumble":
             body = f"{approach} — and fumbles, the blow flailing wide"

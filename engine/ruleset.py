@@ -118,9 +118,19 @@ class Ruleset:
         """adjDX used to order attacks (everything but missile/thrown range)."""
         return self.to_hit_number(attacker, zone=zone, ignore_facing=ignore_facing)
 
-    def attack_dice_count(self, target: Figure) -> int:
-        """Dice rolled to hit: four vs a dodging/defending target, else three."""
-        return 4 if target.dodging else THREE_DICE
+    def attack_dice_count(self, target: Figure, *, ranged: bool = False) -> int:
+        """Dice rolled to hit, by attack type (Melee p.20).
+
+        A *dodging* figure is hard to hit only with a missile or thrown weapon; a
+        *defending* figure only with a melee attack. Either forces four dice for
+        the matching attack type, three otherwise. ``ranged`` is True for a
+        missile/thrown attack, False for a melee blow.
+        """
+        if ranged and target.dodging:
+            return 4
+        if not ranged and target.defending:
+            return 4
+        return THREE_DICE
 
     # ---- dice resolution ----------------------------------------------------
     def classify_roll(
@@ -154,12 +164,16 @@ class Ruleset:
         extra_dice: int = 0,
         hth_damage: object | None = None,
         force_hit: bool = False,
+        ranged: bool = False,
     ) -> AttackResult:
         """Roll one attack and return its result (no state is mutated).
 
         Composed from the hooks above so a subclass can change any single step.
         ``force_hit`` skips the to-hit roll (the hit is already decided, e.g. a
-        thrown weapon that struck a figure in its flight path).
+        thrown weapon that struck a figure in its flight path). ``ranged`` flags a
+        missile/thrown attack; classic Melee reads the four-dice count via the
+        passed ``dice_count`` and ignores it, but a subclass (Tarmar) uses it to
+        apply the dodge-vs-ranged / defend-vs-melee distinction.
         """
         weapon = weapon or attacker.ready_weapon
         needed = self.to_hit_number(

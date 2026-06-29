@@ -161,7 +161,7 @@ class TarmarRuleset(Ruleset):
         self, dice, attacker, target, *, zone, weapon=None,
         dice_count=1, ignore_facing=False, range_penalty=0,
         situational=0, situational_note="", extra_dice=0, hth_damage=None,
-        force_hit=False,
+        force_hit=False, ranged=False,
     ) -> AttackResult:
         weapon = weapon or attacker.ready_weapon
         if hth_damage is not None:
@@ -182,7 +182,10 @@ class TarmarRuleset(Ruleset):
         shield = (SHIELD_BONUS.get(target.shield.name, 0)
                   if target.shield_ready and zone == FRONT else 0)
         dodge = tarmar_rules.dodge_modifier(target.base_adj_dx)
-        defend = DEFEND_TN_BONUS if target.dodging else 0
+        # Dodge raises the TN only against a missile/thrown attack; defend only
+        # against a melee blow (Melee p.20) — type-aware like the classic profile.
+        defends = (ranged and target.dodging) or (not ranged and target.defending)
+        defend = DEFEND_TN_BONUS if defends else 0
         target_number = tarmar_rules.target_number(
             weapon_class, tier, shield_bonus=shield, defender_dodge=dodge) + defend
 
@@ -222,7 +225,7 @@ class TarmarRuleset(Ruleset):
             note=outcome["outcome"],
             roll_under=False,
             to_hit_breakdown=self._breakdown(
-                attacker, weapon, weapon_class, tier, shield, target.dodging,
+                attacker, weapon, weapon_class, tier, shield, defends,
                 target_number, skill, zone, ignore_facing, range_penalty, bonus,
                 situational_note))
 
