@@ -802,6 +802,32 @@ def test_spectator_sees_open_seat_then_claims_and_can_play(client: Client) -> No
     assert played.json()["you_control"] == ["blue"]
 
 
+@pytest.mark.django_db
+def test_admin_can_edit_a_figure_outside_the_rules(client: Client, django_user_model) -> None:
+    # #86: an admin may edit a fighter past the point budget; a regular owner is
+    # still held to the rules.
+    data = _new(client)                          # creator owns both sides (hot-seat)
+    gid = data["gid"]
+    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+    over_budget = dict(red["edit_spec"])
+    over_budget["strength"] = 99                 # blows the ST+DX point budget
+
+    def edit(who: Client):
+        return who.post(f"/api/game/{gid}/action",
+                        data=json.dumps({"type": "update_figure",
+                                         "uid": red["uid"], "spec": over_budget}),
+                        content_type="application/json")
+
+    assert edit(client).status_code == 400       # the owner is bound by the rules
+
+    admin_user = django_user_model.objects.create_user(
+        username="gm2", password="gm-pass-98765", is_staff=True)
+    admin = Client()
+    admin.force_login(admin_user)
+    res = edit(admin)                            # the admin's out-of-rules edit lands
+    assert res.status_code == 200
+
+
 def _victory_duel(gid: str):
     """A red knight standing over a slain blue knight, registered at game over.
 

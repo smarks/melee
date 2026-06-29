@@ -301,7 +301,10 @@ function drawSeats() {
     return `<div style="margin:2px 0"><b style="text-transform:capitalize">${side}</b> <span class="muted">— ${tag}</span>${btn}</div>`;
   }).join("");
   const copy = `<button style="margin-top:6px;padding:1px 7px;cursor:pointer" onclick="copyLink()">Copy invite link</button>`;
-  el.innerHTML = rows + copy;
+  const adminTag = IS_ADMIN
+    ? `<div style="margin-bottom:5px;color:#e6b800"><b>★ Admin</b> <span class="muted">— you control every figure and can edit them outside the rules.</span></div>`
+    : "";
+  el.innerHTML = adminTag + rows + copy;
 }
 async function seatAction(action, side) {
   const data = await postJSON(`/api/game/${GID}/seat`, {action, side});

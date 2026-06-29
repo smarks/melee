@@ -266,26 +266,29 @@ def create_fighter(
     dexterity: int,
     side: str,
     race: Race = Race.HUMAN,
+    validate: bool = True,
     **gear,
 ) -> Figure:
     """Create a fighter of ``race``, enforcing its ST/DX spread (Sections III, VIII).
 
     Every race floors ST and DX at its own minimums and spends exactly its own
     point total across the two (the human 24-point / min-8 spread is just one row
-    of :data:`RACE_SPREADS`).
+    of :data:`RACE_SPREADS`). ``validate=False`` skips the spread check so an admin
+    can build a fighter outside the rules (#86).
     """
     spread = RACE_SPREADS[race]
-    if strength < spread.min_strength or dexterity < spread.min_dexterity:
-        raise ValueError(
-            f"a {race.value}'s ST may not begin below {spread.min_strength} "
-            f"nor its DX below {spread.min_dexterity} "
-            f"(got ST {strength}, DX {dexterity})"
-        )
-    if strength + dexterity != spread.total:
-        raise ValueError(
-            f"a fresh {race.value} spends exactly {spread.total} points on ST+DX "
-            f"(got {strength + dexterity})"
-        )
+    if validate:
+        if strength < spread.min_strength or dexterity < spread.min_dexterity:
+            raise ValueError(
+                f"a {race.value}'s ST may not begin below {spread.min_strength} "
+                f"nor its DX below {spread.min_dexterity} "
+                f"(got ST {strength}, DX {dexterity})"
+            )
+        if strength + dexterity != spread.total:
+            raise ValueError(
+                f"a fresh {race.value} spends exactly {spread.total} points on ST+DX "
+                f"(got {strength + dexterity})"
+            )
     return Figure(name=name, strength=strength, dexterity=dexterity,
                   side=side, race=race, **gear)
 
