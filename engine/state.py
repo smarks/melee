@@ -1274,16 +1274,23 @@ class GameState:
         declares first, so declaration order is the faithful stand-in and keeps
         the dice stream clean for deterministic resolution.
         """
-        def ordering_key(pending: PendingAttack) -> int:
+        def ordering_key(pending: PendingAttack) -> tuple[int, int]:
             # Pole weapons used in/against a charge strike first, then by adjDX
             # (p.12) — so a polearm can drop a charger before it lands its blow.
             # This is independent of the +1 damage die: even a one-hex pole charge
             # (no extra die) resolves first.
             charge_first = 0 if pending.charge_resolve_first else 1
-            return (charge_first, -self.rules.order_dx(
+            # Ordering uses the full adjDX "counting everything BUT missile and
+            # thrown weapon range" (p.16): the situational mods (prone-crossbow
+            # +1, over-body -2, sheltering -4, halfling +2 throw, pole +2 vs
+            # charge) shift the order, but the range penalty does not — a distant
+            # target makes you less accurate, not slower. ``pending.situational``
+            # already excludes range (that lives in ``range_penalty``).
+            order_dx = self.rules.order_dx(
                 pending.attacker, zone=pending.zone,
                 ignore_facing=pending.ignore_facing,
-            ))
+            ) + pending.situational
+            return (charge_first, -order_dx)
 
         results: list[AttackResult] = []
         for pending in sorted(self._pending, key=ordering_key):

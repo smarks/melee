@@ -1350,3 +1350,56 @@ def test_engaged_shift_must_stay_adjacent_to_its_engager() -> None:
     assert far not in reachable
     with pytest.raises(IllegalAction):
         state.move(me, Option.SHIFT_ATTACK, path=[far])
+
+
+def test_situational_mods_shift_attack_resolution_order() -> None:
+    # p.16: "Attacks come off in order of adjDX counting everything BUT missile
+    # and thrown weapon range." Two attackers of equal base adjDX, but one stands
+    # in a hex with a fallen body (-2 to its to-hit, a situational mod). The
+    # un-penalised attacker has the higher effective adjDX and must resolve first,
+    # even though the penalised attacker is declared first.
+    arena = Arena(cols=12, rows=10)
+    layout = arena.layout
+
+    clean = create_human("Clean", 12, 12, "a", armor=NO_ARMOR,
+                         weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    penalized = create_human("Penalized", 12, 12, "a", armor=NO_ARMOR,
+                             weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    target_clean = create_human("TC", 12, 12, "b", armor=NO_ARMOR,
+                                weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    target_pen = create_human("TP", 12, 12, "b", armor=NO_ARMOR,
+                              weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+
+    clean.position = Hex(2, 5)
+    clean.facing = 0
+    target_clean.position = layout.neighbor(clean.position, 0)
+
+    penalized.position = Hex(8, 5)
+    penalized.facing = 0
+    target_pen.position = layout.neighbor(penalized.position, 0)
+
+    # A fallen body shares the penalised attacker's hex -> bad footing, -2 (p.16).
+    body = create_human("Body", 12, 12, "b", armor=NO_ARMOR)
+    body.position = penalized.position
+    body.damage_taken = 999
+    assert body.is_dead
+
+    # Equal base adjDX (both 12, no armor / no ready shield).
+    assert clean.base_adj_dx == penalized.base_adj_dx
+
+    # Each 3d6 attack totals 16 -> a clean miss (no kills, no fumble drops), so
+    # both attacks resolve and the only thing under test is their ORDER.
+    state = GameState(arena, [penalized, clean, target_pen, target_clean, body],
+                      dice=Dice(scripted=[6, 6, 4, 6, 6, 4]))
+    penalized.current_option = Option.SHIFT_ATTACK
+    clean.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(penalized, target_pen)   # declared FIRST
+    state.queue_attack(clean, target_clean)
+
+    results = state.resolve_combat()
+    # The penalised attack is the one carrying the -2 over-body situational mod;
+    # the clean attack carries no such note. With situational mods folded into
+    # the ordering, the clean (higher effective adjDX) attack resolves first.
+    assert len(results) == 2
+    assert "-2 over body" not in results[0].to_hit_breakdown   # clean resolved first
+    assert "-2 over body" in results[1].to_hit_breakdown       # penalised resolved second
