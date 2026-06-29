@@ -1085,3 +1085,85 @@ def test_thrown_eighteen_breaks_the_weapon_and_does_not_fly_on() -> None:
     state.resolve_combat()
     assert target.damage_taken == 0 and behind.damage_taken == 0   # nobody struck
     assert "Javelin" not in [weapon.name for _, weapon in state.dropped]  # broken, gone
+
+
+def test_one_hex_pole_charge_resolves_before_a_higher_dx_normal_attack() -> None:
+    """Any pole weapon used in a charge resolves first (p.12), independent of how
+    far the charger moved or whether it earns the +1 die — so even a one-hex pole
+    charge strikes before a higher-DX normal attacker — #129."""
+    from engine.rules_data import DAGGER, SPEAR
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    spearman = create_human("Spear", 13, 11, "a", weapons=[SPEAR], ready_weapon=SPEAR)
+    foe = create_human("Foe", 9, 15, "b", weapons=[DAGGER], ready_weapon=DAGGER)
+    spearman.position = Hex(5, 5)
+    foe.position = layout.neighbor(Hex(5, 5), 0)        # adjacent after the charge
+    spearman.facing = layout.direction_to(spearman.position, foe.position)
+    foe.facing = layout.direction_to(foe.position, spearman.position)
+    state = GameState(arena, [spearman, foe])
+
+    spearman.current_option = Option.CHARGE_ATTACK      # charged into contact
+    spearman.moved_this_turn = 1                         # only one hex — no extra die
+    foe.current_option = Option.SHIFT_ATTACK            # higher adjDX, normal blow
+    state.queue_attack(spearman, foe)
+    state.queue_attack(foe, spearman)
+    results = state.resolve_combat()
+
+    assert foe.base_adj_dx > spearman.base_adj_dx        # the foe is faster
+    assert results[0].weapon.name == "Spear"            # yet the pole strikes first
+
+
+def test_pole_in_charge_extra_die_requires_a_straight_three_hex_move() -> None:
+    """The in-charge +1 damage die needs three-plus hexes "in a straight line"
+    (p.12), not merely three hexes moved — #129."""
+    from engine.rules_data import SHORTSWORD, SPEAR
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe.position = Hex(5, 9)
+
+    def _charge(path):
+        spearman = create_human("Spear", 13, 11, "a", weapons=[SPEAR], ready_weapon=SPEAR)
+        spearman.position = Hex(5, 5)
+        spearman.facing = layout.direction_to(Hex(5, 5), path[0])
+        state = GameState(arena, [spearman, foe])
+        state.move(spearman, Option.CHARGE_ATTACK, path=path)
+        return state, spearman
+
+    # a straight three-hex charge -> the die is earned (adjacent forced to isolate
+    # the straight-line gate from board geometry)
+    straight, spear_straight = _charge([Hex(5, 6), Hex(5, 7), Hex(5, 8)])
+    assert spear_straight.moved_straight and spear_straight.moved_this_turn == 3
+    assert straight._pole_charge_dice(spear_straight, foe, SPEAR, adjacent=True) == 1
+
+    # a bent three-hex charge of the same length -> no die
+    bent_path = [Hex(5, 6), layout.neighbor(Hex(5, 6), 1),
+                 layout.neighbor(layout.neighbor(Hex(5, 6), 1), 0)]
+    bent, spear_bent = _charge(bent_path)
+    assert not spear_bent.moved_straight and spear_bent.moved_this_turn == 3
+    assert bent._pole_charge_dice(spear_bent, foe, SPEAR, adjacent=True) == 0
+
+
+def test_pole_plus_two_vs_charge_is_denied_after_a_shift_that_moved() -> None:
+    """The +2 DX vs a charge is for a pole user that "stands still (or simply
+    changes facing)" (p.12); a shift that moved a hex forfeits it — #129."""
+    from engine.rules_data import BROADSWORD, SPEAR
+
+    arena = Arena(cols=9, rows=15)
+    grid = arena.layout
+    spear = create_human("Spear", 13, 11, "a", weapons=[SPEAR], ready_weapon=SPEAR)
+    charger = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    spear.position = Hex(5, 5)
+    charger.position = grid.neighbor(Hex(5, 5), 0)
+    charger.current_option = Option.CHARGE_ATTACK
+    state = GameState(arena, [spear, charger])
+
+    spear.moved_this_turn = 0                            # stood still
+    mods_still, note_still = state._situational_mods(spear, charger, SPEAR, False)
+    assert mods_still == 2 and "vs charge" in note_still
+
+    spear.moved_this_turn = 1                            # shifted a hex
+    mods_shift, note_shift = state._situational_mods(spear, charger, SPEAR, False)
+    assert mods_shift == 0 and "vs charge" not in note_shift

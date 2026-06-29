@@ -80,6 +80,7 @@ class PendingAttack:
     situational: int = 0      # circumstantial DX mod (prone, pole-vs-charge, bodies)
     situational_note: str = ""
     damage_dice_bonus: int = 0  # extra damage dice (pole weapon in/against a charge)
+    charge_resolve_first: bool = False  # pole weapon used in/against a charge: strikes first
     thrown: bool = False        # a hurled weapon — it leaves the thrower's hand
     hth_damage: object | None = None  # DamageDice override for a grapple (HTH) attack
     weapon: object | None = None  # Weapon override (off-hand main-gauche jab); else ready
@@ -775,15 +776,33 @@ class GameState:
                           weapon, adjacent: bool) -> int:
         """Extra damage dice for a pole weapon in/against a charge (p.12).
 
-        A pole used against a charging foe — or in a charge of three-plus hexes —
-        does one extra die. A jab (non-adjacent strike) never earns it.
+        A pole used against a charging foe always does one extra die. Used *in* a
+        charge it earns the die only when the attacker moved three-plus hexes in a
+        STRAIGHT line (p.12), not merely three hexes. A jab (non-adjacent strike)
+        never earns it.
         """
         if weapon is None or weapon.kind != WeaponKind.POLE or not adjacent:
             return 0
         against_charge = target.current_option == Option.CHARGE_ATTACK
         in_charge = (attacker.current_option == Option.CHARGE_ATTACK
-                     and attacker.moved_this_turn >= 3)
+                     and attacker.moved_this_turn >= 3
+                     and attacker.moved_straight)
         return 1 if (against_charge or in_charge) else 0
+
+    def _pole_charge_resolve_first(self, attacker: Figure, target: Figure,
+                                   weapon, adjacent: bool) -> bool:
+        """Whether a pole weapon used in or against a charge resolves before all
+        other attacks (p.12).
+
+        This holds for ANY pole weapon used in a charge attack OR against one,
+        independent of how far the charger moved and of whether the strike earns
+        the +1 damage die — so even a one-hex pole charge strikes first. A jab
+        (non-adjacent strike) is a regular attack and never resolves first.
+        """
+        if weapon is None or weapon.kind != WeaponKind.POLE or not adjacent:
+            return False
+        return (attacker.current_option == Option.CHARGE_ATTACK
+                or target.current_option == Option.CHARGE_ATTACK)
 
     def _situational_mods(self, attacker: Figure, target: Figure,
                           weapon, is_missile: bool,
@@ -807,12 +826,16 @@ class GameState:
         if (attacker.posture == Posture.PRONE and is_missile
                 and weapon is not None and weapon.reload > 0):
             mods += 1; notes.append("+1 prone")
-        # A braced pole weapon punishes a charging foe: +2 (not on a 2-hex jab).
+        # A braced pole weapon punishes a charging foe: +2 — but only for a figure
+        # that "stands still (or simply changes facing)" (p.12). A pole user that
+        # took a shift moving a hex (or charged itself) does not get it. Not on a
+        # 2-hex jab.
         adjacent = (attacker.position is not None and target.position is not None
                     and layout.distance(attacker.position, target.position) == 1)
         if (weapon is not None and weapon.kind == WeaponKind.POLE and adjacent
                 and target.current_option == Option.CHARGE_ATTACK
-                and attacker.current_option != Option.CHARGE_ATTACK):
+                and attacker.current_option != Option.CHARGE_ATTACK
+                and attacker.moved_this_turn == 0):
             mods += 2; notes.append("+2 vs charge")
         # The ATTACKER fighting from a fallen body's hex has bad footing: -2 to its
         # own to-hit (p.16, "Standing in a hex with a fallen body") — #125.
@@ -865,6 +888,11 @@ class GameState:
         if ready is not None and option != Option.PICK_UP:
             self._validate_ready(figure, option, ready)
         if path:
+            # Record straightness for the pole-charge extra-die rule (p.12): the
+            # +1 damage die needs a charge of three-plus hexes "in a straight
+            # line", not merely three hexes moved. A path is straight when every
+            # step runs in the same hex direction (computed over start -> path).
+            figure.moved_straight = self._path_is_straight(figure.position, path)
             figure.position = path[-1]
             figure.moved_this_turn = len(path)
         if facing is not None:
@@ -975,6 +1003,23 @@ class GameState:
                     )
             previous = step
 
+    def _path_is_straight(self, start: Hex, path: list[Hex]) -> bool:
+        """Whether ``start`` + ``path`` runs in a single, unchanging direction.
+
+        A move of zero or one step is trivially straight. Otherwise every
+        consecutive pair of hexes must share the same direction index (p.12, the
+        pole-charge "straight line" diagram).
+        """
+        if len(path) < 2:
+            return True
+        layout = self.arena.layout
+        points = [start, *path]
+        directions = [
+            layout.direction_to(points[index], points[index + 1])
+            for index in range(len(points) - 1)
+        ]
+        return all(direction == directions[0] for direction in directions)
+
     # ---- combat ----
     def in_front_arc(self, attacker: Figure, point: Hex) -> bool:
         """Whether ``point`` lies in ``attacker``'s front arc, ignoring posture.
@@ -1081,6 +1126,8 @@ class GameState:
                               ignore_facing=False, range_penalty=0,
                               situational=situational, situational_note=situational_note,
                               damage_dice_bonus=self._pole_charge_dice(
+                                  attacker, target, weapon, adjacent),
+                              charge_resolve_first=self._pole_charge_resolve_first(
                                   attacker, target, weapon, adjacent))
             )
         if with_main_gauche:
@@ -1121,7 +1168,9 @@ class GameState:
         def ordering_key(pending: PendingAttack) -> int:
             # Pole weapons used in/against a charge strike first, then by adjDX
             # (p.12) — so a polearm can drop a charger before it lands its blow.
-            charge_first = 0 if pending.damage_dice_bonus > 0 else 1
+            # This is independent of the +1 damage die: even a one-hex pole charge
+            # (no extra die) resolves first.
+            charge_first = 0 if pending.charge_resolve_first else 1
             return (charge_first, -self.rules.order_dx(
                 pending.attacker, zone=pending.zone,
                 ignore_facing=pending.ignore_facing,
@@ -1278,6 +1327,7 @@ class GameState:
             figure.hits_this_turn = 0
             figure.attacked_this_turn = False
             figure.moved_this_turn = 0
+            figure.moved_straight = False
             figure.dodging = False
             figure.current_option = None
             figure.dealt_st_damage_this_turn = False

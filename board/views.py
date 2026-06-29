@@ -1137,6 +1137,7 @@ def _update_figure(game: dict, uid: str, spec: dict) -> None:
     rebuilt.current_option = figure.current_option
     rebuilt.attacked_this_turn = figure.attacked_this_turn
     rebuilt.moved_this_turn = figure.moved_this_turn
+    rebuilt.moved_straight = figure.moved_straight
     rebuilt.dodging = figure.dodging
     rebuilt.dealt_st_damage_this_turn = figure.dealt_st_damage_this_turn
     # Injury carried into the rest of the fight (wounds + the DX-penalty flags).
