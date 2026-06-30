@@ -1113,20 +1113,24 @@ def _shield_rush_setup(rusher_st, rusher_dx, foe_st, foe_dx, dice):
 
 
 def test_shield_rush_floors_a_weaker_foe_on_a_failed_save() -> None:
-    # to-hit 3+3+3 connects; the ST-13 rusher rolls a save vs ST-11 foe on three
-    # dice — a 15 beats the foe's adjDX 13, so it falls. No hits are dealt.
+    # The rush is "an attack for all purposes" (p.13), so it queues and resolves
+    # in adjDX order (#151): to-hit 3+3+3 connects; the ST-13 rusher rolls a save
+    # vs ST-11 foe on three dice — a 15 beats the foe's adjDX 13, so it falls.
     state, rusher, foe = _shield_rush_setup(13, 11, 11, 13, [3, 3, 3, 6, 5, 4])
     assert foe in state.shield_rush_targets(rusher)
-    assert state.shield_rush(rusher, foe) == "fall"
-    assert foe.posture == Posture.PRONE
-    assert foe.damage_taken == 0                          # never inflicts hits
+    assert state.shield_rush(rusher, foe) == "queued"     # declared, not yet resolved
     assert rusher.attacked_this_turn                      # the rush was its action
+    assert foe.posture == Posture.STANDING                # still up until combat resolves
+    state.resolve_combat()
+    assert foe.posture == Posture.PRONE                   # floored at the rusher's slot
+    assert foe.damage_taken == 0                          # never inflicts hits
 
 
 def test_shield_rush_leaves_a_foe_standing_on_a_made_save() -> None:
     # same hit, but a save of 3+3+3 = 9 is under the foe's adjDX 13 — it holds.
     state, rusher, foe = _shield_rush_setup(13, 11, 11, 13, [3, 3, 3, 3, 3, 3])
-    assert state.shield_rush(rusher, foe) == "stand"
+    assert state.shield_rush(rusher, foe) == "queued"
+    state.resolve_combat()
     assert foe.posture == Posture.STANDING
     assert foe.damage_taken == 0
 
@@ -1194,6 +1198,98 @@ def test_a_prone_figure_cannot_disengage() -> None:
         pass
     else:
         raise AssertionError("a grounded figure must stand before it can disengage")
+
+
+def _disengage_under_attack(foe_dx: int):
+    """A runner (DX 12) disengaging from a foe that has queued a melee blow on it.
+
+    The foe stands face-to-face (so its strike is a no-bonus FRONT attack) with
+    the given DX. Returns ``(runner, foe, results)`` after the runner steps one
+    hex away and combat resolves — the p.19 timing test fixture (#147).
+    """
+    from engine.rules_data import RAPIER
+    arena = Arena(cols=9, rows=15)
+    runner = create_human("Runner", 12, 12, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    # A human spends exactly 24 points on ST+DX, so vary the foe's ST against its
+    # DX; a rapier (ST 9) stays legal at the low-ST/high-DX end.
+    foe = create_human("Foe", 24 - foe_dx, foe_dx, "b",
+                       weapons=[RAPIER], ready_weapon=RAPIER)
+    runner.position = Hex(5, 5)
+    runner.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    foe.facing = LAYOUT.direction_to(foe.position, runner.position)
+    state = GameState(arena, [runner, foe], dice=Dice(scripted=[3] * 12))
+    foe.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(foe, runner)                      # the foe declares its blow
+    runner.current_option = Option.DISENGAGE
+    state.disengage_move(runner, LAYOUT.neighbor(Hex(5, 5), 3))   # step away from the foe
+    results = state.resolve_combat()
+    return runner, foe, results
+
+
+def test_disengage_a_higher_dx_foe_still_strikes_as_you_leave() -> None:
+    """p.19: an enemy with a DX HIGHER than yours strikes as you disengage."""
+    runner, _foe, results = _disengage_under_attack(foe_dx=14)
+    assert results[0].hit is True                         # the DX-14 foe caught it leaving
+    assert runner.damage_taken > 0
+
+
+def test_disengage_a_lower_dx_foe_gets_no_strike() -> None:
+    """p.19: an enemy with a LOWER DX gets no chance to strike when you flee."""
+    runner, _foe, results = _disengage_under_attack(foe_dx=8)
+    assert results[0].hit is False                        # the DX-8 foe whiffs — it was too slow
+    assert runner.damage_taken == 0                       # the runner takes the field unhurt
+
+
+def test_a_melee_blow_whiffs_when_the_target_ends_up_two_hexes_away() -> None:
+    """A queued melee blow cannot reach a target that is no longer adjacent at
+    resolution (a force-retreat or other relocation) — it whiffs (#147)."""
+    arena = Arena(cols=9, rows=15)
+    attacker = create_human("Attacker", 12, 12, "a",
+                            weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    attacker.position = Hex(5, 5)
+    attacker.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    foe.facing = LAYOUT.direction_to(foe.position, attacker.position)
+    state = GameState(arena, [attacker, foe], dice=Dice(scripted=[3] * 12))
+    attacker.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(attacker, foe)                    # declared while adjacent
+    foe.position = LAYOUT.neighbor(foe.position, 0)      # dragged out to distance 2
+    results = state.resolve_combat()
+    assert results[0].hit is False                       # melee can't reach across the gap
+    assert foe.damage_taken == 0
+    assert attacker.attacked_this_turn                   # but the swing was still spent
+
+
+def test_shield_rush_resolves_in_adjdx_order_so_a_faster_victim_strikes_first() -> None:
+    """p.13/#151: the rush is an attack 'for all purposes', so it resolves in adjDX
+    order. A low-DX rusher's higher-DX victim lands its own blow BEFORE it is
+    knocked down — the reverse of the old immediate-rush bug."""
+    from engine.rules_data import SMALL_SHIELD
+    arena = Arena(cols=9, rows=15)
+    rusher = create_human("Rusher", 14, 10, "a",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD,
+                          shield=SMALL_SHIELD)
+    victim = create_human("Victim", 11, 13, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    rusher.position = Hex(5, 5)
+    victim.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    rusher.facing = LAYOUT.direction_to(rusher.position, victim.position)
+    victim.facing = LAYOUT.direction_to(victim.position, rusher.position)
+    # victim (DX 13) resolves first: to-hit 9 connects, shortsword damage 5 beats
+    # the small shield. THEN the rusher (DX 10): to-hit 9 hits, a 6+6+6 save floors
+    # the DX-13 victim — but only after its blow already landed.
+    state = GameState(arena, [rusher, victim],
+                      dice=Dice(scripted=[3, 3, 3, 3, 3, 3, 3, 3, 6, 6, 6, 3, 3]))
+    victim.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(victim, rusher)                   # the faster victim declares
+    assert state.shield_rush(rusher, victim) == "queued"  # the rush is queued, not immediate
+    state.resolve_combat()
+    assert victim.attacked_this_turn                     # its blow resolved (not skipped)
+    assert rusher.damage_taken > 0                       # and connected before it fell
+    assert victim.posture == Posture.PRONE               # only THEN was the DX-13 victim floored
 
 
 def test_main_gauche_adds_a_separate_minus_four_jab() -> None:
