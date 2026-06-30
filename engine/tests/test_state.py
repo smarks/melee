@@ -487,6 +487,39 @@ def test_pole_against_charge_gets_extra_die_and_strikes_first() -> None:
     assert results[0].weapon.name == "Spear"
 
 
+def test_pole_charge_bonus_die_is_added_after_the_crit_multiplier() -> None:
+    # p.10-12 (#154), RAW-ambiguous: on a critical pole-charge the weapon's own
+    # dice and flat modifier are multiplied, but the +1 charge die is a flat bonus
+    # added AFTER the multiplier. This is the deliberate classic-Melee ruling the
+    # engine commits to (a subclass like Tarmar may multiply it instead); this test
+    # locks it. A Spear is 1d+1; a triple-damage hit makes its base (die 4 -> 5)
+    # into 15, then the charge die (6) is added once -> 21, not (4+1+6)*3 = 33.
+    from engine.rules_data import SHORTSWORD, SPEAR
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    spearman = create_human("Spear", 13, 11, "a", weapons=[SPEAR], ready_weapon=SPEAR)
+    charger = create_human("Foe", 11, 13, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    spearman.position = Hex(5, 5)
+    charger.position = layout.neighbor(Hex(5, 5), 0)
+    spearman.facing = layout.direction_to(spearman.position, charger.position)
+    charger.facing = layout.direction_to(charger.position, spearman.position)
+    charger.current_option = Option.CHARGE_ATTACK
+    # [1,1,1] -> a to-hit total of 3 = triple damage; then the Spear's damage die
+    # (4) and, separately, the charge bonus die (6).
+    state = GameState(arena, [spearman, charger],
+                      dice=Dice(scripted=[1, 1, 1, 4, 6] + [3] * 9))
+
+    spearman.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(spearman, charger)
+    state.queue_attack(charger, spearman)
+    results = state.resolve_combat()
+
+    assert results[0].weapon.name == "Spear"
+    assert results[0].multiplier == 3
+    assert results[0].raw_damage == 21          # (1d+1=5)*3 + charge die 6, not 33
+
+
 def test_situational_to_hit_modifiers() -> None:
     from engine.rules_data import LIGHT_CROSSBOW, SPEAR
 
@@ -569,6 +602,123 @@ def test_high_adjdx_bow_fires_twice() -> None:
     state.queue_attack(archer, foe)
     results = state.resolve_combat()
     assert len(results) == 2                              # loosed two arrows
+
+
+def test_second_arrows_wait_for_every_first_shot() -> None:
+    # p.5 / p.10 (#154): missile fire is sequenced in rounds — every figure looses
+    # its FIRST shot before any bow looses its SECOND, so two duelling archers fire
+    # A1, B1, A2, B2 (not A1, A2, B1, B2). Here archer A's two arrows together drop
+    # the fragile archer B, but its FIRST arrow alone does not — so under the rules
+    # B survives to loose its own first arrow back at A (and hit) before A's second
+    # arrow finishes it. The old back-to-back ordering let A2 kill B before B ever
+    # fired, leaving A untouched.
+    from engine.rules_data import SMALL_BOW, max_missile_shots
+
+    arena = Arena(cols=9, rows=15)
+    archer_a = create_human("ArcherA", 9, 15, "a",          # adjDX 15 -> two shots
+                            weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    archer_b = create_human("ArcherB", 9, 15, "b",          # adjDX 15 -> two shots, ST 9
+                            weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    archer_a.position = Hex(5, 5)
+    archer_b.position = Hex(5, 8)
+    _aim(archer_a, archer_b)
+    _aim(archer_b, archer_a)
+    assert max_missile_shots(SMALL_BOW, archer_a.base_adj_dx) == 2
+    # Each arrow: 3 to-hit dice then 1 damage die. A 6 on the damage die is 5 hits
+    # (1d-1); two such arrows (10) bury ST-9 B, one (5) only wounds it. Order under
+    # the fix: A1 (B 9->4), B1 (A 9->4), A2 (B 4->-1 dead), B2 (skipped, B dead).
+    state = GameState(arena, [archer_a, archer_b],
+                      dice=Dice(scripted=[3, 3, 3, 6] * 3 + [3] * 6))
+
+    archer_a.current_option = Option.MISSILE_ATTACK
+    archer_b.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer_a, archer_b)
+    state.queue_attack(archer_b, archer_a)
+    results = state.resolve_combat()
+
+    assert archer_b.is_dead                       # A's two arrows still kill B
+    assert archer_a.damage_taken > 0              # but B got its first shot off first
+    assert len(results) == 3                      # A1, B1, A2 — B2 skipped (B dead)
+
+
+def test_second_arrow_can_aim_at_a_different_target() -> None:
+    # p.5 / p.10 (#154): a bow that gets two shots "can fire at two different
+    # targets". The second arrow recomputes its own zone/range against the new foe.
+    from engine.rules_data import SMALL_BOW
+
+    arena = Arena(cols=15, rows=15)
+    archer = create_human("Archer", 9, 15, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    foe_one = create_human("FoeOne", 12, 12, "b",
+                           weapons=[BROADSWORD], ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    foe_two = create_human("FoeTwo", 12, 12, "b",
+                           weapons=[BROADSWORD], ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    archer.position = Hex(5, 5); archer.facing = 0
+    foe_one.position = Hex(5, 2)                  # both in the archer's front arc,
+    foe_two.position = Hex(2, 3)                  # on different bearings (clear lines)
+    # Scripted 3s: each to-hit total of 3 always hits (triple damage), so both
+    # arrows land regardless of the range penalty to either foe.
+    state = GameState(arena, [archer, foe_one, foe_two], dice=Dice(scripted=[3] * 16))
+    assert (state.in_front_arc(archer, foe_one.position)
+            and state.in_front_arc(archer, foe_two.position))
+
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, foe_one, second_target=foe_two)
+    results = state.resolve_combat()
+
+    assert len(results) == 2                       # one arrow at each foe
+    assert foe_one.damage_taken > 0                # first arrow struck FoeOne
+    assert foe_two.damage_taken > 0                # second arrow struck FoeTwo
+
+
+def test_a_bow_that_fumbles_its_first_shot_does_not_loose_a_second() -> None:
+    # #154: a two-shot bow that fumbles its first arrow (17 drops it, 18 breaks it)
+    # has nothing left in hand — the second shot must not resolve a phantom attack.
+    from engine.rules_data import SMALL_BOW
+
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 9, 15, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    foe = create_human("Foe", 12, 12, "b",
+                       weapons=[BROADSWORD], ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    archer.position = Hex(5, 5)
+    foe.position = Hex(5, 9)
+    _aim(archer, foe)
+    # A first to-hit total of 17 ([6,6,5]) always misses and DROPS the bow (p.10).
+    state = GameState(arena, [archer, foe], dice=Dice(scripted=[6, 6, 5] + [3] * 9))
+
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, foe)
+    results = state.resolve_combat()
+
+    assert len(results) == 1                        # only the fumbled first shot
+    assert results[0].dropped_weapon                # the bow hit the dirt
+    assert archer.ready_weapon is None              # nothing left to loose a 2nd arrow
+
+
+def test_a_bow_is_offered_kneel_not_go_prone() -> None:
+    # p.16 (#154): only a crossbow may fire from prone; a bow may fire only from
+    # kneeling. So a bow is offered KNEEL, never the dead-end GO_PRONE.
+    from engine.rules_data import LIGHT_CROSSBOW, SMALL_BOW
+
+    arena = Arena(cols=9, rows=15)
+    bowman = create_human("Bow", 9, 15, "a",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    crossbowman = create_human("Xbow", 12, 12, "a",
+                               weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    bowman.position = Hex(5, 5)
+    crossbowman.position = Hex(7, 5)
+    foe.position = Hex(5, 13)                       # far off — both shooters disengaged
+    state = GameState(arena, [bowman, crossbowman, foe])
+
+    assert Option.KNEEL in state.legal_options(bowman)
+    assert Option.GO_PRONE not in state.legal_options(bowman)
+    assert (dict(state.option_availability(bowman))[Option.GO_PRONE]
+            == "only a crossbow may fire prone")
+
+    assert Option.GO_PRONE in state.legal_options(crossbowman)   # a crossbow may go prone
+    assert Option.KNEEL in state.legal_options(crossbowman)      # or kneel
 
 
 def test_engaged_figure_cannot_reload_a_crossbow() -> None:

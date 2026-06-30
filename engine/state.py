@@ -93,6 +93,7 @@ class PendingAttack:
     thrown: bool = False        # a hurled weapon — it leaves the thrower's hand
     hth_damage: object | None = None  # DamageDice override for a grapple (HTH) attack
     weapon: object | None = None  # Weapon override (off-hand main-gauche jab); else ready
+    second_target: Figure | None = None  # a two-shot bow's 2nd arrow may aim elsewhere (p.5, p.10)
 
 
 class GameState:
@@ -233,8 +234,13 @@ class GameState:
                 continue                       # only a non-missile weapon can parry (p.20)
             if option == Option.PICK_UP and not self.dropped_in_reach(figure):
                 continue                       # nothing on the ground within reach
-            if option in (Option.GO_PRONE, Option.KNEEL) and not has_missile:
-                continue                       # dropping to fire is a missile move (f)
+            if option == Option.GO_PRONE and not (has_missile and weapon.reload > 0):
+                continue                       # only a crossbow may fire prone (p.16); a
+                                               # bow that drops prone gets no shot — give it
+                                               # KNEEL instead (#154)
+            if option == Option.KNEEL and not has_missile:
+                continue                       # kneeling to fire is a missile move (f);
+                                               # any bow may fire from one knee (p.16)
             if option == Option.HTH_ATTACK and not any(
                     self._can_initiate_hth(figure, enemy)
                     for enemy in self.enemies_of(figure)):
@@ -278,7 +284,10 @@ class GameState:
                 reason = "nothing to parry with — missile weapon ready"
             elif option == Option.PICK_UP and not self.dropped_in_reach(figure):
                 reason = "nothing on the ground in reach"
-            elif option in (Option.GO_PRONE, Option.KNEEL) and not has_missile:
+            elif option == Option.GO_PRONE and not (has_missile and weapon.reload > 0):
+                reason = ("only a crossbow may fire prone" if has_missile
+                          else "only when firing a missile weapon")
+            elif option == Option.KNEEL and not has_missile:
                 reason = "only when firing a missile weapon"
             elif option == Option.HTH_ATTACK and not any(
                     self._can_initiate_hth(figure, enemy)
@@ -460,7 +469,7 @@ class GameState:
         if weapon is not None and hex_position is not None and weapon.name != "Thrown rock":
             self.dropped.append((hex_position, weapon))
 
-    def _resolve_flight(self, pending, results: list) -> None:
+    def _resolve_flight(self, pending, results: list, *, target=None) -> None:
         """A flying weapon's line-of-flight (p.15-16): roll to miss anyone in the
         way, strike the intended target, then fly on if it misses.
 
@@ -469,9 +478,24 @@ class GameState:
         a stray shot flies on until it hits a figure or leaves the field. The one
         difference is what's left behind: a hurled weapon leaves the hand and
         lands where it strikes (recoverable, ``pending.thrown``); a fired missile
-        (arrow, bolt, sling stone) is expendable and drops nothing to pick up."""
-        attacker, target = pending.attacker, pending.target
+        (arrow, bolt, sling stone) is expendable and drops nothing to pick up.
+
+        ``target`` overrides ``pending.target`` for a two-shot bow's second arrow
+        aimed at a different foe (p.5, p.10); the zone, range penalty, and
+        situational mods are then recomputed for that foe (#154)."""
+        attacker = pending.attacker
         layout = self.arena.layout
+        if target is None or target is pending.target:
+            target = pending.target
+            declared_zone = pending.zone
+            range_penalty = pending.range_penalty
+            situational, situational_note = pending.situational, pending.situational_note
+        else:
+            declared_zone = attack_zone(layout, attacker, target)
+            megahexes = megahex_distance(layout, attacker.position, target.position)
+            range_penalty = self.rules.missile_range_penalty(megahexes)
+            situational, situational_note = self._situational_mods(
+                attacker, target, attacker.ready_weapon, True)
         held = self.occupied(exclude=attacker)
         adjdx = attacker.base_adj_dx
         # 1) figures in the way roll to be missed — a low roll flies past (p.15).
@@ -496,15 +520,15 @@ class GameState:
         pile = self._hth_pile_at(target.position)
         if len(pile) >= 2:
             struck = pile[self.dice.dn(len(pile)) - 1]
-        zone = (pending.zone if struck is target
+        zone = (declared_zone if struck is target
                 else attack_zone(self.arena.layout, attacker, struck))
         result = self.rules.resolve_attack(
             self.dice, attacker, struck, zone=zone,
             ignore_facing=pending.ignore_facing,
             dice_count=self.rules.attack_dice_count(struck, ranged=True),
-            range_penalty=pending.range_penalty,
-            situational=pending.situational,
-            situational_note=pending.situational_note,
+            range_penalty=range_penalty,
+            situational=situational,
+            situational_note=situational_note,
             ranged=True)
         result.thrown = pending.thrown
         self._apply(attacker, struck, result)
@@ -1213,12 +1237,18 @@ class GameState:
         return zone_of_direction(attacker.facing, direction) == FRONT
 
     def queue_attack(self, attacker: Figure, target: Figure,
-                     *, with_main_gauche: bool = False) -> None:
+                     *, with_main_gauche: bool = False,
+                     second_target: Figure | None = None) -> None:
         """Declare ``attacker``'s attack on ``target`` (resolved later).
 
         ``with_main_gauche`` also queues a separate off-hand main-gauche jab at
         the same foe, rolled at -4 DX (p.13) — legal only when the off-hand holds
         a ready main-gauche and the foe is within the dagger's reach.
+
+        ``second_target`` aims a two-shot bow's second arrow at a different foe
+        (p.5, p.10) — a bow "may fire at two different targets". Legal only for a
+        true missile weapon that gets two shots this turn, and the second foe must
+        also stand in the attacker's front arc.
         """
         option = attacker.current_option
         if option is None or not spec(option).is_attack:
@@ -1286,13 +1316,29 @@ class GameState:
             # facing add is suppressed for missiles alone (ignore_facing). The
             # line-of-flight is traced from attacker to target either way, so
             # intervening figures and fly-on resolve directionally regardless.
+            if second_target is not None:
+                if not is_missile:
+                    raise IllegalAction(
+                        "only a missile weapon may split its two shots between targets"
+                    )
+                if shots < 2:
+                    raise IllegalAction(
+                        f"{attacker.name} gets only one shot this turn — no second target"
+                    )
+                if not self.in_front_arc(attacker, second_target.position):
+                    raise IllegalAction(
+                        f"{second_target.name} is not in {attacker.name}'s front arc"
+                    )
             self._pending.append(
                 PendingAttack(attacker, target, zone=zone,
                               ignore_facing=is_missile, range_penalty=range_penalty,
                               shots=shots, thrown=is_throw,
-                              situational=situational, situational_note=situational_note)
+                              situational=situational, situational_note=situational_note,
+                              second_target=second_target)
             )
         else:
+            if second_target is not None:
+                raise IllegalAction("a melee attack strikes a single target")
             if target not in self.melee_targets(attacker, weapon):
                 raise IllegalAction(
                     f"{target.name} is not within {attacker.name}'s reach"
@@ -1361,82 +1407,104 @@ class GameState:
             return (charge_first, -order_dx)
 
         results: list[AttackResult] = []
-        for pending in sorted(self._pending, key=ordering_key):
-            attacker = pending.attacker
-            if not attacker.can_act():
-                continue        # killed/knocked out before its turn to strike
-            # Prone figures can't fight — except a prone crossbowman who may fire,
-            # or a figure grappling on the ground in hand-to-hand.
-            # A prone crossbowman may fire steadied (p.16) — but NOT if it was
-            # knocked prone by damage earlier this same combat phase: a figure
-            # knocked down "may not attack that turn" if it has not already (p.20).
-            # A crossbowman that was already prone (chose to go prone/kneel last
-            # turn, or dropped prone to fire this turn via option f) still fires.
-            crossbow = (attacker.ready_weapon is not None
-                        and attacker.ready_weapon.kind == WeaponKind.MISSILE
-                        and attacker.ready_weapon.reload > 0
-                        and not attacker.knocked_down_this_turn)
-            if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
-                continue
-            # A flying weapon — hurled or fired — traces a line-of-flight: anyone
-            # in the way may be hit, and a clean miss flies on (p.15-16). Thrown
-            # weapons are single-shot; a high-adjDX bow looses two arrows, each
-            # arrow tracing its own flight. Don't waste a second arrow on a foe the
-            # first already dropped.
-            # ``pending.weapon`` overrides the ready weapon for an off-hand
-            # main-gauche jab; every other attack strikes with the ready weapon.
-            weapon = pending.weapon or attacker.ready_weapon
-            is_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
-            if pending.thrown or is_missile:
-                for shot in range(max(1, pending.shots)):
-                    if shot > 0 and (not attacker.can_act()
-                                     or pending.target.is_dead
-                                     or pending.target.collapsed):
-                        break
-                    self._resolve_flight(pending, results)
-                continue
-            # Recompute the facing zone against the target's CURRENT posture and
-            # facing: an earlier attacker this phase may have knocked the target
-            # prone (so it now has no front, scoring the +4 rear adjustment) or
-            # turned it. The zone captured at declaration time would be stale.
-            # Missile/thrown attacks (ignore_facing) and HTH grapples (forced to
-            # REAR, hth_damage set) keep their declared zone.
-            zone = pending.zone
-            if not pending.ignore_facing and pending.hth_damage is None:
-                zone = attack_zone(self.arena.layout, attacker, pending.target)
-            for shot in range(max(1, pending.shots)):
-                if shot > 0 and (not attacker.can_act()
-                                 or pending.target.is_dead or pending.target.collapsed):
-                    break
-                result = self.rules.resolve_attack(
-                    self.dice, attacker, pending.target,
-                    zone=zone, weapon=weapon,
-                    dice_count=self.rules.attack_dice_count(
-                        pending.target, ranged=False),
-                    ranged=False,
-                    ignore_facing=pending.ignore_facing,
-                    range_penalty=pending.range_penalty,
-                    situational=pending.situational,
-                    situational_note=pending.situational_note,
-                    extra_dice=pending.damage_dice_bonus,
-                    hth_damage=pending.hth_damage,
-                )
-                result.thrown = pending.thrown
-                self._apply(attacker, pending.target, result)
-                results.append(result)
-                # Hitting Your Friends (p.17-18): a STANDING figure that misses
-                # a foe down in an HTH pile rolls on — same DX adjustments —
-                # against the other piled enemies, then friends, stopping at the
-                # first hit. A fumble (dropped/broken weapon) ends the swing.
-                if (not result.hit and not result.dropped_weapon
-                        and not result.broke_weapon
-                        and not attacker.in_hth and pending.target.in_hth
-                        and pending.hth_damage is None):
-                    self._cascade_into_pile(
-                        attacker, pending.target, weapon, pending, results)
+        ordered = sorted(self._pending, key=ordering_key)
+        # Missile fire is sequenced in ROUNDS, not attacker-at-a-time (Section IV,
+        # p.5): every figure looses its first shot in adjDX order, THEN the
+        # high-adjDX bows that earn a second arrow loose it — again in adjDX order.
+        # So two duelling archers fire A1, B1, A2, B2, not A1, A2, B1, B2 (#154).
+        # Melee, thrown, HTH and main-gauche attacks are all single-shot and so
+        # resolve entirely in the first round; only a two-shot bow reaches round 1.
+        max_shots = max((max(1, pending.shots) for pending in ordered), default=1)
+        for shot_index in range(max_shots):
+            for pending in ordered:
+                if shot_index < max(1, pending.shots):
+                    self._resolve_attack_shot(pending, shot_index, results)
         self._pending.clear()
         self._announce_victory()
         return results
+
+    def _resolve_attack_shot(
+        self, pending: PendingAttack, shot_index: int, results: list
+    ) -> None:
+        """Resolve one shot/blow of ``pending`` (shot ``shot_index``).
+
+        Every guard is re-checked per shot, because a bow's second arrow is loosed
+        in a later round (p.5) — the attacker may have been cut down, or its target
+        dropped, by an intervening first-round attack.
+        """
+        attacker = pending.attacker
+        if not attacker.can_act():
+            return          # killed/knocked out before its turn to strike
+        # Prone figures can't fight — except a prone crossbowman who may fire, or a
+        # figure grappling on the ground in hand-to-hand. A prone crossbowman fires
+        # steadied (p.16) — but NOT if it was knocked prone by damage earlier this
+        # same phase: a figure knocked down "may not attack that turn" if it has not
+        # already (p.20). One already prone (chose to go prone/kneel last turn, or
+        # dropped prone to fire this turn via option f) still fires.
+        crossbow = (attacker.ready_weapon is not None
+                    and attacker.ready_weapon.kind == WeaponKind.MISSILE
+                    and attacker.ready_weapon.reload > 0
+                    and not attacker.knocked_down_this_turn)
+        if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
+            return
+        if shot_index >= 1 and (attacker.ready_weapon is None
+                                or attacker.ready_weapon.kind != WeaponKind.MISSILE):
+            # Only a two-shot bow reaches a later round. If its bow was dropped or
+            # broken on a first-shot fumble (17/18) there is nothing left in hand to
+            # loose the second arrow (#154) — and with the weapon gone the branch
+            # below would otherwise mis-resolve it as a phantom melee swing.
+            return
+        # A flying weapon — hurled or fired — traces a line-of-flight: anyone in the
+        # way may be hit, and a clean miss flies on (p.15-16). Thrown weapons are
+        # single-shot; a high-adjDX bow looses two arrows, each tracing its own
+        # flight and each able to aim at a different foe (p.5, p.10).
+        # ``pending.weapon`` overrides the ready weapon for an off-hand main-gauche
+        # jab; every other attack strikes with the ready weapon.
+        weapon = pending.weapon or attacker.ready_weapon
+        is_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+        if pending.thrown or is_missile:
+            if shot_index >= 1:
+                # The second arrow waits for its own round and may aim elsewhere.
+                target = pending.second_target or pending.target
+                if target.is_dead or target.collapsed:
+                    return            # don't waste it on a foe already down
+                self._resolve_flight(pending, results, target=target)
+            else:
+                self._resolve_flight(pending, results)
+            return
+        # A melee/HTH/main-gauche blow — always a single shot, so shot_index is 0.
+        # Recompute the facing zone against the target's CURRENT posture and facing:
+        # an earlier attacker this phase may have knocked the target prone (so it now
+        # has no front, scoring the +4 rear adjustment) or turned it. The declared
+        # zone would be stale. Missile/thrown attacks (ignore_facing) and HTH
+        # grapples (forced to REAR, hth_damage set) keep their declared zone.
+        zone = pending.zone
+        if not pending.ignore_facing and pending.hth_damage is None:
+            zone = attack_zone(self.arena.layout, attacker, pending.target)
+        result = self.rules.resolve_attack(
+            self.dice, attacker, pending.target,
+            zone=zone, weapon=weapon,
+            dice_count=self.rules.attack_dice_count(pending.target, ranged=False),
+            ranged=False,
+            ignore_facing=pending.ignore_facing,
+            range_penalty=pending.range_penalty,
+            situational=pending.situational,
+            situational_note=pending.situational_note,
+            extra_dice=pending.damage_dice_bonus,
+            hth_damage=pending.hth_damage,
+        )
+        result.thrown = pending.thrown
+        self._apply(attacker, pending.target, result)
+        results.append(result)
+        # Hitting Your Friends (p.17-18): a STANDING figure that misses a foe down
+        # in an HTH pile rolls on — same DX adjustments — against the other piled
+        # enemies, then friends, stopping at the first hit. A fumble (dropped/broken
+        # weapon) ends the swing.
+        if (not result.hit and not result.dropped_weapon
+                and not result.broke_weapon
+                and not attacker.in_hth and pending.target.in_hth
+                and pending.hth_damage is None):
+            self._cascade_into_pile(attacker, pending.target, weapon, pending, results)
 
     def victor(self) -> str | None:
         """The side that has won — the only one still standing, once at least two
