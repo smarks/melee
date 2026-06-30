@@ -235,6 +235,10 @@ class GameState:
                 continue                       # nothing on the ground within reach
             if option in (Option.GO_PRONE, Option.KNEEL) and not has_missile:
                 continue                       # dropping to fire is a missile move (f)
+            if option == Option.HTH_ATTACK and not any(
+                    self._can_initiate_hth(figure, enemy)
+                    for enemy in self.enemies_of(figure)):
+                continue                       # no adjacent foe eligible to grapple (p.17)
             legal.append(option)
         return legal
 
@@ -276,6 +280,10 @@ class GameState:
                 reason = "nothing on the ground in reach"
             elif option in (Option.GO_PRONE, Option.KNEEL) and not has_missile:
                 reason = "only when firing a missile weapon"
+            elif option == Option.HTH_ATTACK and not any(
+                    self._can_initiate_hth(figure, enemy)
+                    for enemy in self.enemies_of(figure)):
+                reason = "no foe in reach to grapple"
             result.append((option, reason))
         return result
 

@@ -1616,3 +1616,27 @@ def test_end_turn_readies_a_dagger_drawn_in_a_grapple() -> None:
     assert grappler.ready_weapon is DAGGER         # dagger now in hand
     assert not grappler.hth_drew_dagger            # flag consumed
     assert any("readies" in line.lower() for line in state.log[before:])
+
+
+def test_grapple_disabled_when_no_foe_in_reach() -> None:
+    """The move menu must show 🤼 Grapple disabled (with a reason) unless there's
+    an adjacent foe that can actually be grappled (#141 follow-up)."""
+    from engine.rules_data import PLATE
+    arena = Arena(cols=9, rows=15)
+    me = create_human("Me", 12, 12, "a", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    me.position = Hex(5, 5)
+
+    foe.position = Hex(1, 1)                              # far off -> nothing to grapple
+    state = GameState(arena, [me, foe])
+    assert dict(state.option_availability(me))[Option.HTH_ATTACK] == "no foe in reach to grapple"
+    assert Option.HTH_ATTACK not in state.legal_options(me)
+
+    # Bring the foe adjacent and make the grapple eligible (heavy armour -> lower MA,
+    # p.17); now the option is available.
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    foe.armor = PLATE
+    me.facing = LAYOUT.direction_to(me.position, foe.position)
+    eligible = GameState(arena, [me, foe])
+    assert dict(eligible.option_availability(me))[Option.HTH_ATTACK] is None
+    assert Option.HTH_ATTACK in eligible.legal_options(me)
