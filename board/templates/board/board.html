@@ -114,7 +114,18 @@
   .fr-adv { font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
   .fig text { fill: #100f15; font-weight: 700; font-size: 13px; text-anchor: middle;
               dominant-baseline: central; pointer-events: none; }
-  .hint { color: var(--accent); font-size: 12.5px; min-height: 18px; }
+  .hint { color: var(--accent); font-size: 14px; line-height: 1.4; min-height: 18px; }
+  /* Turn-flow controls (#176): one big primary action, a per-figure checklist,
+     and inline warnings -- no double-confirm. */
+  #controls button.big { display: block; width: 100%; margin-top: 12px;
+      padding: 12px 14px; font-size: 1.05rem; border-radius: 7px; }
+  #controls .checklist { margin: 4px 0 2px; }
+  #controls .checklist .row { display: flex; justify-content: space-between;
+      gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  #controls .checklist .row:last-child { border-bottom: none; }
+  #controls .checklist .done { color: #8ad08a; }
+  #controls .checklist .todo { color: var(--accent); font-weight: 600; }
+  #controls .warnline { color: #e3b34d; font-size: 12.5px; margin-top: 8px; }
   #editor, #setup, #admin { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
             flex-direction: column; align-items: center; overflow: auto; }
   #editor, #admin { z-index: 55; }   /* opens on top of the setup panel */
@@ -247,7 +258,9 @@ let pendingDest = null;  // hex label
 let pendingFacing = null;// facing index
 let pendingReady = null; // carried weapon to switch to
 let PLAN = {};           // uid -> pending action for this phase (executed on Continue)
-let warnKind = null;     // "move" | "combat" while showing the "not everyone set" warning
+let warnKind = null;     // (legacy) kept for resetAll; the new flow warns inline
+let _rolling = false;    // guard so initiative auto-rolls exactly once
+let combatResolvedTurn = -1; // the turn whose combat is resolved -> then we offer "End turn"
 let lastPhase = null;    // detect phase changes to clear the plan
 let frAdvance = {};      // "attackerUid>targetUid" -> follow-into-vacated-hex toggle
 let YOU_CONTROL = [];    // sides this browser may act on (server-authoritative, #74/#85)
@@ -646,55 +659,100 @@ function validTargets() {
 }
 
 // ---- controls ---------------------------------------------------------------
+// One clear primary action per phase, a "what to do now" line, a per-figure
+// checklist, and inline (non-blocking) warnings -- no double-confirm. (#176)
 function drawControls() {
   const c = $("controls"); c.innerHTML = "";
   const phase = S.phase;
   $("phaseBanner").textContent = bannerFor(phase);
 
   if (S.victory) {
-    addBtn(c, "End turn → new round", () => act({type:"end_turn"}).then(after), true);
+    setHint(`🏆 <b>${sideName(S.victory)}</b> wins the field!`);
+    bigPrimary(c, "Start next round →", () => act({type: "end_turn"}).then(after));
     return;
   }
+
   if (phase === "initiative") {
-    if (!S.winner) {
-      addBtn(c, "Roll initiative", async () => {
-        const d = await act({type:"roll_initiative"});
-        if (d) { render(); }
-      }, true);
-    } else {
-      const span = document.createElement("div");
-      span.innerHTML = `<span class="muted">${S.winner} won initiative — choose who moves first:</span>`;
-      c.appendChild(span);
-      for (const side of S.sides) {
-        addBtn(c, `${side} first`, () => act({type:"choose_first", side}).then(after));
+    if (!S.winner) {                       // the roll is random -- no click to make
+      if (!_rolling) {
+        _rolling = true;
+        setHint("Rolling initiative…");
+        act({type: "roll_initiative"}).then(() => { _rolling = false; render(); });
       }
+      return;
     }
-  } else if (phase === "move") {
+    setHint(`🎲 <b>${sideName(S.winner)}</b> won initiative — who moves first?`);
+    for (const side of S.sides)
+      bigPrimary(c, `${sideName(side)} moves first`,
+                 () => act({type: "choose_first", side}).then(after), side === S.winner);
+    return;
+  }
+
+  if (phase === "move") {
+    if (sel && chosenOption) { drawPlacement(c); return; }   // mid-placement keeps its UI
     const movers = S.figures.filter(f => f.side === S.moving_side && f.can_act && f.label);
-    const set = movers.filter(f => PLAN[f.uid]).length;
-    const span = document.createElement("div");
-    span.innerHTML = `<span class="chip ${S.moving_side}">${S.moving_side}</span> to move`
-      + ` — click a counter to set its action. <b>${set}/${movers.length}</b> set.`;
-    c.appendChild(span);
-    if (sel && chosenOption) drawPlacement(c);
-    else drawContinue(c, "move", movers.length - set);
-  } else if (phase === "combat") {
-    // Only count figures that actually HAVE an action (a target, grapple,
-    // shield-rush, or a disengage step). One with nothing to do is already
-    // doing nothing — it shouldn't drive the "anyway" warning (issue #117).
+    setHint(`<span class="chip ${S.moving_side}">${sideName(S.moving_side)}</span> — `
+            + `set each figure's move, then press Done.`);
+    figureChecklist(c, movers);
+    const idle = movers.filter(f => !PLAN[f.uid]).length;
+    if (idle) warnLine(c, `${idle} figure${idle > 1 ? "s" : ""} will hold position.`);
+    bigPrimary(c, "Done moving →", () => executePlans("move"));
+    return;
+  }
+
+  if (phase === "combat") {
     const actionable = new Set(S.combat_actionable || []);
     const actors = S.figures.filter(f => f.label && myControlled(f) && actionable.has(f.uid));
-    const set = actors.filter(f => PLAN[f.uid]).length;
-    const span = document.createElement("div");
-    span.innerHTML = `Click a counter to choose its attack or Do nothing.`
-      + ` <b>${set}/${actors.length}</b> set.`;
-    c.appendChild(span);
-    drawContinue(c, "combat", actors.length - set);
-    // "anyway" only when figures are still uncommitted this phase (issue #70).
-    addBtn(c, "End turn" + ((actors.length - set) > 0 ? " anyway" : ""),
-      () => { resetAll(); act({type:"end_turn"}).then(after); });
-    drawForceRetreat(c);   // post-combat shoves, once damage has been resolved
+    if (combatResolvedTurn !== S.turn) {
+      setHint("Choose each figure's attack, then resolve.");
+      figureChecklist(c, actors);
+      const idle = actors.filter(f => !PLAN[f.uid]).length;
+      if (idle) warnLine(c, `${idle} figure${idle > 1 ? "s" : ""} will do nothing.`);
+      bigPrimary(c, actors.length ? "Resolve attacks" : "Resolve combat", () => {
+        combatResolvedTurn = S.turn;       // next render offers "End turn"
+        executePlans("combat");
+      });
+    } else {
+      setHint("Attacks resolved — push back any beaten foes, then end the turn.");
+      drawForceRetreat(c);                 // post-combat shoves, if any
+      bigPrimary(c, "End turn →", () => { resetAll(); act({type: "end_turn"}).then(after); });
+    }
+    return;
   }
+}
+
+function sideName(side) { return side ? side.charAt(0).toUpperCase() + side.slice(1) : ""; }
+function setHint(html) { $("hint").innerHTML = html; }
+
+function bigPrimary(c, text, fn, primary = true) {
+  const b = document.createElement("button");
+  b.textContent = text;
+  b.className = "big" + (primary ? " primary" : "");
+  b.addEventListener("click", fn);
+  c.appendChild(b);
+  return b;
+}
+
+function warnLine(c, text) {
+  const w = document.createElement("div");
+  w.className = "warnline";
+  w.textContent = "⚠ " + text;
+  c.appendChild(w);
+}
+
+// A per-figure status list: which of the active side's figures are set, and
+// which still need you.
+function figureChecklist(c, figs) {
+  if (!figs.length) return;
+  const list = document.createElement("div");
+  list.className = "checklist";
+  list.innerHTML = figs.map(f => {
+    const plan = PLAN[f.uid];
+    const status = plan ? `✓ ${escapeHtml(plan.label || "set")}` : "needs you";
+    return `<div class="row"><span>${escapeHtml(f.name)}</span>`
+      + `<span class="${plan ? "done" : "todo"}">${status}</span></div>`;
+  }).join("");
+  c.appendChild(list);
 }
 
 // Post-combat: an attacker that dealt ST damage and took none this turn may
@@ -731,22 +789,6 @@ function drawForceRetreat(c) {
     row.appendChild(adv);
     c.appendChild(row);
   }
-}
-
-// The Continue button, gated by a "not everyone has an action" warning. The word
-// "anyway" appears only while some figures are still uncommitted (issue #70).
-function drawContinue(c, kind, missing) {
-  if (warnKind === kind) {
-    const w = document.createElement("div"); w.style.marginTop = "6px";
-    w.innerHTML = `<span class="muted">${missing} character(s) have no action set — `
-      + `they'll do nothing.</span>`;
-    c.appendChild(w);
-    addBtn(c, "Continue anyway", () => { warnKind = null; executePlans(kind); }, true);
-    addBtn(c, "Go back", () => { warnKind = null; render(); });
-    return;
-  }
-  addBtn(c, "Continue" + (missing > 0 ? " anyway" : ""),
-    () => { if (missing > 0) { warnKind = kind; render(); } else executePlans(kind); }, true);
 }
 
 // Placement: a move option that needs a destination hex + facing, then "Set action".

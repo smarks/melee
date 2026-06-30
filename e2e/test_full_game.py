@@ -12,10 +12,10 @@ from __future__ import annotations
 import re
 
 import pytest
-from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, expect
+from playwright.sync_api import Page, expect
 
-# "<side> first" -- the choose-who-moves-first buttons (the side id is dynamic).
-_FIRST_MOVE = re.compile(r"\bfirst\b")
+# "<side> moves first" -- the choose-who-moves-first buttons (side id is dynamic).
+_FIRST_MOVE = re.compile(r"moves first")
 
 
 def _click(page: Page, name, exact: bool = True) -> bool:
@@ -27,48 +27,27 @@ def _click(page: Page, name, exact: bool = True) -> bool:
     return False
 
 
-def _continue(page: Page) -> bool:
-    """Press Continue, pushing through the "N character(s) have no action set"
-    confirmation when it appears.
-
-    That confirmation is the crux: the first Continue press only *raises* the
-    warning (and shows a "Go back"); a second press actually commits the moves
-    (Movement) or resolves the queued attacks (Combat). Returns ``True`` if a
-    Continue press happened."""
-    if not (_click(page, "Continue anyway") or _click(page, "Continue")):
-        return False
-    # The first press only raises the "N character(s) have no action set"
-    # confirmation. Wait for it deterministically (not a fixed sleep, which races
-    # the render under load) and confirm, so the moves actually commit / the
-    # attacks actually resolve.
-    go_back = page.locator("#controls").get_by_role("button", name="Go back")
-    try:
-        go_back.wait_for(state="visible", timeout=2_000)
-    except PlaywrightTimeout:
-        return True                                  # nothing was uncommitted
-    _click(page, "Continue anyway")                  # confirm past the warning
-    page.wait_for_timeout(150)                       # let the commit/resolve land
-    return True
-
-
 def _advance_once(page: Page) -> bool:
-    """Take the one forward-moving step appropriate to the current phase.
+    """Take the one forward-moving step for the current phase (redesigned flow, #176).
 
-    Phase-aware: Movement commits via Continue; Combat must *resolve* (Continue,
-    so damage lands and the game converges) and *then* End turn. Returns
-    ``False`` when no control is available (the computer is mid-turn)."""
+    Initiative auto-rolls (only the first-mover choice ever needs a click);
+    Movement is a single 'Done moving' press; Combat resolves ('Resolve attacks')
+    and then ends ('End turn →'). No confirmation step. Returns False when no
+    control is available (computer mid-turn / auto-rolling)."""
     phase = page.locator("#phaseBanner").inner_text()
     if "Initiative" in phase:
-        if _click(page, "Roll initiative"):
+        button = page.locator("#controls").get_by_role("button", name=_FIRST_MOVE)
+        if button.count() and button.first.is_enabled():
+            button.first.click()
             return True
-        return _click(page, _FIRST_MOVE)            # "<side> first"
+        return False                                # auto-rolling / computer's pick
     if "Movement" in phase:
-        return _continue(page)
+        return _click(page, "Done moving →")
     if "Combat" in phase:
-        _continue(page)                             # resolve the queued attacks
-        _click(page, "End turn anyway") or _click(page, "End turn")
-        return True
-    return _click(page, "End turn → new round")     # between-round fallback
+        # Resolve (damage lands), then End turn -- two clean steps.
+        return (_click(page, "Resolve attacks") or _click(page, "Resolve combat")
+                or _click(page, "End turn →"))
+    return False
 
 
 def _combat_happened(roster_text: str) -> bool:

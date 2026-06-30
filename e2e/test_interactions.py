@@ -32,21 +32,19 @@ def test_new_game_via_setup_dialog(live_server, page: Page) -> None:
 
 
 @pytest.mark.django_db
-def test_initiative_roll_advances_to_movement(live_server, page: Page) -> None:
+def test_initiative_autorolls_then_advances_to_movement(live_server, page: Page) -> None:
     page.goto(live_server.url)
     banner = page.locator("#phaseBanner")
     expect(banner).to_contain_text("Turn", timeout=20_000)
 
-    # A fresh same screen game so the human drives initiative (no computer auto-roll).
+    # A fresh hot-seat game; initiative auto-rolls (#176), then the winner picks
+    # who moves first via the "<side> moves first" buttons.
     page.get_by_role("button", name="New game").click()
     page.locator("#mode").select_option("pxp")
     page.get_by_role("button", name="Begin game").click()
-    expect(banner).to_contain_text("Initiative", timeout=10_000)
 
     controls = page.locator("#controls")
-    controls.get_by_role("button", name="Roll initiative").click()
-    # the initiative winner picks who moves first ("<side> first")
-    first = controls.get_by_role("button", name=re.compile(r"\bfirst\b"))
+    first = controls.get_by_role("button", name=re.compile(r"moves first"))
     expect(first.first).to_be_visible(timeout=10_000)
     first.first.click()
 
