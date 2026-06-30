@@ -118,44 +118,7 @@ class PendingAttack:
     shield_rush: bool = False  # this "attack" is a shield-rush, resolved in adjDX order (p.13, #151)
 
 
-class GameState:
-    def __init__(
-        self,
-        arena: Arena,
-        figures: list[Figure],
-        *,
-        dice: Dice | None = None,
-        ruleset: Ruleset | None = None,
-        combat_type: CombatType = CombatType.DEATH,
-    ):
-        self.arena = arena
-        self.figures = figures
-        self.dice = dice or Dice()
-        # The swappable mechanics. Default: classic Melee. Pass a Ruleset
-        # subclass to swap in different combat/injury/movement mechanics.
-        self.rules = ruleset or Ruleset()
-        # The combat variant (Section IX, p.22). Practice combat is the only one
-        # that changes the fight itself — blunted half-damage weapons, no missiles,
-        # and a drop-out at ST <= 3 (see ``practice``). Death/Arena differ only in
-        # the XP awarded at the end (engine.experience).
-        self.combat_type = combat_type
-        self.turn_number = 1
-        self.log: list[str] = []
-        self._pending: list[PendingAttack] = []
-        self.first_side: str | None = None
-        # Weapons lying on the ground (dropped, fumbled, or thrown), pick-up-able.
-        self.dropped: list[tuple] = []        # (Hex, Weapon)
-        for index, figure in enumerate(figures):
-            if not figure.uid:
-                figure.uid = f"f{index}"
-
-    @property
-    def practice(self) -> bool:
-        """Whether this is a practice bout (p.22): weapons blunted to half damage,
-        no missiles, and figures drop out at ST <= 3. The single mode flag the
-        combat rules read."""
-        return self.combat_type is CombatType.PRACTICE
-
+class _RosterMixin:
     # ---- rosters / occupancy ----
     @property
     def sides(self) -> list[str]:
@@ -200,6 +163,8 @@ class GameState:
     def engaged(self, figure: Figure) -> bool:
         return is_engaged(self.arena.layout, figure, self.enemies_of(figure))
 
+
+class _TurnMixin:
     # ---- turn sequencing ----
     def roll_initiative(self) -> dict:
         """Each side rolls a die; higher total wins the choice of move order.
@@ -227,6 +192,43 @@ class GameState:
             return self.sides
         return [self.first_side] + [s for s in self.sides if s != self.first_side]
 
+    # ---- end of turn ----
+    def end_turn(self) -> None:
+        """Settle injury flags and reset per-turn state, then advance the turn."""
+        for figure in self.figures:
+            # Option (g): a STAND UP chosen in movement takes effect now, at the
+            # end of the combat phase (p.6-7). The figure stayed prone/kneeling
+            # through this turn's combat and only now rises to its feet. (Crawl
+            # keeps it grounded and never sets this option.)
+            if (figure.current_option == Option.STAND_UP
+                    and figure.posture != Posture.STANDING):
+                figure.posture = Posture.STANDING
+            figure.wounded_last_turn = (
+                figure.hits_this_turn >= figure.wound_hits_threshold
+            )
+            for flag, default in PER_TURN_FLAGS.items():
+                setattr(figure, flag, default)
+            figure.current_option = None
+            # A crossbow reloads a turn closer — but an engaged figure cannot
+            # reload (p.16), so its bolt stays unspent until it breaks free.
+            if figure.missile_cooldown > 0 and not self.engaged(figure):
+                figure.missile_cooldown -= 1
+            # A grappler who got time to ready a dagger (a 3-4 defense roll) has
+            # it in hand from next turn on.
+            if figure.hth_drew_dagger:
+                dagger = next((w for w in figure.weapons
+                               if w.name in self._DAGGERS), None)
+                if dagger is not None:
+                    figure.ready_weapon = dagger
+                    self.log.append(narrate_ready(figure, dagger))
+                figure.hth_drew_dagger = False
+        self._pending.clear()
+        self.first_side = None
+        self.turn_number += 1
+        self.log.append(narrate_turn(self.turn_number))
+
+
+class _MovementMixin:
     # ---- movement ----
     def _can_fire_from_posture(self, figure: Figure) -> bool:
         """A grounded figure may still loose a missile (p.16): a crossbow from
@@ -667,6 +669,86 @@ class GameState:
         if attacker.ready_weapon is not None:
             self.log.append(narrate_ready(attacker, attacker.ready_weapon))
 
+    # ---- general disengage (option n, p.19) ----
+    def disengage_destinations(self, figure: Figure) -> list[Hex]:
+        """Adjacent hexes a disengaging figure may step into (p.19).
+
+        Empty unless the figure chose to disengage this turn, is standing, and
+        has not yet acted — a grounded figure must stand before it can disengage.
+        Includes free hexes and the hex of any adjacent enemy it may move onto to
+        attempt hand-to-hand combat that same turn (p.19).
+        """
+        if (figure.current_option != Option.DISENGAGE
+                or figure.posture != Posture.STANDING
+                or figure.attacked_this_turn
+                or figure.position is None):
+            return []
+        held = set(self.occupied(exclude=figure))
+        free = [hex_position for hex_position in self.arena.neighbors(figure.position)
+                if self.arena.contains(hex_position) and hex_position not in held]
+        hth = [enemy.position for enemy in self.enemies_of(figure)
+               if enemy.position is not None
+               and self._can_initiate_hth(figure, enemy)]
+        return free + hth
+
+    def disengage_move(self, figure: Figure, dest: Hex) -> None:
+        """Carry out option (n) general disengage in the combat phase (p.19).
+
+        A figure that chose to disengage moves one hex in any direction instead
+        of attacking, breaking engagement. It must be standing first (a
+        kneeling/prone/fallen figure must rise before it can disengage). It may
+        not also make a normal attack — except that it may move onto an adjacent
+        enemy's hex to attempt hand-to-hand combat that same turn (p.19), in which
+        case the grapple is initiated. Higher-DX enemies still get their strike
+        this turn — the engine resolves their queued attacks normally.
+        """
+        if figure.current_option != Option.DISENGAGE:
+            raise IllegalAction(f"{figure.name} did not choose to disengage this turn")
+        if figure.posture != Posture.STANDING:
+            raise IllegalAction(f"{figure.name} must stand up before it can disengage")
+        if figure.attacked_this_turn:
+            raise IllegalAction(f"{figure.name} has already acted this turn")
+        if figure.position is None or dest is None:
+            raise IllegalAction("a disengage needs a destination hex")
+        if self.arena.distance(figure.position, dest) != 1:
+            raise IllegalAction("a disengage moves exactly one hex")
+        occupant = self.figure_at(dest)
+        if occupant is not None and occupant in self.enemies_of(figure):
+            # Disengage straight into a grapple on an eligible adjacent foe (p.19).
+            if not self._can_initiate_hth(figure, occupant):
+                raise IllegalAction(
+                    f"{figure.name} cannot grapple {occupant.name}"
+                )
+            self.hth_attack(figure, occupant)
+            return
+        if not self.arena.contains(dest) or dest in self.occupied(exclude=figure):
+            raise IllegalAction(f"{dest} is not a free hex to disengage into")
+        figure.position = dest
+        figure.attacked_this_turn = True          # the move replaces its attack
+        # Flag the disengage so resolve_combat's melee branch applies the p.19 DX
+        # timing: a higher-or-equal-DX foe still strikes as the figure leaves, a
+        # lower-DX foe gets no chance (#147).
+        figure.disengaged_this_turn = True
+        line = narrate_move(figure, Option.DISENGAGE, True)
+        if line:
+            self.log.append(line)
+
+    def _queue_hth_strike(self, attacker: Figure, defender: Figure) -> None:
+        """Queue a grapple strike — always at the +4 'rear' adjustment (p.18)."""
+        self._pending.append(PendingAttack(
+            attacker, defender, zone=REAR, ignore_facing=False, range_penalty=0,
+            hth_damage=self._hth_damage(attacker, defender)))
+
+    def _clear_hth(self, figure: Figure) -> None:
+        """Break every grapple ``figure`` is in (it died, or broke free)."""
+        for uid in figure.hth_opponents:
+            foe = self._by_uid(uid)
+            if foe is not None and figure.uid in foe.hth_opponents:
+                foe.hth_opponents.remove(figure.uid)
+        figure.hth_opponents = []
+
+
+class _HthMixin:
     # ---- hand-to-hand combat (p.17) ----
     _DAGGERS = ("Dagger", "Main-Gauche")
 
@@ -838,84 +920,8 @@ class GameState:
         self.log.append(narrate_hth_disengage(figure, True))
         return True
 
-    # ---- general disengage (option n, p.19) ----
-    def disengage_destinations(self, figure: Figure) -> list[Hex]:
-        """Adjacent hexes a disengaging figure may step into (p.19).
 
-        Empty unless the figure chose to disengage this turn, is standing, and
-        has not yet acted — a grounded figure must stand before it can disengage.
-        Includes free hexes and the hex of any adjacent enemy it may move onto to
-        attempt hand-to-hand combat that same turn (p.19).
-        """
-        if (figure.current_option != Option.DISENGAGE
-                or figure.posture != Posture.STANDING
-                or figure.attacked_this_turn
-                or figure.position is None):
-            return []
-        held = set(self.occupied(exclude=figure))
-        free = [hex_position for hex_position in self.arena.neighbors(figure.position)
-                if self.arena.contains(hex_position) and hex_position not in held]
-        hth = [enemy.position for enemy in self.enemies_of(figure)
-               if enemy.position is not None
-               and self._can_initiate_hth(figure, enemy)]
-        return free + hth
-
-    def disengage_move(self, figure: Figure, dest: Hex) -> None:
-        """Carry out option (n) general disengage in the combat phase (p.19).
-
-        A figure that chose to disengage moves one hex in any direction instead
-        of attacking, breaking engagement. It must be standing first (a
-        kneeling/prone/fallen figure must rise before it can disengage). It may
-        not also make a normal attack — except that it may move onto an adjacent
-        enemy's hex to attempt hand-to-hand combat that same turn (p.19), in which
-        case the grapple is initiated. Higher-DX enemies still get their strike
-        this turn — the engine resolves their queued attacks normally.
-        """
-        if figure.current_option != Option.DISENGAGE:
-            raise IllegalAction(f"{figure.name} did not choose to disengage this turn")
-        if figure.posture != Posture.STANDING:
-            raise IllegalAction(f"{figure.name} must stand up before it can disengage")
-        if figure.attacked_this_turn:
-            raise IllegalAction(f"{figure.name} has already acted this turn")
-        if figure.position is None or dest is None:
-            raise IllegalAction("a disengage needs a destination hex")
-        if self.arena.distance(figure.position, dest) != 1:
-            raise IllegalAction("a disengage moves exactly one hex")
-        occupant = self.figure_at(dest)
-        if occupant is not None and occupant in self.enemies_of(figure):
-            # Disengage straight into a grapple on an eligible adjacent foe (p.19).
-            if not self._can_initiate_hth(figure, occupant):
-                raise IllegalAction(
-                    f"{figure.name} cannot grapple {occupant.name}"
-                )
-            self.hth_attack(figure, occupant)
-            return
-        if not self.arena.contains(dest) or dest in self.occupied(exclude=figure):
-            raise IllegalAction(f"{dest} is not a free hex to disengage into")
-        figure.position = dest
-        figure.attacked_this_turn = True          # the move replaces its attack
-        # Flag the disengage so resolve_combat's melee branch applies the p.19 DX
-        # timing: a higher-or-equal-DX foe still strikes as the figure leaves, a
-        # lower-DX foe gets no chance (#147).
-        figure.disengaged_this_turn = True
-        line = narrate_move(figure, Option.DISENGAGE, True)
-        if line:
-            self.log.append(line)
-
-    def _queue_hth_strike(self, attacker: Figure, defender: Figure) -> None:
-        """Queue a grapple strike — always at the +4 'rear' adjustment (p.18)."""
-        self._pending.append(PendingAttack(
-            attacker, defender, zone=REAR, ignore_facing=False, range_penalty=0,
-            hth_damage=self._hth_damage(attacker, defender)))
-
-    def _clear_hth(self, figure: Figure) -> None:
-        """Break every grapple ``figure`` is in (it died, or broke free)."""
-        for uid in figure.hth_opponents:
-            foe = self._by_uid(uid)
-            if foe is not None and figure.uid in foe.hth_opponents:
-                foe.hth_opponents.remove(figure.uid)
-        figure.hth_opponents = []
-
+class _ShieldRushMixin:
     # ---- shield-rush (p.13) ----
     def _can_shield_rush(self, attacker: Figure) -> bool:
         """Whether ``attacker`` could shield-rush this combat phase (p.13).
@@ -1298,6 +1304,8 @@ class GameState:
         ]
         return all(direction == directions[0] for direction in directions)
 
+
+class _CombatMixin:
     # ---- combat ----
     def in_front_arc(self, attacker: Figure, point: Hex) -> bool:
         """Whether ``point`` lies in ``attacker``'s front arc, ignoring posture.
@@ -1815,6 +1823,8 @@ class GameState:
         if (target.is_dead or target.collapsed) and target.in_hth:
             self._clear_hth(target)              # a downed grappler releases its hold
 
+
+class _ForceRetreatMixin:
     # ---- force retreat (Section: Forcing Retreat) ----
     def can_force_retreat(self, attacker: Figure, target: Figure) -> bool:
         return (
@@ -1858,37 +1868,59 @@ class GameState:
         self.log.append(narrate_retreat(attacker, target, advance))
         return target.position
 
-    # ---- end of turn ----
-    def end_turn(self) -> None:
-        """Settle injury flags and reset per-turn state, then advance the turn."""
-        for figure in self.figures:
-            # Option (g): a STAND UP chosen in movement takes effect now, at the
-            # end of the combat phase (p.6-7). The figure stayed prone/kneeling
-            # through this turn's combat and only now rises to its feet. (Crawl
-            # keeps it grounded and never sets this option.)
-            if (figure.current_option == Option.STAND_UP
-                    and figure.posture != Posture.STANDING):
-                figure.posture = Posture.STANDING
-            figure.wounded_last_turn = (
-                figure.hits_this_turn >= figure.wound_hits_threshold
-            )
-            for flag, default in PER_TURN_FLAGS.items():
-                setattr(figure, flag, default)
-            figure.current_option = None
-            # A crossbow reloads a turn closer — but an engaged figure cannot
-            # reload (p.16), so its bolt stays unspent until it breaks free.
-            if figure.missile_cooldown > 0 and not self.engaged(figure):
-                figure.missile_cooldown -= 1
-            # A grappler who got time to ready a dagger (a 3-4 defense roll) has
-            # it in hand from next turn on.
-            if figure.hth_drew_dagger:
-                dagger = next((w for w in figure.weapons
-                               if w.name in self._DAGGERS), None)
-                if dagger is not None:
-                    figure.ready_weapon = dagger
-                    self.log.append(narrate_ready(figure, dagger))
-                figure.hth_drew_dagger = False
-        self._pending.clear()
-        self.first_side = None
-        self.turn_number += 1
-        self.log.append(narrate_turn(self.turn_number))
+
+class GameState(
+    _RosterMixin,
+    _TurnMixin,
+    _MovementMixin,
+    _HthMixin,
+    _ShieldRushMixin,
+    _CombatMixin,
+    _ForceRetreatMixin,
+):
+    """The single source of truth for a fight, composed from the responsibility
+    mixins above (#156).
+
+    ``GameState`` itself owns only the shared state every mixin reads through
+    ``self`` -- the arena, the figures, the dice, the queued attacks, the turn
+    counter, the ruleset, and the log. Each mixin is stateless behaviour grouped
+    by responsibility (rosters, turn sequencing, movement, hand-to-hand,
+    shield-rush, combat resolution, force retreat); they call one another through
+    ``self``, with the MRO resolving every cross-mixin call.
+    """
+    def __init__(
+        self,
+        arena: Arena,
+        figures: list[Figure],
+        *,
+        dice: Dice | None = None,
+        ruleset: Ruleset | None = None,
+        combat_type: CombatType = CombatType.DEATH,
+    ):
+        self.arena = arena
+        self.figures = figures
+        self.dice = dice or Dice()
+        # The swappable mechanics. Default: classic Melee. Pass a Ruleset
+        # subclass to swap in different combat/injury/movement mechanics.
+        self.rules = ruleset or Ruleset()
+        # The combat variant (Section IX, p.22). Practice combat is the only one
+        # that changes the fight itself — blunted half-damage weapons, no missiles,
+        # and a drop-out at ST <= 3 (see ``practice``). Death/Arena differ only in
+        # the XP awarded at the end (engine.experience).
+        self.combat_type = combat_type
+        self.turn_number = 1
+        self.log: list[str] = []
+        self._pending: list[PendingAttack] = []
+        self.first_side: str | None = None
+        # Weapons lying on the ground (dropped, fumbled, or thrown), pick-up-able.
+        self.dropped: list[tuple] = []        # (Hex, Weapon)
+        for index, figure in enumerate(figures):
+            if not figure.uid:
+                figure.uid = f"f{index}"
+
+    @property
+    def practice(self) -> bool:
+        """Whether this is a practice bout (p.22): weapons blunted to half damage,
+        no missiles, and figures drop out at ST <= 3. The single mode flag the
+        combat rules read."""
+        return self.combat_type is CombatType.PRACTICE
