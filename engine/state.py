@@ -118,44 +118,7 @@ class PendingAttack:
     shield_rush: bool = False  # this "attack" is a shield-rush, resolved in adjDX order (p.13, #151)
 
 
-class GameState:
-    def __init__(
-        self,
-        arena: Arena,
-        figures: list[Figure],
-        *,
-        dice: Dice | None = None,
-        ruleset: Ruleset | None = None,
-        combat_type: CombatType = CombatType.DEATH,
-    ):
-        self.arena = arena
-        self.figures = figures
-        self.dice = dice or Dice()
-        # The swappable mechanics. Default: classic Melee. Pass a Ruleset
-        # subclass to swap in different combat/injury/movement mechanics.
-        self.rules = ruleset or Ruleset()
-        # The combat variant (Section IX, p.22). Practice combat is the only one
-        # that changes the fight itself — blunted half-damage weapons, no missiles,
-        # and a drop-out at ST <= 3 (see ``practice``). Death/Arena differ only in
-        # the XP awarded at the end (engine.experience).
-        self.combat_type = combat_type
-        self.turn_number = 1
-        self.log: list[str] = []
-        self._pending: list[PendingAttack] = []
-        self.first_side: str | None = None
-        # Weapons lying on the ground (dropped, fumbled, or thrown), pick-up-able.
-        self.dropped: list[tuple] = []        # (Hex, Weapon)
-        for index, figure in enumerate(figures):
-            if not figure.uid:
-                figure.uid = f"f{index}"
-
-    @property
-    def practice(self) -> bool:
-        """Whether this is a practice bout (p.22): weapons blunted to half damage,
-        no missiles, and figures drop out at ST <= 3. The single mode flag the
-        combat rules read."""
-        return self.combat_type is CombatType.PRACTICE
-
+class _RosterMixin:
     # ---- rosters / occupancy ----
     @property
     def sides(self) -> list[str]:
@@ -200,6 +163,8 @@ class GameState:
     def engaged(self, figure: Figure) -> bool:
         return is_engaged(self.arena.layout, figure, self.enemies_of(figure))
 
+
+class _TurnMixin:
     # ---- turn sequencing ----
     def roll_initiative(self) -> dict:
         """Each side rolls a die; higher total wins the choice of move order.
@@ -227,6 +192,43 @@ class GameState:
             return self.sides
         return [self.first_side] + [s for s in self.sides if s != self.first_side]
 
+    # ---- end of turn ----
+    def end_turn(self) -> None:
+        """Settle injury flags and reset per-turn state, then advance the turn."""
+        for figure in self.figures:
+            # Option (g): a STAND UP chosen in movement takes effect now, at the
+            # end of the combat phase (p.6-7). The figure stayed prone/kneeling
+            # through this turn's combat and only now rises to its feet. (Crawl
+            # keeps it grounded and never sets this option.)
+            if (figure.current_option == Option.STAND_UP
+                    and figure.posture != Posture.STANDING):
+                figure.posture = Posture.STANDING
+            figure.wounded_last_turn = (
+                figure.hits_this_turn >= figure.wound_hits_threshold
+            )
+            for flag, default in PER_TURN_FLAGS.items():
+                setattr(figure, flag, default)
+            figure.current_option = None
+            # A crossbow reloads a turn closer — but an engaged figure cannot
+            # reload (p.16), so its bolt stays unspent until it breaks free.
+            if figure.missile_cooldown > 0 and not self.engaged(figure):
+                figure.missile_cooldown -= 1
+            # A grappler who got time to ready a dagger (a 3-4 defense roll) has
+            # it in hand from next turn on.
+            if figure.hth_drew_dagger:
+                dagger = next((w for w in figure.weapons
+                               if w.name in self._DAGGERS), None)
+                if dagger is not None:
+                    figure.ready_weapon = dagger
+                    self.log.append(narrate_ready(figure, dagger))
+                figure.hth_drew_dagger = False
+        self._pending.clear()
+        self.first_side = None
+        self.turn_number += 1
+        self.log.append(narrate_turn(self.turn_number))
+
+
+class _MovementMixin:
     # ---- movement ----
     def _can_fire_from_posture(self, figure: Figure) -> bool:
         """A grounded figure may still loose a missile (p.16): a crossbow from
@@ -245,59 +247,29 @@ class GameState:
         return False
 
     def legal_options(self, figure: Figure) -> list[Option]:
-        if figure.posture != Posture.STANDING:
-            # A grounded figure may rise (g) or, instead, crawl up to two hexes
-            # (g, p.7) — but only if there is somewhere to crawl to. It may also
-            # still fire a missile from the ground (#152).
-            grounded = [Option.STAND_UP]
-            if self.reachable(figure, Option.CRAWL):
-                grounded.append(Option.CRAWL)
-            if self._can_fire_from_posture(figure):
-                grounded.append(Option.MISSILE_ATTACK)
-            return grounded
-        weapon = figure.ready_weapon
-        has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
-        # A practice bout blunts every weapon and forbids missiles entirely (p.22).
-        can_fire = has_missile and figure.missile_cooldown == 0 and not self.practice
-        legal: list[Option] = []
-        for option in options_for(engaged=self.engaged(figure)):
-            option_spec = spec(option)
-            if option in (Option.STAND_UP, Option.CRAWL):
-                continue                       # already standing — nothing to do
-            if option_spec.is_missile and not can_fire:
-                continue                       # no missile ready, or still reloading
-            if option_spec.is_attack and not option_spec.is_missile and has_missile:
-                continue                       # a readied missile has no melee blow
-            if option == Option.SHIFT_DEFEND and has_missile:
-                continue                       # only a non-missile weapon can parry (p.20)
-            if option == Option.PICK_UP and not self.dropped_in_reach(figure):
-                continue                       # nothing on the ground within reach
-            if option == Option.GO_PRONE and not (has_missile and weapon.reload > 0):
-                continue                       # only a crossbow may fire prone (p.16); a
-                                               # bow that drops prone gets no shot — give it
-                                               # KNEEL instead (#154)
-            if option == Option.KNEEL and not has_missile:
-                continue                       # kneeling to fire is a missile move (f);
-                                               # any bow may fire from one knee (p.16)
-            if option == Option.HTH_ATTACK and not any(
-                    self._can_initiate_hth(figure, enemy)
-                    for enemy in self.enemies_of(figure)):
-                continue                       # no adjacent foe eligible to grapple (p.17)
-            legal.append(option)
-        return legal
+        """The options ``figure`` may legally choose this phase.
+
+        Derived from :meth:`option_availability` — exactly the options it leaves
+        untagged (reason ``None``) — so the legal set and the availability menu
+        share one source of truth and can never drift (#160). Many callers and
+        tests rely on this membership.
+        """
+        return [option for option, reason in self.option_availability(figure)
+                if reason is None]
 
     def option_availability(self, figure: Figure) -> list[tuple[Option, str | None]]:
         """The full candidate option set for ``figure`` this phase, each tagged with
         whether it is currently available and, if not, a short reason.
 
-        Companion to :meth:`legal_options` (which returns only the legal subset, a
-        contract many tests rely on). The UI uses this to show unavailable options
-        disabled — greyed with a why — instead of silently hiding them. The set of
-        options whose reason is ``None`` is exactly :meth:`legal_options`.
+        The single source of truth for "what is legal": :meth:`legal_options` is
+        exactly the options whose reason is ``None`` here. The UI uses the full
+        list to show unavailable options disabled — greyed with a why — instead of
+        silently hiding them.
         """
         standing = figure.posture == Posture.STANDING
         weapon = figure.ready_weapon
         has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+        # A practice bout blunts every weapon and forbids missiles entirely (p.22).
         can_fire = has_missile and figure.missile_cooldown == 0 and not self.practice
         result: list[tuple[Option, str | None]] = []
         for option in options_for(engaged=self.engaged(figure)):
@@ -321,6 +293,10 @@ class GameState:
                     reason = "no missiles in a practice bout"
                 else:
                     reason = "still reloading" if has_missile else "no missile weapon ready"
+            elif spec(option).is_attack and not spec(option).is_missile and has_missile:
+                # A readied missile weapon has no melee blow (#79): a non-missile
+                # attack option (charge/shift-attack/grapple) is unavailable.
+                reason = "missile weapon ready — no melee attack"
             elif option == Option.SHIFT_DEFEND and has_missile:
                 reason = "nothing to parry with — missile weapon ready"
             elif option == Option.PICK_UP and not self.dropped_in_reach(figure):
@@ -539,7 +515,23 @@ class GameState:
                 attacker, target, attacker.ready_weapon, True)
         held = self.occupied(exclude=attacker)
         adjdx = attacker.base_adj_dx
-        # 1) figures in the way roll to be missed — a low roll flies past (p.15).
+        # Three sequential phases, each able to end the flight: a blocker in the
+        # lane, the intended target, then a stray fly-on (p.15-16).
+        if self._flight_blockers_strike(pending, target, adjdx, held, results):
+            return
+        if self._flight_hit_target(pending, target, declared_zone, range_penalty,
+                                   situational, situational_note, results):
+            return
+        self._flight_fly_on(pending, target, adjdx, held, results)
+
+    def _flight_blockers_strike(
+        self, pending, target, adjdx: int, held: dict, results: list
+    ) -> bool:
+        """Phase 1: figures standing in the lane each roll to be missed — a low
+        roll flies past (p.15). The first one the weapon does not miss is struck
+        and the flight ends; returns True iff a blocker was hit."""
+        attacker = pending.attacker
+        layout = self.arena.layout
         for hex_pos in layout.line(attacker.position, target.position)[1:-1]:
             blocker = held.get(hex_pos)
             if blocker is None or blocker is target:
@@ -548,15 +540,27 @@ class GameState:
             if self.dice.total(3) <= adjdx - dist:
                 continue                                  # flew past this one
             self._flight_strike(pending, blocker, dist, results)
-            return
-        # 2) the intended target — a normal thrown/missile attack. A thrown
-        # weapon takes the target's facing bonus (ignore_facing False); a missile
-        # never does (p.16) — both are carried on the pending attack.
-        # A shot aimed at a pile of figures in HTH combat strikes a RANDOM member
-        # of the pile, not necessarily the one aimed at (p.18). The classic to-hit
-        # number is the attacker's adjDX and does not depend on which member is
-        # struck, so the pile member is rolled first and the shot then resolves
-        # against it (zone/absorption recomputed for whoever it caught).
+            return True
+        return False
+
+    def _flight_hit_target(
+        self, pending, target, declared_zone, range_penalty: int,
+        situational: int, situational_note: str, results: list
+    ) -> bool:
+        """Phase 2: the intended target — a normal thrown/missile attack. A thrown
+        weapon takes the target's facing bonus (ignore_facing False); a missile
+        never does (p.16) — both are carried on the pending attack.
+
+        A shot aimed at a pile of figures in HTH combat strikes a RANDOM member of
+        the pile, not necessarily the one aimed at (p.18). The classic to-hit
+        number is the attacker's adjDX and does not depend on which member is
+        struck, so the pile member is rolled first and the shot then resolves
+        against it (zone/absorption recomputed for whoever it caught).
+
+        Returns True when the flight ends here — a hit lands the weapon, or a
+        fumble (17 drops it, 18 breaks it; p.10) takes it out of the air so it does
+        NOT fly on. Returns False on a clean miss, which flies on (phase 3)."""
+        attacker = pending.attacker
         struck = target
         pile = self._hth_pile_at(target.position)
         if len(pile) >= 2:
@@ -576,14 +580,21 @@ class GameState:
         results.append(result)
         if result.hit:
             self._land_flight(pending, struck.position)
-            return
+            return True
         if result.dropped_weapon or result.broke_weapon:
-            # A 17 drops the weapon (in the target hex for a throw), an 18 breaks
-            # it (p.10) — either way it has left the hand and does NOT fly on to
-            # strike a figure behind the target. ``_apply`` already placed the
-            # dropped weapon or removed the broken one, so nothing lands here.
-            return
-        # 3) a clean miss — the weapon flies on up to ten hexes (p.15).
+            # ``_apply`` already placed the dropped weapon or removed the broken
+            # one, so nothing lands here — and it does not strike a figure behind.
+            return True
+        return False
+
+    def _flight_fly_on(
+        self, pending, target, adjdx: int, held: dict, results: list
+    ) -> None:
+        """Phase 3: a clean miss flies on up to ten hexes (p.15), striking the
+        first figure it does not miss; otherwise it spends itself and lands by the
+        target."""
+        attacker = pending.attacker
+        layout = self.arena.layout
         direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
         current = target.position
         for _ in range(10):
@@ -658,6 +669,86 @@ class GameState:
         if attacker.ready_weapon is not None:
             self.log.append(narrate_ready(attacker, attacker.ready_weapon))
 
+    # ---- general disengage (option n, p.19) ----
+    def disengage_destinations(self, figure: Figure) -> list[Hex]:
+        """Adjacent hexes a disengaging figure may step into (p.19).
+
+        Empty unless the figure chose to disengage this turn, is standing, and
+        has not yet acted — a grounded figure must stand before it can disengage.
+        Includes free hexes and the hex of any adjacent enemy it may move onto to
+        attempt hand-to-hand combat that same turn (p.19).
+        """
+        if (figure.current_option != Option.DISENGAGE
+                or figure.posture != Posture.STANDING
+                or figure.attacked_this_turn
+                or figure.position is None):
+            return []
+        held = set(self.occupied(exclude=figure))
+        free = [hex_position for hex_position in self.arena.neighbors(figure.position)
+                if self.arena.contains(hex_position) and hex_position not in held]
+        hth = [enemy.position for enemy in self.enemies_of(figure)
+               if enemy.position is not None
+               and self._can_initiate_hth(figure, enemy)]
+        return free + hth
+
+    def disengage_move(self, figure: Figure, dest: Hex) -> None:
+        """Carry out option (n) general disengage in the combat phase (p.19).
+
+        A figure that chose to disengage moves one hex in any direction instead
+        of attacking, breaking engagement. It must be standing first (a
+        kneeling/prone/fallen figure must rise before it can disengage). It may
+        not also make a normal attack — except that it may move onto an adjacent
+        enemy's hex to attempt hand-to-hand combat that same turn (p.19), in which
+        case the grapple is initiated. Higher-DX enemies still get their strike
+        this turn — the engine resolves their queued attacks normally.
+        """
+        if figure.current_option != Option.DISENGAGE:
+            raise IllegalAction(f"{figure.name} did not choose to disengage this turn")
+        if figure.posture != Posture.STANDING:
+            raise IllegalAction(f"{figure.name} must stand up before it can disengage")
+        if figure.attacked_this_turn:
+            raise IllegalAction(f"{figure.name} has already acted this turn")
+        if figure.position is None or dest is None:
+            raise IllegalAction("a disengage needs a destination hex")
+        if self.arena.distance(figure.position, dest) != 1:
+            raise IllegalAction("a disengage moves exactly one hex")
+        occupant = self.figure_at(dest)
+        if occupant is not None and occupant in self.enemies_of(figure):
+            # Disengage straight into a grapple on an eligible adjacent foe (p.19).
+            if not self._can_initiate_hth(figure, occupant):
+                raise IllegalAction(
+                    f"{figure.name} cannot grapple {occupant.name}"
+                )
+            self.hth_attack(figure, occupant)
+            return
+        if not self.arena.contains(dest) or dest in self.occupied(exclude=figure):
+            raise IllegalAction(f"{dest} is not a free hex to disengage into")
+        figure.position = dest
+        figure.attacked_this_turn = True          # the move replaces its attack
+        # Flag the disengage so resolve_combat's melee branch applies the p.19 DX
+        # timing: a higher-or-equal-DX foe still strikes as the figure leaves, a
+        # lower-DX foe gets no chance (#147).
+        figure.disengaged_this_turn = True
+        line = narrate_move(figure, Option.DISENGAGE, True)
+        if line:
+            self.log.append(line)
+
+    def _queue_hth_strike(self, attacker: Figure, defender: Figure) -> None:
+        """Queue a grapple strike — always at the +4 'rear' adjustment (p.18)."""
+        self._pending.append(PendingAttack(
+            attacker, defender, zone=REAR, ignore_facing=False, range_penalty=0,
+            hth_damage=self._hth_damage(attacker, defender)))
+
+    def _clear_hth(self, figure: Figure) -> None:
+        """Break every grapple ``figure`` is in (it died, or broke free)."""
+        for uid in figure.hth_opponents:
+            foe = self._by_uid(uid)
+            if foe is not None and figure.uid in foe.hth_opponents:
+                foe.hth_opponents.remove(figure.uid)
+        figure.hth_opponents = []
+
+
+class _HthMixin:
     # ---- hand-to-hand combat (p.17) ----
     _DAGGERS = ("Dagger", "Main-Gauche")
 
@@ -829,84 +920,8 @@ class GameState:
         self.log.append(narrate_hth_disengage(figure, True))
         return True
 
-    # ---- general disengage (option n, p.19) ----
-    def disengage_destinations(self, figure: Figure) -> list[Hex]:
-        """Adjacent hexes a disengaging figure may step into (p.19).
 
-        Empty unless the figure chose to disengage this turn, is standing, and
-        has not yet acted — a grounded figure must stand before it can disengage.
-        Includes free hexes and the hex of any adjacent enemy it may move onto to
-        attempt hand-to-hand combat that same turn (p.19).
-        """
-        if (figure.current_option != Option.DISENGAGE
-                or figure.posture != Posture.STANDING
-                or figure.attacked_this_turn
-                or figure.position is None):
-            return []
-        held = set(self.occupied(exclude=figure))
-        free = [hex_position for hex_position in self.arena.neighbors(figure.position)
-                if self.arena.contains(hex_position) and hex_position not in held]
-        hth = [enemy.position for enemy in self.enemies_of(figure)
-               if enemy.position is not None
-               and self._can_initiate_hth(figure, enemy)]
-        return free + hth
-
-    def disengage_move(self, figure: Figure, dest: Hex) -> None:
-        """Carry out option (n) general disengage in the combat phase (p.19).
-
-        A figure that chose to disengage moves one hex in any direction instead
-        of attacking, breaking engagement. It must be standing first (a
-        kneeling/prone/fallen figure must rise before it can disengage). It may
-        not also make a normal attack — except that it may move onto an adjacent
-        enemy's hex to attempt hand-to-hand combat that same turn (p.19), in which
-        case the grapple is initiated. Higher-DX enemies still get their strike
-        this turn — the engine resolves their queued attacks normally.
-        """
-        if figure.current_option != Option.DISENGAGE:
-            raise IllegalAction(f"{figure.name} did not choose to disengage this turn")
-        if figure.posture != Posture.STANDING:
-            raise IllegalAction(f"{figure.name} must stand up before it can disengage")
-        if figure.attacked_this_turn:
-            raise IllegalAction(f"{figure.name} has already acted this turn")
-        if figure.position is None or dest is None:
-            raise IllegalAction("a disengage needs a destination hex")
-        if self.arena.distance(figure.position, dest) != 1:
-            raise IllegalAction("a disengage moves exactly one hex")
-        occupant = self.figure_at(dest)
-        if occupant is not None and occupant in self.enemies_of(figure):
-            # Disengage straight into a grapple on an eligible adjacent foe (p.19).
-            if not self._can_initiate_hth(figure, occupant):
-                raise IllegalAction(
-                    f"{figure.name} cannot grapple {occupant.name}"
-                )
-            self.hth_attack(figure, occupant)
-            return
-        if not self.arena.contains(dest) or dest in self.occupied(exclude=figure):
-            raise IllegalAction(f"{dest} is not a free hex to disengage into")
-        figure.position = dest
-        figure.attacked_this_turn = True          # the move replaces its attack
-        # Flag the disengage so resolve_combat's melee branch applies the p.19 DX
-        # timing: a higher-or-equal-DX foe still strikes as the figure leaves, a
-        # lower-DX foe gets no chance (#147).
-        figure.disengaged_this_turn = True
-        line = narrate_move(figure, Option.DISENGAGE, True)
-        if line:
-            self.log.append(line)
-
-    def _queue_hth_strike(self, attacker: Figure, defender: Figure) -> None:
-        """Queue a grapple strike — always at the +4 'rear' adjustment (p.18)."""
-        self._pending.append(PendingAttack(
-            attacker, defender, zone=REAR, ignore_facing=False, range_penalty=0,
-            hth_damage=self._hth_damage(attacker, defender)))
-
-    def _clear_hth(self, figure: Figure) -> None:
-        """Break every grapple ``figure`` is in (it died, or broke free)."""
-        for uid in figure.hth_opponents:
-            foe = self._by_uid(uid)
-            if foe is not None and figure.uid in foe.hth_opponents:
-                foe.hth_opponents.remove(figure.uid)
-        figure.hth_opponents = []
-
+class _ShieldRushMixin:
     # ---- shield-rush (p.13) ----
     def _can_shield_rush(self, attacker: Figure) -> bool:
         """Whether ``attacker`` could shield-rush this combat phase (p.13).
@@ -1289,6 +1304,8 @@ class GameState:
         ]
         return all(direction == directions[0] for direction in directions)
 
+
+class _CombatMixin:
     # ---- combat ----
     def in_front_arc(self, attacker: Figure, point: Hex) -> bool:
         """Whether ``point`` lies in ``attacker``'s front arc, ignoring posture.
@@ -1323,33 +1340,8 @@ class GameState:
         also stand in the attacker's front arc.
         """
         option = attacker.current_option
-        if option is None or not spec(option).is_attack:
-            raise IllegalAction(
-                f"{attacker.name} did not choose an attack option this turn"
-            )
-        if not attacker.can_act():
-            raise IllegalAction(f"{attacker.name} cannot attack")
-        if attacker.flying:                       # a flyer lands to attack (p.21)
-            raise IllegalAction(f"{attacker.name} must land before it can attack")
-        # One attack per turn (Section VII): reject a second declaration, whether
-        # the figure already has an attack queued this combat phase or already
-        # resolved one. A multi-shot missile is a single PendingAttack with
-        # shots>1 (not repeated queue_attack calls), so this does not affect it.
-        if attacker.attacked_this_turn or any(
-            pending.attacker is attacker for pending in self._pending
-        ):
-            raise IllegalAction(f"{attacker.name} has already attacked this turn")
-        option_spec = spec(option)
-        weapon = attacker.ready_weapon
-        if weapon is None:
-            raise IllegalAction(f"{attacker.name} has no ready weapon")
+        weapon = self._validate_attack(attacker, target, option)
         is_missile = weapon.kind == WeaponKind.MISSILE
-        if option_spec.is_missile != is_missile:
-            raise IllegalAction(
-                f"{weapon.name} cannot be used with option {option.value}"
-            )
-        if is_missile and attacker.missile_cooldown > 0:
-            raise IllegalAction(f"{weapon.name} is still reloading")
         distance = self.arena.distance(attacker.position, target.position)
         # A throwable melee weapon aimed at a non-adjacent foe is hurled (p.15);
         # adjacent, it's a normal melee blow.
@@ -1359,74 +1351,123 @@ class GameState:
         situational, situational_note = self._situational_mods(
             attacker, target, weapon, ranged, is_throw=is_throw)
         if ranged:
-            # The target must lie in the attacker's front arc (p.15-16): you fire
-            # where you face. (Posture-independent, so a prone crossbowman may
-            # still shoot along its facing.)
-            if not self.in_front_arc(attacker, target.position):
-                raise IllegalAction(
-                    f"{target.name} is not in {attacker.name}'s front arc"
-                )
-            if is_throw:
-                range_penalty = -distance     # -1 DX per hex of distance (p.15)
-                shots = 1
-            else:
-                # Missile range is penalised by megahex (MH) distance, not raw
-                # hex count (p.16): the map's 7-hex flowers are the yardstick.
-                megahexes = megahex_distance(
-                    self.arena.layout, attacker.position, target.position)
-                range_penalty = self.rules.missile_range_penalty(megahexes)
-                shots = max_missile_shots(weapon, attacker.base_adj_dx)
-                if option == Option.ONE_LAST_SHOT:
-                    shots = 1     # the parting shot looses a single arrow (p.7
-                                  # option l); two-shot fire belongs to option f
-
-            # zone is carried so a ready shield still stops frontal fire, and it
-            # is the target's zone (as for melee) so a thrown weapon striking an
-            # exposed flank/rear earns the +2/+4 facing bonus -- a thrown attack
-            # is "treated exactly like a regular attack" (p.15). Only true missile
-            # weapons "never get a bonus for the target's facing" (p.16), so the
-            # facing add is suppressed for missiles alone (ignore_facing). The
-            # line-of-flight is traced from attacker to target either way, so
-            # intervening figures and fly-on resolve directionally regardless.
-            if second_target is not None:
-                if not is_missile:
-                    raise IllegalAction(
-                        "only a missile weapon may split its two shots between targets"
-                    )
-                if shots < 2:
-                    raise IllegalAction(
-                        f"{attacker.name} gets only one shot this turn — no second target"
-                    )
-                if not self.in_front_arc(attacker, second_target.position):
-                    raise IllegalAction(
-                        f"{second_target.name} is not in {attacker.name}'s front arc"
-                    )
-            self._pending.append(
-                PendingAttack(attacker, target, zone=zone,
-                              ignore_facing=is_missile, range_penalty=range_penalty,
-                              shots=shots, thrown=is_throw,
-                              situational=situational, situational_note=situational_note,
-                              second_target=second_target)
-            )
+            self._queue_ranged_attack(
+                attacker, target, option, weapon, is_missile, is_throw, distance,
+                zone, situational, situational_note, second_target)
         else:
-            if second_target is not None:
-                raise IllegalAction("a melee attack strikes a single target")
-            if target not in self.melee_targets(attacker, weapon):
-                raise IllegalAction(
-                    f"{target.name} is not within {attacker.name}'s reach"
-                )
-            adjacent = self.arena.distance(attacker.position, target.position) == 1
-            self._pending.append(
-                PendingAttack(attacker, target, zone=zone,
-                              ignore_facing=False, range_penalty=0,
-                              situational=situational, situational_note=situational_note,
-                              damage_dice_bonus=self._pole_charge_dice(
-                                  attacker, target, weapon, adjacent),
-                              charge_resolve_first=self._pole_charge_resolve_first(
-                                  attacker, target, weapon, adjacent))
-            )
+            self._queue_melee_attack(
+                attacker, target, weapon, zone, situational, situational_note,
+                second_target)
         if with_main_gauche:
             self._queue_main_gauche_jab(attacker, target)
+
+    def _validate_attack(self, attacker: Figure, target: Figure, option):
+        """Shared guards for declaring any attack (Section VII), returning the
+        attacker's ready weapon.
+
+        The figure must have chosen an attack option, be able to act, be on the
+        ground (a flyer lands to attack, p.21), not have attacked already this turn
+        (one attack per turn — a multi-shot bow is one PendingAttack with
+        ``shots>1``, not repeated calls), and hold a ready weapon whose kind matches
+        the chosen option (and, for a missile, not be reloading)."""
+        if option is None or not spec(option).is_attack:
+            raise IllegalAction(
+                f"{attacker.name} did not choose an attack option this turn"
+            )
+        if not attacker.can_act():
+            raise IllegalAction(f"{attacker.name} cannot attack")
+        if attacker.flying:                       # a flyer lands to attack (p.21)
+            raise IllegalAction(f"{attacker.name} must land before it can attack")
+        if attacker.attacked_this_turn or any(
+            pending.attacker is attacker for pending in self._pending
+        ):
+            raise IllegalAction(f"{attacker.name} has already attacked this turn")
+        weapon = attacker.ready_weapon
+        if weapon is None:
+            raise IllegalAction(f"{attacker.name} has no ready weapon")
+        is_missile = weapon.kind == WeaponKind.MISSILE
+        if spec(option).is_missile != is_missile:
+            raise IllegalAction(
+                f"{weapon.name} cannot be used with option {option.value}"
+            )
+        if is_missile and attacker.missile_cooldown > 0:
+            raise IllegalAction(f"{weapon.name} is still reloading")
+        return weapon
+
+    def _queue_ranged_attack(
+        self, attacker: Figure, target: Figure, option, weapon,
+        is_missile: bool, is_throw: bool, distance: int, zone,
+        situational: int, situational_note: str, second_target: Figure | None,
+    ) -> None:
+        """Queue a missile or thrown attack (p.15-16).
+
+        The target must lie in the attacker's front arc (you fire where you face —
+        posture-independent, so a prone crossbowman still shoots along its facing).
+        ``zone`` is carried so a ready shield still stops frontal fire, and is the
+        target's zone (as for melee) so a thrown weapon striking an exposed
+        flank/rear earns the +2/+4 facing bonus — a thrown attack is "treated
+        exactly like a regular attack" (p.15). Only true missile weapons "never get
+        a bonus for the target's facing" (p.16), so the facing add is suppressed for
+        missiles alone (``ignore_facing``)."""
+        if not self.in_front_arc(attacker, target.position):
+            raise IllegalAction(
+                f"{target.name} is not in {attacker.name}'s front arc"
+            )
+        if is_throw:
+            range_penalty = -distance     # -1 DX per hex of distance (p.15)
+            shots = 1
+        else:
+            # Missile range is penalised by megahex (MH) distance, not raw hex
+            # count (p.16): the map's 7-hex flowers are the yardstick.
+            megahexes = megahex_distance(
+                self.arena.layout, attacker.position, target.position)
+            range_penalty = self.rules.missile_range_penalty(megahexes)
+            shots = max_missile_shots(weapon, attacker.base_adj_dx)
+            if option == Option.ONE_LAST_SHOT:
+                shots = 1     # the parting shot looses a single arrow (p.7 option
+                              # l); two-shot fire belongs to option f
+        if second_target is not None:
+            if not is_missile:
+                raise IllegalAction(
+                    "only a missile weapon may split its two shots between targets"
+                )
+            if shots < 2:
+                raise IllegalAction(
+                    f"{attacker.name} gets only one shot this turn — no second target"
+                )
+            if not self.in_front_arc(attacker, second_target.position):
+                raise IllegalAction(
+                    f"{second_target.name} is not in {attacker.name}'s front arc"
+                )
+        self._pending.append(
+            PendingAttack(attacker, target, zone=zone,
+                          ignore_facing=is_missile, range_penalty=range_penalty,
+                          shots=shots, thrown=is_throw,
+                          situational=situational, situational_note=situational_note,
+                          second_target=second_target)
+        )
+
+    def _queue_melee_attack(
+        self, attacker: Figure, target: Figure, weapon, zone,
+        situational: int, situational_note: str, second_target: Figure | None,
+    ) -> None:
+        """Queue a single melee blow against a foe within reach (Section VII)."""
+        if second_target is not None:
+            raise IllegalAction("a melee attack strikes a single target")
+        if target not in self.melee_targets(attacker, weapon):
+            raise IllegalAction(
+                f"{target.name} is not within {attacker.name}'s reach"
+            )
+        adjacent = self.arena.distance(attacker.position, target.position) == 1
+        self._pending.append(
+            PendingAttack(attacker, target, zone=zone,
+                          ignore_facing=False, range_penalty=0,
+                          situational=situational, situational_note=situational_note,
+                          damage_dice_bonus=self._pole_charge_dice(
+                              attacker, target, weapon, adjacent),
+                          charge_resolve_first=self._pole_charge_resolve_first(
+                              attacker, target, weapon, adjacent))
+        )
 
     def _queue_main_gauche_jab(self, attacker: Figure, target: Figure) -> None:
         """Queue the off-hand main-gauche's separate -4 DX jab (p.13).
@@ -1468,6 +1509,14 @@ class GameState:
             ignore_facing=pending.ignore_facing,
         ) + pending.situational
 
+    @staticmethod
+    def _shot_count(pending: PendingAttack) -> int:
+        """How many shots/blows ``pending`` resolves this combat phase — its
+        ``shots`` (a high-adjDX bow fires twice), but never fewer than one. The
+        single definition of the ``max(1, shots)`` round count shared by the
+        rounds loop in :meth:`resolve_combat`."""
+        return max(1, pending.shots)
+
     def resolve_combat(self) -> list[AttackResult]:
         """Resolve all queued attacks, highest adjDX first (Section VII).
 
@@ -1492,10 +1541,10 @@ class GameState:
         # So two duelling archers fire A1, B1, A2, B2, not A1, A2, B1, B2 (#154).
         # Melee, thrown, HTH and main-gauche attacks are all single-shot and so
         # resolve entirely in the first round; only a two-shot bow reaches round 1.
-        max_shots = max((max(1, pending.shots) for pending in ordered), default=1)
+        max_shots = max((self._shot_count(pending) for pending in ordered), default=1)
         for shot_index in range(max_shots):
             for pending in ordered:
-                if shot_index < max(1, pending.shots):
+                if shot_index < self._shot_count(pending):
                     self._resolve_attack_shot(pending, shot_index, results)
         self._pending.clear()
         self._announce_victory()
@@ -1518,24 +1567,7 @@ class GameState:
             # (p.13, #151) — roll and knock-down here, in adjDX order.
             self._resolve_shield_rush(pending, results)
             return
-        # Prone figures can't fight — except a prone crossbowman who may fire, or a
-        # figure grappling on the ground in hand-to-hand. A prone crossbowman fires
-        # steadied (p.16) — but NOT if it was knocked prone by damage earlier this
-        # same phase: a figure knocked down "may not attack that turn" if it has not
-        # already (p.20). One already prone (chose to go prone/kneel last turn, or
-        # dropped prone to fire this turn via option f) still fires.
-        crossbow = (attacker.ready_weapon is not None
-                    and attacker.ready_weapon.kind == WeaponKind.MISSILE
-                    and attacker.ready_weapon.reload > 0
-                    and not attacker.knocked_down_this_turn)
-        if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
-            return
-        if shot_index >= 1 and (attacker.ready_weapon is None
-                                or attacker.ready_weapon.kind != WeaponKind.MISSILE):
-            # Only a two-shot bow reaches a later round. If its bow was dropped or
-            # broken on a first-shot fumble (17/18) there is nothing left in hand to
-            # loose the second arrow (#154) — and with the weapon gone the branch
-            # below would otherwise mis-resolve it as a phantom melee swing.
+        if not self._can_strike_now(attacker, shot_index):
             return
         # A flying weapon — hurled or fired — traces a line-of-flight: anyone in the
         # way may be hit, and a clean miss flies on (p.15-16). Thrown weapons are
@@ -1555,9 +1587,44 @@ class GameState:
             else:
                 self._resolve_flight(pending, results)
             return
-        # A melee/HTH/main-gauche blow — always a single shot, so shot_index is 0.
-        # Before rolling, a melee blow can fail to land outright (#147). HTH
-        # grapples (resolved on a shared hex, hth_damage set) are exempt.
+        self._resolve_one_melee(pending, weapon, results)
+
+    def _can_strike_now(self, attacker: Figure, shot_index: int) -> bool:
+        """Whether ``attacker`` may still land this shot/blow — the prone /
+        knocked-down / crossbow gate, re-checked every round.
+
+        Prone figures can't fight — except a prone crossbowman who may fire, or a
+        figure grappling on the ground in hand-to-hand. A prone crossbowman fires
+        steadied (p.16) — but NOT if it was knocked prone by damage earlier this
+        same phase: a figure knocked down "may not attack that turn" if it has not
+        already (p.20). One already prone (chose to go prone/kneel last turn, or
+        dropped prone to fire this turn via option f) still fires.
+
+        Only a two-shot bow reaches a later round. If its bow was dropped or broken
+        on a first-shot fumble (17/18) there is nothing left in hand to loose the
+        second arrow (#154) — and with the weapon gone the melee branch would
+        otherwise mis-resolve it as a phantom swing.
+        """
+        crossbow = (attacker.ready_weapon is not None
+                    and attacker.ready_weapon.kind == WeaponKind.MISSILE
+                    and attacker.ready_weapon.reload > 0
+                    and not attacker.knocked_down_this_turn)
+        if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
+            return False
+        if shot_index >= 1 and (attacker.ready_weapon is None
+                                or attacker.ready_weapon.kind != WeaponKind.MISSILE):
+            return False
+        return True
+
+    def _resolve_one_melee(self, pending: PendingAttack, weapon, results: list) -> None:
+        """Resolve a single melee / HTH / main-gauche blow — always one shot.
+
+        Before rolling, a melee blow can fail to land outright (#147); HTH
+        grapples (resolved on a shared hex, ``hth_damage`` set) are exempt. On a
+        miss against a foe down in an HTH pile, a standing striker rolls on into
+        the pile (Hitting Your Friends, p.17-18).
+        """
+        attacker = pending.attacker
         if pending.hth_damage is None and self._melee_whiffs(pending, weapon):
             self._whiff(attacker, pending.target, weapon, pending, results)
             return
@@ -1756,6 +1823,8 @@ class GameState:
         if (target.is_dead or target.collapsed) and target.in_hth:
             self._clear_hth(target)              # a downed grappler releases its hold
 
+
+class _ForceRetreatMixin:
     # ---- force retreat (Section: Forcing Retreat) ----
     def can_force_retreat(self, attacker: Figure, target: Figure) -> bool:
         return (
@@ -1799,37 +1868,59 @@ class GameState:
         self.log.append(narrate_retreat(attacker, target, advance))
         return target.position
 
-    # ---- end of turn ----
-    def end_turn(self) -> None:
-        """Settle injury flags and reset per-turn state, then advance the turn."""
-        for figure in self.figures:
-            # Option (g): a STAND UP chosen in movement takes effect now, at the
-            # end of the combat phase (p.6-7). The figure stayed prone/kneeling
-            # through this turn's combat and only now rises to its feet. (Crawl
-            # keeps it grounded and never sets this option.)
-            if (figure.current_option == Option.STAND_UP
-                    and figure.posture != Posture.STANDING):
-                figure.posture = Posture.STANDING
-            figure.wounded_last_turn = (
-                figure.hits_this_turn >= figure.wound_hits_threshold
-            )
-            for flag, default in PER_TURN_FLAGS.items():
-                setattr(figure, flag, default)
-            figure.current_option = None
-            # A crossbow reloads a turn closer — but an engaged figure cannot
-            # reload (p.16), so its bolt stays unspent until it breaks free.
-            if figure.missile_cooldown > 0 and not self.engaged(figure):
-                figure.missile_cooldown -= 1
-            # A grappler who got time to ready a dagger (a 3-4 defense roll) has
-            # it in hand from next turn on.
-            if figure.hth_drew_dagger:
-                dagger = next((w for w in figure.weapons
-                               if w.name in self._DAGGERS), None)
-                if dagger is not None:
-                    figure.ready_weapon = dagger
-                    self.log.append(narrate_ready(figure, dagger))
-                figure.hth_drew_dagger = False
-        self._pending.clear()
-        self.first_side = None
-        self.turn_number += 1
-        self.log.append(narrate_turn(self.turn_number))
+
+class GameState(
+    _RosterMixin,
+    _TurnMixin,
+    _MovementMixin,
+    _HthMixin,
+    _ShieldRushMixin,
+    _CombatMixin,
+    _ForceRetreatMixin,
+):
+    """The single source of truth for a fight, composed from the responsibility
+    mixins above (#156).
+
+    ``GameState`` itself owns only the shared state every mixin reads through
+    ``self`` -- the arena, the figures, the dice, the queued attacks, the turn
+    counter, the ruleset, and the log. Each mixin is stateless behaviour grouped
+    by responsibility (rosters, turn sequencing, movement, hand-to-hand,
+    shield-rush, combat resolution, force retreat); they call one another through
+    ``self``, with the MRO resolving every cross-mixin call.
+    """
+    def __init__(
+        self,
+        arena: Arena,
+        figures: list[Figure],
+        *,
+        dice: Dice | None = None,
+        ruleset: Ruleset | None = None,
+        combat_type: CombatType = CombatType.DEATH,
+    ):
+        self.arena = arena
+        self.figures = figures
+        self.dice = dice or Dice()
+        # The swappable mechanics. Default: classic Melee. Pass a Ruleset
+        # subclass to swap in different combat/injury/movement mechanics.
+        self.rules = ruleset or Ruleset()
+        # The combat variant (Section IX, p.22). Practice combat is the only one
+        # that changes the fight itself — blunted half-damage weapons, no missiles,
+        # and a drop-out at ST <= 3 (see ``practice``). Death/Arena differ only in
+        # the XP awarded at the end (engine.experience).
+        self.combat_type = combat_type
+        self.turn_number = 1
+        self.log: list[str] = []
+        self._pending: list[PendingAttack] = []
+        self.first_side: str | None = None
+        # Weapons lying on the ground (dropped, fumbled, or thrown), pick-up-able.
+        self.dropped: list[tuple] = []        # (Hex, Weapon)
+        for index, figure in enumerate(figures):
+            if not figure.uid:
+                figure.uid = f"f{index}"
+
+    @property
+    def practice(self) -> bool:
+        """Whether this is a practice bout (p.22): weapons blunted to half damage,
+        no missiles, and figures drop out at ST <= 3. The single mode flag the
+        combat rules read."""
+        return self.combat_type is CombatType.PRACTICE
