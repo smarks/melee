@@ -17,6 +17,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Iterator, MutableMapping
+from dataclasses import dataclass
 
 from django.contrib.auth import get_user_model
 from django.core.signing import BadSignature
@@ -192,8 +193,9 @@ def _combat_actionable(state: GameState) -> list:
     nothing, so it shouldn't drive the 'anyway' warning (#117)."""
     actionable = []
     for figure in state.figures:
-        melee, missile, hth = _attack_targets(state, figure)
-        if (melee or missile or hth or state.shield_rush_targets(figure)
+        targets = _attack_targets(state, figure)
+        if (targets.melee or targets.ranged or targets.hth
+                or state.shield_rush_targets(figure)
                 or figure.current_option == Option.DISENGAGE):
             actionable.append(figure.uid)
     return actionable
@@ -251,8 +253,23 @@ def _do_end_turn(game: dict) -> None:
     game["combat_prepared"] = False
 
 
-def _attack_targets(state: GameState, figure) -> tuple[list, list, list]:
-    """``(melee, missile, hth)`` uid lists ``figure`` could attack this combat phase.
+@dataclass
+class AttackTargets:
+    """The uid lists ``figure`` could attack this combat phase, by attack kind.
+
+    ``ranged`` covers a weapon attack made *at a distance* — it holds either a
+    bow/crossbow's missile targets **or** a throwable weapon's thrown targets
+    (the two are mutually exclusive for one figure, so a single field carries
+    both; the old 3-tuple's middle slot overloaded "missile" to mean either).
+    """
+
+    melee: list
+    ranged: list
+    hth: list
+
+
+def _attack_targets(state: GameState, figure) -> AttackTargets:
+    """Which foes ``figure`` could attack this combat phase, by kind.
 
     Based on where it stands and what weapon is ready — attacks are chosen in the
     combat phase, so no movement-time attack declaration is required. A figure
@@ -260,29 +277,29 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list, list]:
     """
     if not (figure.can_act() and not figure.attacked_this_turn
             and figure.position is not None):
-        return [], [], []
+        return AttackTargets([], [], [])
     option = figure.current_option
     if option is not None and (spec(option).sets_dodge or spec(option).sets_defend):
-        return [], [], []
+        return AttackTargets([], [], [])
     # A figure that chose to disengage moves instead of attacking (option n,
     # p.19); it may never attack the turn it disengages.
     if option == Option.DISENGAGE:
-        return [], [], []
+        return AttackTargets([], [], [])
     # Already grappling: the only attack is the hand-to-hand strike on that foe.
     if figure.in_hth:
-        return [], [], [e.uid for e in state.hth_targets(figure)]
+        return AttackTargets([], [], [e.uid for e in state.hth_targets(figure)])
     hth = [e.uid for e in state.hth_targets(figure)]   # foes it could grapple
     weapon = figure.ready_weapon
     if weapon is None:
-        return [], [], hth
+        return AttackTargets([], [], hth)
     if weapon.kind == WeaponKind.MISSILE:
         if figure.missile_cooldown > 0:
-            return [], [], hth                  # still reloading — can't fire
+            return AttackTargets([], [], hth)   # still reloading — can't fire
         # Any foe may be targeted — the shooter turns to aim (queue_attack faces
         # it), satisfying the p.16 front-arc rule; missiles get no facing bonus
         # so turning costs nothing. (#117 — was silently dropping un-faced foes.)
-        return [], [e.uid for e in state.enemies_of(figure)
-                    if e.position is not None], hth
+        return AttackTargets([], [e.uid for e in state.enemies_of(figure)
+                                  if e.position is not None], hth)
     melee = [e.uid for e in state.melee_targets(figure, weapon)]
     # A throwable weapon can be hurled at any foe out of melee reach (p.15); the
     # thrower turns to aim (queue_attack faces it), so the front arc is satisfied.
@@ -291,7 +308,7 @@ def _attack_targets(state: GameState, figure) -> tuple[list, list, list]:
         in_reach = set(melee)
         throw = [e.uid for e in state.enemies_of(figure)
                  if e.position is not None and e.uid not in in_reach]
-    return melee, throw, hth
+    return AttackTargets(melee, throw, hth)
 
 
 def _auto_facing(state: GameState, figure, final_hex, path=None):
@@ -356,8 +373,8 @@ def _human_has_attack_left(game: dict) -> bool:
     for figure in state.figures:
         if controllers.get(figure.side, "human") != "human":
             continue
-        melee, missile, hth = _attack_targets(state, figure)
-        if melee or missile or hth:
+        targets = _attack_targets(state, figure)
+        if targets.melee or targets.ranged or targets.hth:
             return True
     return False
 
@@ -752,7 +769,9 @@ def api_new_custom(request):
     try:
         arena, figures = scenario.build_custom_skirmish(
             profile.name, body.get("fighters", []), validate=not is_admin)
-    except (ValueError, KeyError) as exc:
+    except ValueError as exc:
+        # Bad fighter input only; chargen raises ValueError for unknown/missing
+        # keys, so an internal KeyError stays a 500 rather than masquerading here.
         return JsonResponse({"error": str(exc)}, status=400)
     pid = _player_id(request) or secrets.token_hex(16)
     payload = _start_game(
@@ -903,16 +922,16 @@ def api_options(request, gid):
 
     # Attacks are chosen in the combat phase: targets depend on where the figure
     # stands and what it has ready, not on a movement-time declaration.
-    melee_targets, missile_targets, hth_targets = _attack_targets(state, figure)
+    targets = _attack_targets(state, figure)
     return JsonResponse({
         "uid": uid,
         "options": options,
-        "melee_targets": melee_targets,
-        "missile_targets": missile_targets,
-        "hth_targets": hth_targets,
+        "melee_targets": targets.melee,
+        "missile_targets": targets.ranged,
+        "hth_targets": targets.hth,
         "shield_rush_targets": [e.uid for e in state.shield_rush_targets(figure)],
         # Whether a melee attack may add the off-hand main-gauche's -4 DX jab (p.13).
-        "main_gauche_jab": bool(melee_targets) and has_offhand_main_gauche(figure),
+        "main_gauche_jab": bool(targets.melee) and has_offhand_main_gauche(figure),
         "disengage_dests": [label_of(h.col, h.row)
                             for h in state.disengage_destinations(figure)],
         "pickups": [w.name for w in state.dropped_in_reach(figure)],
@@ -1266,7 +1285,9 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
     spec.setdefault("name", figure.name)
     try:
         rebuilt = chargen.build(game["profile"], spec, validate_spec=not allow_invalid)
-    except (ValueError, KeyError) as exc:
+    except ValueError as exc:
+        # Bad edit input only; an internal KeyError is a real bug, so let it
+        # propagate (a 500) instead of being reported as an IllegalAction.
         raise IllegalAction(str(exc))
 
     # Identity and where it stands on the board.

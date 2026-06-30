@@ -893,6 +893,40 @@ def test_force_retreat_pushes_enemy_and_can_advance() -> None:
     assert a.position == vacated  # advanced into the vacated hex
 
 
+def test_force_retreat_breaks_ties_deterministically() -> None:
+    """With several legal retreat hexes the choice is stable: the hex furthest
+    from the attacker, settled on (col, row) — never dependent on neighbour-
+    iteration or set ordering (#162)."""
+    state, attacker, target = _duel()
+    # Arm a force retreat directly, isolating the destination choice from combat.
+    attacker.dealt_st_damage_this_turn = True
+    attacker.hits_this_turn = 0
+    assert state.can_force_retreat(attacker, target)
+
+    layout = state.arena.layout
+    start_distance = layout.distance(attacker.position, target.position)
+    occupied = set(state.occupied(exclude=target))
+    candidates = [
+        hex_position
+        for hex_position in state.arena.neighbors(target.position)
+        if hex_position not in occupied
+        and layout.distance(attacker.position, hex_position) > start_distance
+    ]
+    assert len(candidates) > 1                       # the multi-candidate case
+
+    def tie_break_key(hex_position):
+        return (layout.distance(attacker.position, hex_position),
+                hex_position.col, hex_position.row)
+
+    expected = max(candidates, key=tie_break_key)
+    destination = state.force_retreat(attacker, target)
+    assert destination == expected
+    # Furthest hex, and order-independent (reversing the candidate list is same).
+    assert (layout.distance(attacker.position, destination)
+            == max(layout.distance(attacker.position, c) for c in candidates))
+    assert destination == max(reversed(candidates), key=tie_break_key)
+
+
 def test_end_turn_rolls_wound_flag_forward() -> None:
     state, a, b = _duel()
     b.hits_this_turn = 6

@@ -86,6 +86,22 @@ def test_missing_side_is_a_validation_error_not_a_keyerror():
         chargen.build("Classic Melee", spec)
 
 
+def test_build_unknown_equipment_is_a_valueerror_even_with_validation_off():
+    """Admin bypass (validate_spec=False) still reports bad *input* as a domain
+    ValueError, not a raw KeyError — so the view layer can keep KeyError to mean
+    an internal bug (a 500), not "bad input" (a 400). (#162)"""
+    with pytest.raises(ValueError, match="unknown weapon"):
+        chargen.build("Classic Melee", _melee(weapon="Spork"), validate_spec=False)
+    with pytest.raises(ValueError, match="unknown armour"):
+        chargen.build("Classic Melee", _melee(armor="Tinfoil"), validate_spec=False)
+    with pytest.raises(ValueError, match="unknown shield"):
+        chargen.build("Classic Melee", _melee(shield="Trashcan lid"), validate_spec=False)
+    spec = _melee()
+    del spec["weapon"]
+    with pytest.raises(ValueError, match="weapon is required"):
+        chargen.build("Classic Melee", spec, validate_spec=False)
+
+
 def test_same_weapon_as_both_primary_and_second_keeps_its_skill():
     fighter = chargen.build("Tarmar", _tarmar(
         weapon="Broadsword", weapon2="Broadsword", skill=3, skill2=0))

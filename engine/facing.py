@@ -53,17 +53,6 @@ def front_hexes(layout: HexLayout, figure: Figure) -> list[Hex]:
     return fronts
 
 
-def side_hexes(layout: HexLayout, figure: Figure) -> list[Hex]:
-    return [
-        layout.neighbor(figure.position, (figure.facing + delta) % 6)
-        for delta in (2, -2)
-    ]
-
-
-def rear_hex(layout: HexLayout, figure: Figure) -> Hex:
-    return layout.neighbor(figure.position, (figure.facing + 3) % 6)
-
-
 def zone_toward(layout: HexLayout, observer: Figure, point: Hex) -> str | None:
     """Which zone of ``observer`` the ``point`` lies in, or ``None``.
 

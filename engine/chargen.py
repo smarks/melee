@@ -43,6 +43,32 @@ TARMAR_BUDGET = 65
 TARMAR_SKILL_MAX = 5
 
 
+def _required(spec: dict, key: str):
+    """Fetch a required spec field as a domain ``ValueError``, not a ``KeyError``.
+
+    A missing user-supplied field is bad *input* (a 400), so it raises
+    ``ValueError`` like every other rules problem. Keeping ``KeyError`` for
+    genuinely internal lookups lets a real bug surface as a 500 instead of being
+    silently reported to the player as "bad input".
+    """
+    try:
+        return spec[key]
+    except KeyError:
+        raise ValueError(f"{key} is required") from None
+
+
+def _from_catalog(catalog_map: dict, name, kind: str):
+    """Look equipment up by (user-supplied) name, as a domain ``ValueError``.
+
+    An unknown weapon/armour/shield name is bad input, not an internal
+    ``KeyError`` — see :func:`_required`.
+    """
+    try:
+        return catalog_map[name]
+    except KeyError:
+        raise ValueError(f"unknown {kind} {name!r}") from None
+
+
 def _race_from_spec(spec: dict) -> tuple[Race | None, str | None]:
     """Parse the (optional) race from a Classic Melee spec; default human.
 
@@ -160,11 +186,11 @@ def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figur
         if problems:
             raise ValueError("; ".join(problems))
 
-    weapon = WEAPONS[spec["weapon"]]
+    weapon = _from_catalog(WEAPONS, _required(spec, "weapon"), "weapon")
     second_name = spec.get("weapon2")
     second = WEAPONS.get(second_name) if second_name and second_name != "None" else None
-    armor = ARMORS[spec.get("armor") or "None"]
-    shield = SHIELDS[spec.get("shield") or "None"]
+    armor = _from_catalog(ARMORS, spec.get("armor") or "None", "armour")
+    shield = _from_catalog(SHIELDS, spec.get("shield") or "None", "shield")
     # Up to two carried weapons plus a dagger (Section III).
     weapons = [weapon]
     if second is not None and second is not weapon:
@@ -178,12 +204,12 @@ def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figur
         if second is not None and second is not weapon:
             skills[second.name] = spec.get("skill2", 0)
         return create_tarmar_fighter(
-            spec["name"], side=spec["side"],
-            strength=spec["strength"], dexterity=spec["dexterity"],
-            intelligence=spec["intelligence"], wisdom=spec["wisdom"],
-            constitution=spec["constitution"], charisma=spec["charisma"],
+            _required(spec, "name"), side=_required(spec, "side"),
+            strength=_required(spec, "strength"), dexterity=_required(spec, "dexterity"),
+            intelligence=_required(spec, "intelligence"), wisdom=_required(spec, "wisdom"),
+            constitution=_required(spec, "constitution"), charisma=_required(spec, "charisma"),
             weapon_skill=skills, **gear)
     race, _ = _race_from_spec(spec)
-    return create_fighter(spec["name"], spec["strength"], spec["dexterity"],
-                          spec["side"], race=race or Race.HUMAN,
-                          validate=validate_spec, **gear)
+    return create_fighter(_required(spec, "name"), _required(spec, "strength"),
+                          _required(spec, "dexterity"), _required(spec, "side"),
+                          race=race or Race.HUMAN, validate=validate_spec, **gear)
