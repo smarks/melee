@@ -99,3 +99,14 @@ def test_not_engaged_when_neither_faces_the_other() -> None:
     side = LAYOUT.neighbor(Hex(5, 5), 2)              # the enemy's side hex
     me = _place("M", side, facing=2)                  # facing away from the enemy
     assert not is_engaged(LAYOUT, me, [enemy])
+
+
+def test_format_situational_parts_shared_breakdown_fragments() -> None:
+    from engine.facing import SIDE, format_situational_parts
+    assert format_situational_parts(REAR, ignore_facing=False, range_penalty=-3,
+                                    situational_note="") == ["+4 rear", "-3 range"]
+    assert format_situational_parts(SIDE, ignore_facing=False, range_penalty=0,
+                                    situational_note="-2 over body") == ["+2 flank", "-2 over body"]
+    # facing is suppressed for missiles (ignore_facing)
+    assert format_situational_parts(REAR, ignore_facing=True, range_penalty=0,
+                                    situational_note="") == []
