@@ -49,3 +49,12 @@ def test_initiative_autorolls_then_advances_to_movement(live_server, page: Page)
     first.first.click()
 
     expect(banner).to_contain_text("Movement", timeout=10_000)
+
+
+@pytest.mark.django_db
+def test_no_invite_link_in_a_vs_computer_game(live_server, page: Page) -> None:
+    # #165: the board boots Player-vs-Computer by default — no one to invite — so
+    # the Copy-invite button must not be shown.
+    page.goto(live_server.url)
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    expect(page.get_by_role("button", name="Copy invite link")).to_have_count(0)
