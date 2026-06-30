@@ -80,6 +80,25 @@ class IllegalAction(Exception):
 
 @dataclass
 class PendingAttack:
+    """One queued attack, resolved later in the combat phase.
+
+    The flags accumulate across the four attack kinds, and most are specific to
+    one of them — grouped here so it's clear which apply where (the field order
+    is unchanged; some callers build a PendingAttack positionally):
+
+    * **All kinds:** ``attacker``, ``target``, ``zone`` (target facing struck),
+      ``ignore_facing``, ``range_penalty``, ``situational``/``situational_note``
+      (circumstantial DX mod + its label), and ``weapon`` (a weapon override,
+      e.g. the off-hand main-gauche jab; ``None`` means the ready weapon).
+    * **Missile (bow/crossbow):** ``shots`` (>1 = a high-adjDX bow firing twice)
+      and ``second_target`` (the second arrow may aim elsewhere — p.5, p.10).
+    * **Thrown:** ``thrown`` (the weapon leaves the thrower's hand).
+    * **Melee with a pole weapon in/against a charge:** ``damage_dice_bonus``
+      (extra damage dice) and ``charge_resolve_first`` (strikes first).
+    * **Hand-to-hand (grapple):** ``hth_damage`` (a DamageDice override).
+    * **Shield-rush:** ``shield_rush`` (resolved in adjDX order — p.13, #151).
+    """
+
     attacker: Figure
     target: Figure
     zone: str | None
@@ -1729,8 +1748,21 @@ class GameState:
         ]
         if not destinations:
             raise IllegalAction("no hex to retreat into")
+        # Tie-break deterministically rather than leaning on neighbour-iteration
+        # order: push the target into the hex *furthest* from the attacker (it
+        # gives the most ground), and settle any remaining ties on the hex's own
+        # (col, row) so the choice never depends on dict/set ordering.
+        layout = self.arena.layout
+        chosen = max(
+            destinations,
+            key=lambda hex_position: (
+                layout.distance(attacker.position, hex_position),
+                hex_position.col,
+                hex_position.row,
+            ),
+        )
         vacated = target.position
-        target.position = destinations[0]
+        target.position = chosen
         if advance:
             attacker.position = vacated
         self.log.append(narrate_retreat(attacker, target, advance))
