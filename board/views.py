@@ -1075,135 +1075,168 @@ def api_seat(request, gid):
     return response
 
 
-def _dispatch(game: dict, body: dict, *, is_admin: bool = False):
+# A phase's internal name vs. the word used in its guard message. Kept as a small
+# map so the declarative dispatch table below produces byte-for-byte identical
+# "not the <X> phase" errors (notably "move" -> "movement").
+_PHASE_LABEL = {"initiative": "initiative", "move": "movement", "combat": "combat"}
+
+
+def _act_roll_initiative(game: dict, body: dict, *, is_admin: bool = False):
     state: GameState = game["state"]
+    outcome = state.roll_initiative()
+    game["winner"] = outcome["winner"]
+    return outcome
+
+
+def _act_choose_first(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    side = body.get("side")
+    state.choose_first(side)
+    game["order"] = state.move_order()
+    game["moving"] = 0
+    game["phase"] = "move"
+    return None
+
+
+def _act_move(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    figure = _figure(state, body.get("uid", ""))
+    moving_side = game["order"][game["moving"]]
+    if figure.side != moving_side:
+        raise IllegalAction(f"it is {moving_side}'s turn to move")
+    option = _option(body)
+    facing = body.get("facing")
+    dest = body.get("dest")
+    path = []
+    final_hex = figure.position
+    if dest:
+        reach = state.reach_for(figure, option)
+        final_hex = _hex_from_label(dest)
+        path = reach.path_to(final_hex)
+        if path is None:
+            raise IllegalAction("destination not reachable under that option")
+    if facing == "auto":   # default: face an adjacent enemy, else the way you went
+        facing = _auto_facing(state, figure, final_hex, path)
+    state.move(figure, option, path=path, facing=facing, ready=body.get("ready"))
+    return None
+
+
+def _act_end_side_move(game: dict, body: dict, *, is_admin: bool = False):
+    game["moving"] += 1
+    if game["moving"] >= len(game["order"]):
+        game["phase"] = "combat"
+    return None
+
+
+def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    attacker = _figure(state, body.get("uid", ""))
+    target = _figure(state, body.get("target", ""))
+    weapon = attacker.ready_weapon
+    if (weapon is not None and attacker.position is not None
+            and target.position is not None):
+        distance = state.arena.distance(attacker.position, target.position)
+        if weapon.kind == WeaponKind.MISSILE or (weapon.throwable and distance > 1):
+            _aim(state, attacker, target)      # turn to aim the shot (#117)
+    _ensure_attack_option(state, attacker)
+    state.queue_attack(attacker, target,
+                       with_main_gauche=bool(body.get("main_gauche")))
+    return None
+
+
+def _act_queue_hth(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    attacker = _figure(state, body.get("uid", ""))
+    target = _figure(state, body.get("target", ""))
+    attacker.current_option = Option.HTH_ATTACK
+    state.hth_attack(attacker, target)
+    return None
+
+
+def _act_shield_rush(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    attacker = _figure(state, body.get("uid", ""))
+    target = _figure(state, body.get("target", ""))
+    state.shield_rush(attacker, target)
+    return None
+
+
+def _act_hth_disengage(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    state.attempt_hth_disengage(_figure(state, body.get("uid", "")))
+    return None
+
+
+def _act_disengage_move(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    figure = _figure(state, body.get("uid", ""))
+    state.disengage_move(figure, _hex_from_label(body.get("dest", "")))
+    return None
+
+
+def _act_resolve_combat(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    results = state.resolve_combat()
+    return [
+        {
+            "hit": r.hit, "rolled": r.rolled, "needed": r.needed,
+            "damage": r.damage, "multiplier": r.multiplier,
+            "weapon": r.weapon.name if r.weapon else None,
+        }
+        for r in results
+    ]
+
+
+def _act_force_retreat(game: dict, body: dict, *, is_admin: bool = False):
+    state: GameState = game["state"]
+    attacker = _figure(state, body.get("uid", ""))
+    target = _figure(state, body.get("target", ""))
+    state.force_retreat(attacker, target, advance=bool(body.get("advance")))
+    return None
+
+
+def _act_end_turn(game: dict, body: dict, *, is_admin: bool = False):
+    _do_end_turn(game)
+    return None
+
+
+def _act_update_figure(game: dict, body: dict, *, is_admin: bool = False):
+    _update_figure(game, body.get("uid", ""), body.get("spec") or {},
+                   allow_invalid=is_admin)
+    return None
+
+
+# Declarative action registry: action name -> (required_phase_or_None, handler).
+# The phase contract lives here once instead of being copy-pasted as a guard
+# prologue in each branch; ``None`` means the action runs in any phase. Adding an
+# action is a new handler plus one line here, not surgery in a long if/elif chain.
+_ACTIONS = {
+    "roll_initiative": ("initiative", _act_roll_initiative),
+    "choose_first": ("initiative", _act_choose_first),
+    "move": ("move", _act_move),
+    "end_side_move": ("move", _act_end_side_move),
+    "queue_attack": ("combat", _act_queue_attack),
+    "queue_hth": ("combat", _act_queue_hth),
+    "shield_rush": ("combat", _act_shield_rush),
+    "hth_disengage": ("combat", _act_hth_disengage),
+    "disengage_move": ("combat", _act_disengage_move),
+    "resolve_combat": ("combat", _act_resolve_combat),
+    "force_retreat": ("combat", _act_force_retreat),
+    "end_turn": (None, _act_end_turn),
+    "update_figure": (None, _act_update_figure),
+}
+
+
+def _dispatch(game: dict, body: dict, *, is_admin: bool = False):
+    """Route a board action to its handler, enforcing the declared phase once."""
     action = body.get("type")
-
-    if action == "roll_initiative":
-        if game["phase"] != "initiative":
-            raise IllegalAction("not the initiative phase")
-        outcome = state.roll_initiative()
-        game["winner"] = outcome["winner"]
-        return outcome
-
-    if action == "choose_first":
-        if game["phase"] != "initiative":
-            raise IllegalAction("not the initiative phase")
-        side = body.get("side")
-        state.choose_first(side)
-        game["order"] = state.move_order()
-        game["moving"] = 0
-        game["phase"] = "move"
-        return None
-
-    if action == "move":
-        if game["phase"] != "move":
-            raise IllegalAction("not the movement phase")
-        figure = _figure(state, body.get("uid", ""))
-        moving_side = game["order"][game["moving"]]
-        if figure.side != moving_side:
-            raise IllegalAction(f"it is {moving_side}'s turn to move")
-        option = _option(body)
-        facing = body.get("facing")
-        dest = body.get("dest")
-        path = []
-        final_hex = figure.position
-        if dest:
-            reach = state.reach_for(figure, option)
-            final_hex = _hex_from_label(dest)
-            path = reach.path_to(final_hex)
-            if path is None:
-                raise IllegalAction("destination not reachable under that option")
-        if facing == "auto":   # default: face an adjacent enemy, else the way you went
-            facing = _auto_facing(state, figure, final_hex, path)
-        state.move(figure, option, path=path, facing=facing, ready=body.get("ready"))
-        return None
-
-    if action == "end_side_move":
-        if game["phase"] != "move":
-            raise IllegalAction("not the movement phase")
-        game["moving"] += 1
-        if game["moving"] >= len(game["order"]):
-            game["phase"] = "combat"
-        return None
-
-    if action == "queue_attack":
-        if game["phase"] != "combat":
-            raise IllegalAction("not the combat phase")
-        attacker = _figure(state, body.get("uid", ""))
-        target = _figure(state, body.get("target", ""))
-        weapon = attacker.ready_weapon
-        if (weapon is not None and attacker.position is not None
-                and target.position is not None):
-            distance = state.arena.distance(attacker.position, target.position)
-            if weapon.kind == WeaponKind.MISSILE or (weapon.throwable and distance > 1):
-                _aim(state, attacker, target)      # turn to aim the shot (#117)
-        _ensure_attack_option(state, attacker)
-        state.queue_attack(attacker, target,
-                           with_main_gauche=bool(body.get("main_gauche")))
-        return None
-
-    if action == "queue_hth":
-        if game["phase"] != "combat":
-            raise IllegalAction("not the combat phase")
-        attacker = _figure(state, body.get("uid", ""))
-        target = _figure(state, body.get("target", ""))
-        attacker.current_option = Option.HTH_ATTACK
-        state.hth_attack(attacker, target)
-        return None
-
-    if action == "shield_rush":
-        if game["phase"] != "combat":
-            raise IllegalAction("not the combat phase")
-        attacker = _figure(state, body.get("uid", ""))
-        target = _figure(state, body.get("target", ""))
-        state.shield_rush(attacker, target)
-        return None
-
-    if action == "hth_disengage":
-        if game["phase"] != "combat":
-            raise IllegalAction("not the combat phase")
-        state.attempt_hth_disengage(_figure(state, body.get("uid", "")))
-        return None
-
-    if action == "disengage_move":
-        if game["phase"] != "combat":
-            raise IllegalAction("not the combat phase")
-        figure = _figure(state, body.get("uid", ""))
-        state.disengage_move(figure, _hex_from_label(body.get("dest", "")))
-        return None
-
-    if action == "resolve_combat":
-        if game["phase"] != "combat":
-            raise IllegalAction("not the combat phase")
-        results = state.resolve_combat()
-        return [
-            {
-                "hit": r.hit, "rolled": r.rolled, "needed": r.needed,
-                "damage": r.damage, "multiplier": r.multiplier,
-                "weapon": r.weapon.name if r.weapon else None,
-            }
-            for r in results
-        ]
-
-    if action == "force_retreat":
-        if game["phase"] != "combat":
-            raise IllegalAction("not the combat phase")
-        attacker = _figure(state, body.get("uid", ""))
-        target = _figure(state, body.get("target", ""))
-        state.force_retreat(attacker, target, advance=bool(body.get("advance")))
-        return None
-
-    if action == "end_turn":
-        _do_end_turn(game)
-        return None
-
-    if action == "update_figure":
-        _update_figure(game, body.get("uid", ""), body.get("spec") or {},
-                       allow_invalid=is_admin)
-        return None
-
-    raise IllegalAction(f"unknown action {action!r}")
+    entry = _ACTIONS.get(action)
+    if entry is None:
+        raise IllegalAction(f"unknown action {action!r}")
+    required_phase, handler = entry
+    if required_phase is not None and game["phase"] != required_phase:
+        raise IllegalAction(f"not the {_PHASE_LABEL[required_phase]} phase")
+    return handler(game, body, is_admin=is_admin)
 
 
 def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = False) -> None:
