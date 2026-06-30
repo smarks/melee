@@ -85,3 +85,19 @@ def test_four_dice_against_dodging_target() -> None:
     dice = Dice(scripted=[6, 6, 6, 2])
     result = RULES.resolve_attack(dice,_attacker(), target, zone=FRONT, dice_count=4)
     assert not result.hit
+
+
+def test_roll_damage_floors_at_zero_and_applies_the_multiplier() -> None:
+    from engine.combat import roll_damage
+    from engine.rules_data import DamageDice
+    # 1d-4 rolling a 1 -> max(0, -3) -> 0, even when doubled
+    assert roll_damage(Dice(scripted=[1]), DamageDice(1, -4), 2) == 0
+    # 2d-1 rolling 3,3 -> 5, doubled -> 10
+    assert roll_damage(Dice(scripted=[3, 3]), DamageDice(2, -1), 2) == 10
+
+
+def test_roll_damage_extra_dice_are_inside_the_multiplier() -> None:
+    from engine.combat import roll_damage
+    from engine.rules_data import DamageDice
+    # 1d+0 (rolls 4) + one extra die (rolls 2) -> 6, doubled -> 12
+    assert roll_damage(Dice(scripted=[4, 2]), DamageDice(1, 0), 2, extra_dice=1) == 12

@@ -205,3 +205,18 @@ def facing_bonus(zone: str | None) -> int:
     if zone == REAR:
         return 4
     return 0
+
+
+def format_situational_parts(zone: str | None, *, ignore_facing: bool,
+                             range_penalty: int, situational_note: str) -> list[str]:
+    """The shared trailing fragments of a to-hit explanation -- the facing bonus,
+    the range penalty, and any situational note -- used by both rule profiles'
+    breakdown strings so the wording stays consistent."""
+    parts: list[str] = []
+    if not ignore_facing and facing_bonus(zone):
+        parts.append(f"+{facing_bonus(zone)} {'rear' if zone == REAR else 'flank'}")
+    if range_penalty:
+        parts.append(f"{range_penalty:+d} range")
+    if situational_note:
+        parts.append(situational_note)
+    return parts

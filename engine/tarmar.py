@@ -28,8 +28,8 @@ from dataclasses import dataclass, field
 
 import tarmar_rules
 
-from .combat import AttackResult
-from .facing import FRONT, REAR, facing_bonus
+from .combat import AttackResult, roll_damage
+from .facing import FRONT, REAR, facing_bonus, format_situational_parts
 from .figure import Figure
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset, main_gauche_parry
 from .rules_data import KNOCKDOWN_HITS
@@ -208,10 +208,7 @@ class TarmarRuleset(Ruleset):
 
         raw_damage = damage = 0
         if outcome["hit"]:
-            weapon_total = dice.total(weapon.damage.count) + weapon.damage.modifier
-            if extra_dice:                       # pole weapon in/against a charge
-                weapon_total += dice.total(extra_dice)
-            raw_damage = max(0, weapon_total) * multiplier
+            raw_damage = roll_damage(dice, weapon.damage, multiplier, extra_dice)
             stops = target.hits_stopped(
                 from_front=(zone == FRONT), from_rear=(zone == REAR))
             damage = tarmar_rules.damage_after_armour(
@@ -241,7 +238,7 @@ class TarmarRuleset(Ruleset):
         multiplier = 2 if outcome["critical"] else 1
         raw_damage = damage = 0
         if outcome["hit"]:
-            raw_damage = max(0, dice.total(hth_damage.count) + hth_damage.modifier) * multiplier
+            raw_damage = roll_damage(dice, hth_damage, multiplier)
             damage = max(0, raw_damage - target.hits_stopped(
                 from_front=(zone == FRONT), from_rear=(zone == REAR)))
         return AttackResult(
@@ -274,12 +271,9 @@ class TarmarRuleset(Ruleset):
             attacker.strength, weapon.min_strength or None)
         if str_pen:
             parts.append(f"{str_pen:+d} str")
-        if not ignore_facing and facing_bonus(zone):
-            parts.append(f"+{facing_bonus(zone)} {'rear' if zone == REAR else 'flank'}")
-        if range_penalty:
-            parts.append(f"{range_penalty:+d} range")
-        if situational_note:
-            parts.append(situational_note)
+        parts.extend(format_situational_parts(
+            zone, ignore_facing=ignore_facing,
+            range_penalty=range_penalty, situational_note=situational_note))
         roll = f"roll d20 {bonus:+d}" + (f" ({', '.join(parts)})" if parts else "")
         return f"{target}; {roll}"
 

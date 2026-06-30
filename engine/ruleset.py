@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from hexarena.dice import Dice
 
-from .combat import AttackResult, classify_roll, roll_weapon_damage
-from .facing import FRONT, REAR, facing_bonus
+from .combat import AttackResult, classify_roll, roll_damage, roll_weapon_damage
+from .facing import FRONT, REAR, facing_bonus, format_situational_parts
 from .figure import Figure
 from .movement import movement_budget as _movement_budget
 from .rules_data import THREE_DICE, Weapon, WeaponKind
@@ -104,12 +104,9 @@ class Ruleset:
         wound = self.wound_penalty(attacker)
         if wound:
             parts.append(f"{wound:+d} wounded")
-        if not ignore_facing and facing_bonus(zone):
-            parts.append(f"+{facing_bonus(zone)} {'rear' if zone == REAR else 'flank'}")
-        if range_penalty:
-            parts.append(f"{range_penalty:+d} range")
-        if situational_note:
-            parts.append(situational_note)
+        parts.extend(format_situational_parts(
+            zone, ignore_facing=ignore_facing,
+            range_penalty=range_penalty, situational_note=situational_note))
         return " ".join(parts)
 
     def order_dx(
@@ -190,12 +187,12 @@ class Ruleset:
         raw_damage = 0
         damage = 0
         if hit and hth_damage is not None:      # grapple strike (dagger or bare hands)
-            raw_damage = max(0, dice.total(hth_damage.count) + hth_damage.modifier) * multiplier
+            raw_damage = roll_damage(dice, hth_damage, multiplier)
             damage = max(0, raw_damage - self.absorbed(target, zone=zone))
         elif hit and weapon is not None:
             raw_damage = self.weapon_damage(dice, weapon, multiplier)
-            if extra_dice:                      # pole weapon in/against a charge
-                raw_damage += dice.total(extra_dice)
+            if extra_dice:                      # pole weapon in/against a charge:
+                raw_damage += dice.total(extra_dice)   # classic adds it AFTER the crit multiplier (cf. Tarmar; #154)
             stopped = self.absorbed(target, zone=zone) + main_gauche_parry(
                 target, weapon, zone)
             damage = max(0, raw_damage - stopped)

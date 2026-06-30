@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 from hexarena.dice import Dice
 
-from .rules_data import THREE_DICE, Weapon
+from .rules_data import THREE_DICE, DamageDice, Weapon
 
 # Special three-dice totals -> (hit?, damage multiplier, drop, break).
 THREE_DICE_SPECIALS = {
@@ -91,7 +91,22 @@ def classify_roll(
     return (rolled <= needed, 1, False, False)
 
 
+def roll_damage(dice: Dice, damage_dice: DamageDice, multiplier: int,
+                extra_dice: int = 0) -> int:
+    """Roll a damage-dice spec, floor at 0, and apply the crit multiplier (pre-armor).
+
+    The single source for the "roll a ``DamageDice`` -> hits" calculation used by
+    weapons and hand-to-hand in both rule profiles. ``extra_dice`` (the pole-charge
+    bonus die) are rolled INTO the total *before* the multiplier; a caller that
+    wants them added after the multiplier instead adds them itself (see #154 on the
+    classic-vs-Tarmar difference in where the charge die lands).
+    """
+    total = dice.total(damage_dice.count) + damage_dice.modifier
+    if extra_dice:
+        total += dice.total(extra_dice)
+    return max(0, total) * multiplier
+
+
 def roll_weapon_damage(dice: Dice, weapon: Weapon, multiplier: int) -> int:
     """Roll a weapon's damage dice and apply the crit multiplier (pre-armor)."""
-    weapon_total = dice.total(weapon.damage.count) + weapon.damage.modifier
-    return max(0, weapon_total) * multiplier
+    return roll_damage(dice, weapon.damage, multiplier)
