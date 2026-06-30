@@ -1409,15 +1409,26 @@ class GameState:
         self._announce_victory()
         return results
 
+    def victor(self) -> str | None:
+        """The side that has won — the only one still standing, once at least two
+        sides started (Combat to the Death). None while the fight is undecided.
+
+        Single source of the win condition, shared by the engine's victory log
+        and the board's API payload (#157)."""
+        standing = {f.side for f in self.figures
+                    if not f.collapsed and not f.is_dead}
+        if len(self.sides) >= 2 and len(standing) == 1:
+            return next(iter(standing))
+        return None
+
     def _announce_victory(self) -> None:
         """Log the win once a single side is left standing."""
         if getattr(self, "_victory_announced", False):
             return
-        standing = {f.side for f in self.figures
-                    if not f.collapsed and not f.is_dead}
-        if len(self.sides) >= 2 and len(standing) == 1:
+        winner = self.victor()
+        if winner is not None:
             self._victory_announced = True
-            self.log.append(narrate_victory(next(iter(standing))))
+            self.log.append(narrate_victory(winner))
 
     def _cascade_into_pile(
         self, attacker: Figure, intended: Figure, weapon,
