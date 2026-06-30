@@ -185,15 +185,19 @@ def build_game(
 
 
 def build_custom_skirmish(
-    profile_name: str, fighter_specs: list[dict]
+    profile_name: str, fighter_specs: list[dict], *, validate: bool = True
 ) -> tuple[Arena, list[Figure]]:
-    """Build a game from validated, player-edited fighter specs (any team count).
+    """Build a game from player-edited fighter specs (any team count).
 
-    Each spec is validated and built by :mod:`engine.chargen` (raising
-    ``ValueError`` on an illegal fighter), then grouped by side and seated around
-    the arena edges like :func:`build_game`.
+    Each spec is built by :mod:`engine.chargen` (raising ``ValueError`` on an
+    illegal fighter), then grouped by side and seated around the arena edges like
+    :func:`build_game`. ``validate`` is normally on so the point-budget/rules
+    bind every fighter; pass ``validate=False`` for an admin who may seat fighters
+    outside the character-creation rules (#180, same bypass as the mid-game edit
+    in #86).
     """
-    built = [chargen.build(profile_name, spec) for spec in fighter_specs]
+    built = [chargen.build(profile_name, spec, validate_spec=validate)
+             for spec in fighter_specs]
     team_ids: list[str] = []
     for figure in built:
         if figure.side not in team_ids:

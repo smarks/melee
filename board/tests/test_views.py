@@ -847,6 +847,37 @@ def test_admin_can_edit_a_figure_outside_the_rules(client: Client, django_user_m
     assert res.status_code == 200
 
 
+@pytest.mark.django_db
+def test_admin_starts_custom_game_outside_the_rules(
+        client: Client, django_user_model) -> None:
+    # #180: an admin may start a custom game seating fighters past the
+    # character-creation point budget; a regular player is still held to the rules
+    # (the same bypass the mid-game figure edit grants in #86).
+    over_budget = [
+        {"name": "Hulk", "side": "red", "strength": 99, "dexterity": 12,
+         "weapon": "Broadsword", "armor": "Leather", "shield": "None"},
+        {"name": "Foe", "side": "blue", "strength": 12, "dexterity": 12,
+         "weapon": "Broadsword", "armor": "Leather", "shield": "None"},
+    ]
+    body = json.dumps({"profile": "Classic Melee", "fighters": over_budget})
+
+    rejected = Client().post("/api/game/new_custom", data=body,
+                             content_type="application/json")
+    assert rejected.status_code == 400           # the rules bind a regular player
+
+    admin_user = django_user_model.objects.create_user(
+        username="gm3", password="gm-pass-55555", is_staff=True)
+    admin = Client()
+    admin.force_login(admin_user)
+    landed = admin.post("/api/game/new_custom", data=body,
+                        content_type="application/json")
+    assert landed.status_code == 200             # the admin's over-budget game starts
+    payload = landed.json()
+    assert payload["is_admin"] is True
+    hulk = next(f for f in payload["state"]["figures"] if f["name"] == "Hulk")
+    assert hulk["max_st"] == 99                  # the out-of-budget ST took effect
+
+
 def _victory_duel(gid: str):
     """A red knight standing over a slain blue knight, registered at game over.
 

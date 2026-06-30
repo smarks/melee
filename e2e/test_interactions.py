@@ -58,3 +58,36 @@ def test_no_invite_link_in_a_vs_computer_game(live_server, page: Page) -> None:
     page.goto(live_server.url)
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
     expect(page.get_by_role("button", name="Copy invite link")).to_have_count(0)
+
+
+@pytest.mark.django_db
+def test_live_fighter_editor_opens_in_a_modal(live_server, page: Page) -> None:
+    # #181: editing a fighter mid-game happens in a first-class modal whose Apply
+    # button is always reachable -- not crammed into the bottom corner panel where
+    # it used to be clipped.
+    page.goto(live_server.url)
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+
+    # A hot-seat game so the viewer owns -- and so may edit -- every fighter.
+    page.get_by_role("button", name="New game").click()
+    page.locator("#mode").select_option("pxp")
+    page.get_by_role("button", name="Begin game").click()
+    expect(page.locator("#setup")).to_be_hidden()
+
+    # Selecting a fighter from the roster offers a prominent Edit button (the
+    # game's stat catalog loads asynchronously, so allow a moment).
+    page.locator("#roster .row").first.click()
+    edit = page.locator("#selInfo").get_by_role(
+        "button", name=re.compile("Edit this fighter"))
+    expect(edit).to_be_visible(timeout=10_000)
+
+    # It opens a modal -- not the cramped corner panel -- with a reachable Apply.
+    edit.click()
+    modal = page.locator("#liveEdit")
+    expect(modal).to_be_visible()
+    apply = modal.get_by_role("button", name="Apply to game")
+    expect(apply).to_be_visible()
+
+    # Applying the edit closes the modal, returning the player to the board.
+    apply.click()
+    expect(modal).to_be_hidden()

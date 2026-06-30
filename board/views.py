@@ -734,7 +734,12 @@ def api_best_weapons(request):
 
 @csrf_exempt
 def api_new_custom(request):
-    """Start a game from player-edited, validated fighter specs."""
+    """Start a game from player-edited fighter specs.
+
+    Specs are validated against the character-creation rules for a regular
+    player; an admin (#180) may seat fighters outside those rules, the same
+    bypass the mid-game figure edit grants in #86.
+    """
     if request.method != "POST":
         return HttpResponse(status=405)
     try:
@@ -743,16 +748,17 @@ def api_new_custom(request):
         return JsonResponse({"error": "bad JSON"}, status=400)
     profile = PROFILES.get(body.get("profile", ""), PROFILES["Classic Melee"])
     computer_sides = {s for s in (body.get("computer") or "").split(",") if s}
+    is_admin = _is_admin(request)
     try:
         arena, figures = scenario.build_custom_skirmish(
-            profile.name, body.get("fighters", []))
+            profile.name, body.get("fighters", []), validate=not is_admin)
     except (ValueError, KeyError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     pid = _player_id(request) or secrets.token_hex(16)
     payload = _start_game(
         arena, figures, profile, computer_sides, body.get("seed"), pid)
     payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
-    payload["is_admin"] = _is_admin(request)
+    payload["is_admin"] = is_admin
     response = JsonResponse(payload)
     if _player_id(request) is None:
         _set_player_cookie(response, pid)
