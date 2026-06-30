@@ -1090,3 +1090,23 @@ def test_shield_rush_action_replaces_the_attack(client: Client) -> None:
         assert red.attacked_this_turn                       # the rush consumed its action
     finally:
         del GAMES["duel-test"]
+
+
+@pytest.mark.django_db
+def test_admin_site_serves_user_and_character_crud(client: Client, django_user_model) -> None:
+    # #140: an is_staff admin gets user + saved-character/-game CRUD at /admin/;
+    # a non-staff account is turned away.
+    boss = django_user_model.objects.create_user(
+        "gm", password="gm-pass-12345", is_staff=True, is_superuser=True)
+    client.force_login(boss)
+    assert client.get("/admin/").status_code == 200
+    assert client.get("/admin/board/savedcharacter/").status_code == 200
+    assert client.get("/admin/board/savedgame/").status_code == 200
+    user_meta = django_user_model._meta
+    assert client.get(
+        f"/admin/{user_meta.app_label}/{user_meta.model_name}/").status_code == 200
+
+    joe = django_user_model.objects.create_user("joe", password="joe-pass-12345")
+    plain = Client()
+    plain.force_login(joe)
+    assert plain.get("/admin/").status_code in (302, 403)   # non-staff turned away

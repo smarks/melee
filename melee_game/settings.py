@@ -70,6 +70,7 @@ if not DEBUG and not _GUARD_EXEMPT:
         )
 
 INSTALLED_APPS = [
+    "django.contrib.admin",
     "django.contrib.contenttypes",
     "django.contrib.auth",
     "django.contrib.sessions",
