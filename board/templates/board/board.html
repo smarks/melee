@@ -50,13 +50,14 @@
   .menu .commit.muted { color: var(--muted); }
   .menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
   aside { width: 420px; border-left: 1px solid var(--line); background: var(--panel);
-          display: flex; flex-direction: column; overflow: auto; }
+          display: flex; flex-direction: column; overflow: hidden; }
   .pad { padding: 14px 16px; border-bottom: 1px solid var(--line); }
-  /* Fixed-size right-hand panels: each scrolls internally; the layout never
-     reshuffles as content changes. Details (#selInfo) is the largest. */
-  #roster { flex: 0 0 150px; overflow: auto; }
-  #controls { flex: 0 0 210px; overflow: auto; }
-  #selInfo { flex: 1 1 260px; overflow: auto; }
+  /* Controls sit at the top and always render in full (the primary action is
+     never clipped); the reference panels below share the remaining height and
+     scroll, so the buttons are always reachable. */
+  #controls { flex: 0 0 auto; }
+  #roster { flex: 0 1 150px; overflow: auto; }
+  #selInfo { flex: 0 1 220px; overflow: auto; }
   .seclabel { padding: 9px 16px 3px; color: var(--muted); font-size: 11px;
               text-transform: uppercase; letter-spacing: .6px; }
   .banner { font-weight: 600; }
@@ -78,7 +79,7 @@
   .chip.green { color: var(--green); border-color: var(--green); }
   .chip.gold { color: var(--gold); border-color: var(--gold); }
   .chip.violet { color: var(--violet); border-color: var(--violet); }
-  #log { flex: 0 0 190px; overflow: auto; padding: 6px 16px 10px; font-size: 15px; }
+  #log { flex: 1 1 110px; overflow: auto; padding: 6px 16px 10px; font-size: 15px; }
   #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
   /* A blow that actually lands stands out from misses, dodges, and movement. */
   #log div.log-hit { color: var(--ink); font-weight: 600; font-size: 16.5px; }
@@ -170,14 +171,14 @@
       <div class="banner" id="phaseBanner">Loading…</div>
       <div class="hint" id="hint"></div>
     </div>
+    <div class="seclabel">Controls</div>
+    <div class="pad" id="controls"></div>
     <div class="seclabel">Players</div>
     <div class="pad" id="seats"></div>
     <div class="seclabel">Game status</div>
     <div id="log"></div>
     <div class="seclabel">Characters</div>
     <div class="pad roster" id="roster"></div>
-    <div class="seclabel">Controls</div>
-    <div class="pad" id="controls"></div>
     <div class="seclabel">Selected character</div>
     <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
   </aside>
