@@ -488,12 +488,12 @@ def test_pole_against_charge_gets_extra_die_and_strikes_first() -> None:
 
 
 def test_pole_charge_bonus_die_is_added_after_the_crit_multiplier() -> None:
-    # p.10-12 (#154), RAW-ambiguous: on a critical pole-charge the weapon's own
-    # dice and flat modifier are multiplied, but the +1 charge die is a flat bonus
-    # added AFTER the multiplier. This is the deliberate classic-Melee ruling the
-    # engine commits to (a subclass like Tarmar may multiply it instead); this test
-    # locks it. A Spear is 1d+1; a triple-damage hit makes its base (die 4 -> 5)
-    # into 15, then the charge die (6) is added once -> 21, not (4+1+6)*3 = 33.
+    # p.10-12 (#154; ruling confirmed in #190): on a critical pole-charge the weapon's
+    # own dice and flat modifier are multiplied, but the +1 charge die is a flat bonus
+    # added AFTER the multiplier -- the RAW-correct classic-Melee ruling (a subclass
+    # like Tarmar may multiply it instead); this test locks it. A Spear is 1d+1; a
+    # triple-damage hit makes its base (die 4 -> 5) into 15, then the charge die (6)
+    # is added once -> 21, not (4+1+6)*3 = 33.
     from engine.rules_data import SHORTSWORD, SPEAR
 
     arena = Arena(cols=9, rows=15)
