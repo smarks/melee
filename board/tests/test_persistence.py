@@ -35,7 +35,7 @@ _FIGURE_FIELDS = (
     "moved_this_turn", "dodging", "unconscious", "dead", "current_option",
     "dealt_st_damage_this_turn", "missile_cooldown", "hth_opponents",
     "hth_drew_dagger", "shield_ready", "current_st",
-    "knocked_down_this_turn", "moved_straight", "defending",
+    "knocked_down_this_turn", "moved_straight", "defending", "dropped_out",
     "experience", "added_st", "added_dx",
 )
 _TARMAR_FIELDS = (
@@ -128,6 +128,7 @@ def _assert_figures_equal(left, right) -> None:
 
 def _assert_state_equal(left: GameState, right: GameState) -> None:
     assert left.turn_number == right.turn_number
+    assert left.combat_type == right.combat_type
     assert left.first_side == right.first_side
     assert left.sides == right.sides
     assert left.log == right.log
@@ -152,6 +153,23 @@ def test_state_round_trips_through_json(profile_name: str) -> None:
     restored = persistence.state_from_json(json.loads(blob))
 
     _assert_state_equal(state, restored)
+
+
+def test_practice_mode_and_drop_out_round_trip() -> None:
+    """A practice bout (combat_type) and a dropped-out figure survive save/load."""
+    from engine.experience import CombatType
+
+    state = _two_figure_game("Classic Melee")
+    state.combat_type = CombatType.PRACTICE
+    state.figures[1].dropped_out = True            # out of the fight, alive
+
+    restored = persistence.state_from_json(
+        json.loads(json.dumps(persistence.state_to_json(state))))
+
+    assert restored.combat_type is CombatType.PRACTICE
+    assert restored.practice
+    assert restored.figures[1].dropped_out
+    assert restored.figures[1].collapsed and not restored.figures[1].is_dead
 
 
 @pytest.mark.parametrize("profile_name", ["Classic Melee", "Tarmar"])

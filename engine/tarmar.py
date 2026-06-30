@@ -161,11 +161,12 @@ class TarmarRuleset(Ruleset):
         self, dice, attacker, target, *, zone, weapon=None,
         dice_count=1, ignore_facing=False, range_penalty=0,
         situational=0, situational_note="", extra_dice=0, hth_damage=None,
-        force_hit=False, ranged=False,
+        force_hit=False, ranged=False, blunted=False,
     ) -> AttackResult:
         weapon = weapon or attacker.ready_weapon
         if hth_damage is not None:
-            return self._resolve_hth(dice, attacker, target, zone, weapon, hth_damage)
+            return self._resolve_hth(
+                dice, attacker, target, zone, weapon, hth_damage, blunted=blunted)
         weapon_class = WEAPON_CLASS.get(weapon.name) if weapon else None
         if weapon_class is None:
             return AttackResult(
@@ -209,6 +210,7 @@ class TarmarRuleset(Ruleset):
         raw_damage = damage = 0
         if outcome["hit"]:
             raw_damage = roll_damage(dice, weapon.damage, multiplier, extra_dice)
+            raw_damage = self._blunt(raw_damage, blunted)  # practice bout (p.22)
             stops = target.hits_stopped(
                 from_front=(zone == FRONT), from_rear=(zone == REAR))
             damage = tarmar_rules.damage_after_armour(
@@ -227,7 +229,8 @@ class TarmarRuleset(Ruleset):
                 target_number, skill, zone, ignore_facing, range_penalty, bonus,
                 situational_note))
 
-    def _resolve_hth(self, dice, attacker, target, zone, weapon, hth_damage) -> AttackResult:
+    def _resolve_hth(self, dice, attacker, target, zone, weapon, hth_damage,
+                     *, blunted=False) -> AttackResult:
         """A grapple strike under Tarmar — bare hands have no weapon class, so this
         rolls d20 vs a flat grapple number with the DX and +4 rear adjustments,
         then takes off the target's flat armour stops. (An approximation.)"""
@@ -239,6 +242,7 @@ class TarmarRuleset(Ruleset):
         raw_damage = damage = 0
         if outcome["hit"]:
             raw_damage = roll_damage(dice, hth_damage, multiplier)
+            raw_damage = self._blunt(raw_damage, blunted)  # practice bout (p.22)
             damage = max(0, raw_damage - target.hits_stopped(
                 from_front=(zone == FRONT), from_rear=(zone == REAR)))
         return AttackResult(

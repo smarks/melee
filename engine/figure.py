@@ -147,6 +147,7 @@ class Figure:
     defending: bool = False          # chose SHIFT_DEFEND (4 dice to hit it in melee)
     unconscious: bool = False
     dead: bool = False
+    dropped_out: bool = False        # left a practice bout at ST <= 3 (p.22): out, alive
     uid: str = ""                    # stable id for UI / occupancy
     current_option: object | None = None  # the Option chosen this turn
     dealt_st_damage_this_turn: bool = False  # for force-retreat eligibility
@@ -185,8 +186,10 @@ class Figure:
 
     @property
     def collapsed(self) -> bool:
-        """ST 0 or below: unconscious, cannot fight (p.3)."""
-        return self.current_st <= 0
+        """Out of the fight but not dead: ST 0 or below — unconscious (p.3) — or
+        dropped out of a practice bout at ST <= 3 (p.22). Either way the figure
+        can no longer fight; :attr:`is_dead` distinguishes a true kill."""
+        return self.current_st <= 0 or self.dropped_out
 
     @property
     def is_dead(self) -> bool:

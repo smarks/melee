@@ -55,7 +55,9 @@ function openSetup() { $("setup").style.display = "flex"; }
 function closeSetup() { $("setup").style.display = "none"; }
 async function startSetup() {
   const p = encodeURIComponent($("profile").value);
-  const q = `profile=${p}&mode=${$("mode").value}&teams=${$("teams").value}&per_team=${$("perTeam").value}`;
+  const practice = $("practiceMode") && $("practiceMode").checked ? 1 : 0;
+  const q = `profile=${p}&mode=${$("mode").value}&teams=${$("teams").value}`
+    + `&per_team=${$("perTeam").value}&practice=${practice}`;
   await startGame(q);
   closeSetup();
 }
@@ -1211,7 +1213,8 @@ async function startCustom() {
   const fighters = Array.from($("editorRoster").children).map(readCard);
   const teams = [...new Set(fighters.map(f => f.side))];   // one AI team = the last
   const computer = ($("mode") && $("mode").value === "pxai") ? teams[teams.length - 1] : "";
-  const body = {profile: $("profile").value, computer, fighters};
+  const practice = $("practiceMode") && $("practiceMode").checked;
+  const body = {profile: $("profile").value, computer, fighters, practice};
   const data = await api("/api/game/new_custom", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)});

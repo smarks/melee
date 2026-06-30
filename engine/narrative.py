@@ -180,6 +180,12 @@ def narrate_victory(side: str) -> str:
     return f"🏆 The {side} hold the field — victory!"
 
 
+def narrate_dropout(figure: Figure) -> str:
+    """A practice-bout drop-out (p.22): worn down to ST 3 or less, the figure
+    bows out of the friendly fight unhurt — out of play, but alive."""
+    return _cap(f"{_name(figure)} drops out of the practice bout (ST 3 or less).")
+
+
 def narrate_ready(figure: Figure, weapon) -> str:
     """A figure drawing a different carried weapon."""
     return _cap(f"{_name(figure)} readies {_article(weapon.name)}.")

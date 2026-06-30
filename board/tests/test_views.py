@@ -25,6 +25,18 @@ def test_new_game_has_four_figures_in_initiative(client: Client) -> None:
     assert sides == {"red", "blue"}
 
 
+def test_new_game_practice_flag_starts_a_practice_bout(client: Client) -> None:
+    from board.views import GAMES
+
+    practice = client.get("/api/game/new?seed=1&practice=1").json()
+    assert practice["state"]["practice"] is True
+    assert GAMES[practice["gid"]]["state"].practice
+
+    normal = client.get("/api/game/new?seed=1").json()        # default: not practice
+    assert normal["state"]["practice"] is False
+    assert not GAMES[normal["gid"]]["state"].practice
+
+
 def test_game_deep_link_serves_the_board_page(client: Client) -> None:
     # #85: /game/<gid> serves the board page (the shareable join link). The gid
     # is read client-side; the view just renders the template either way.

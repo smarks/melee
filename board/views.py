@@ -180,6 +180,7 @@ def _meta(game: dict) -> dict:
         "moving_side": moving,
         "winner": game["winner"],
         "victory": state.victor(),
+        "practice": state.practice,
         "controllers": game.get("controllers", {}),
         "queued": len(state._pending),
         "force_retreat_options": retreat_options,
@@ -597,11 +598,18 @@ def api_admin_character_delete(request, pk):
     return JsonResponse({"ok": True})
 
 
-def _start_game(arena, figures, profile, computer_sides, seed, owner_key) -> dict:
-    """Register a new game and return its initial payload (shared entry point)."""
+def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
+                *, practice: bool = False) -> dict:
+    """Register a new game and return its initial payload (shared entry point).
+
+    ``practice`` starts a Practice Combat bout (p.22): blunted half-damage
+    weapons, no missiles, and a drop-out at ST <= 3 (see :class:`GameState`)."""
     seed_value = _seed_int(seed)
     dice = Dice(seed=seed_value) if seed_value is not None else Dice()
-    state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset)
+    combat_type = (experience.CombatType.PRACTICE if practice
+                   else experience.CombatType.DEATH)
+    state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset,
+                      combat_type=combat_type)
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
     # Seats record who may drive each side. The creating session owns every human
@@ -635,6 +643,13 @@ def _int_param(request, name: str) -> int:
         return int(request.GET.get(name, "") or 0)
     except ValueError:
         return 0
+
+
+def _is_truthy(value) -> bool:
+    """Read a checkbox-style flag from a query string or JSON body."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _seed_int(seed) -> int | None:
@@ -675,7 +690,8 @@ def api_new_game(request):
         computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
     pid = _player_id(request) or secrets.token_hex(16)
     payload = _start_game(
-        arena, figures, profile, computer_sides, request.GET.get("seed"), pid)
+        arena, figures, profile, computer_sides, request.GET.get("seed"), pid,
+        practice=_is_truthy(request.GET.get("practice")))
     payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
     payload["is_admin"] = _is_admin(request)
     response = JsonResponse(payload)
@@ -775,7 +791,8 @@ def api_new_custom(request):
         return JsonResponse({"error": str(exc)}, status=400)
     pid = _player_id(request) or secrets.token_hex(16)
     payload = _start_game(
-        arena, figures, profile, computer_sides, body.get("seed"), pid)
+        arena, figures, profile, computer_sides, body.get("seed"), pid,
+        practice=_is_truthy(body.get("practice")))
     payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
     payload["is_admin"] = is_admin
     response = JsonResponse(payload)
@@ -825,12 +842,15 @@ def api_game_award(request, gid):
         body = json.loads(request.body or "{}")
     except json.JSONDecodeError:
         return JsonResponse({"error": "bad JSON"}, status=400)
+    state: GameState = game["state"]
+    # Default to the bout's own variant (a practice game awards practice XP) so the
+    # mode set at creation is the single source of truth; an explicit body wins.
     try:
-        combat_type = experience.CombatType(body.get("combat_type", "death"))
+        combat_type = experience.CombatType(
+            body.get("combat_type") or state.combat_type.value)
     except ValueError:
         return JsonResponse(
             {"error": f"unknown combat type {body.get('combat_type')!r}"}, status=400)
-    state: GameState = game["state"]
     awards = experience.award_experience(
         state.figures, combat_type,
         winning_side=state.victor(),
