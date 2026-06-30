@@ -20,8 +20,36 @@
   header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
   header .sub { color: var(--muted); font-size: 12px; }
   .wrap { display: flex; gap: 0; height: calc(100vh - 49px); }
-  .arena { flex: 1; overflow: auto; display: grid; place-items: center; padding: 16px;
-           position: relative; }
+  /* Three columns: Map (largest) | Game Control | Characters. Each side column
+     scrolls internally (min-height:0) so the right-column scroll bug (#181)
+     can't recur and the Map keeps the lion's share of the width. */
+  .arena { flex: 1 1 auto; min-width: 0; overflow: auto; display: grid;
+           place-items: center; padding: 16px; position: relative; }
+  .col { width: 340px; flex: 0 0 340px; border-left: 1px solid var(--line);
+         background: var(--panel); display: flex; flex-direction: column;
+         overflow: hidden; min-height: 0; }
+  #gameControl { overflow: auto; }
+  .trackerScroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
+  @media (max-width: 1100px) {
+    .wrap { flex-direction: column; height: auto; }
+    .col { width: auto; flex: none; border-left: none; border-top: 1px solid var(--line); }
+    .arena { min-height: 60vh; }
+  }
+  /* Game Control panel (the former New-game modal, now always inline). */
+  .gc-section { margin-top: 12px; }
+  .gc-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .gc-opp button.primary { font-weight: 600; }
+  .gc-buttons { margin-top: 14px; display: flex; gap: 8px; }
+  .gc-buttons button { flex: 1; }
+  #gameControl.locked .gc-lock { display: block; }
+  .gc-lock { display: none; color: var(--target); font-size: 12px; margin-bottom: 8px; }
+  /* Characters tracker: per-side group headers + a chosen-action column. */
+  .grouphd { margin: 12px 0 2px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .grouphd:first-child { margin-top: 2px; }
+  .roster .row .action { color: var(--accent); font-size: 12.5px; text-align: right;
+                         white-space: nowrap; margin-left: 8px; }
+  .roster .row .action.todo { font-weight: 600; }
+  .roster .row .action.idle { color: var(--muted); }
   /* Configurable-colour swatches pinned to the corners of the play area. */
   .swatch { position: absolute; width: 20px; height: 20px; padding: 0; cursor: pointer;
             border: 1px solid var(--line); border-radius: 4px; background: none;
@@ -49,18 +77,11 @@
   .menu .commit { padding: 2px 10px 6px; font-size: 12px; }
   .menu .commit.muted { color: var(--muted); }
   .menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
-  aside { width: 420px; border-left: 1px solid var(--line); background: var(--panel);
-          display: flex; flex-direction: column; overflow: hidden; }
   .pad { padding: 14px 16px; border-bottom: 1px solid var(--line); }
-  /* Controls sit at the top and always render in full (the primary action is
-     never clipped); the reference panels below share the remaining height and
-     scroll, so the buttons are always reachable. */
-  #controls { flex: 0 0 auto; }
-  /* min-height:0 lets these flex children shrink below their content so their
-     own overflow:auto scrollbar engages -- without it the aside's overflow:hidden
-     clipped the bottom panel and its scroll never worked (#181). */
-  #roster { flex: 0 1 150px; overflow: auto; min-height: 0; }
-  #selInfo { flex: 0 1 220px; overflow: auto; min-height: 0; }
+  /* The end-phase action is pinned at the bottom of the Characters column and
+     always renders in full (never clipped); the tracker above it scrolls. */
+  #controls { flex: 0 0 auto; border-top: 1px solid var(--line); }
+  #roster, #selInfo { min-height: 0; }
   .seclabel { padding: 9px 16px 3px; color: var(--muted); font-size: 11px;
               text-transform: uppercase; letter-spacing: .6px; }
   .banner { font-weight: 600; }
@@ -82,7 +103,7 @@
   .chip.green { color: var(--green); border-color: var(--green); }
   .chip.gold { color: var(--gold); border-color: var(--gold); }
   .chip.violet { color: var(--violet); border-color: var(--violet); }
-  #log { flex: 1 1 110px; overflow: auto; min-height: 0; padding: 6px 16px 10px; font-size: 15px; }
+  #log { padding: 6px 16px 10px; font-size: 15px; }
   #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
   /* A blow that actually lands stands out from misses, dodges, and movement. */
   #log div.log-hit { color: var(--ink); font-weight: 600; font-size: 16.5px; }
@@ -154,7 +175,6 @@
 <body>
 <header>
   <h1>Melee</h1>
-  <button class="primary" onclick="openSetup()">New game</button>
   {% if request.user.is_staff %}<button onclick="openAdmin()" title="Manage users and characters">⚙ Admin</button>{% endif %}
   <span class="sub">The Fantasy Trip — man-to-man combat</span>
   <span class="sub" id="turnInfo"></span>
@@ -174,62 +194,74 @@
     <button id="resetColors" title="Reset colours to default" onclick="resetTheme()">⟲ reset</button>
     <svg id="svg"></svg>
   </div>
-  <aside>
+  <!-- Middle column: Game Control (the former New-game modal, now always inline).
+       Before a game it is editable with New Game enabled; once a game is running
+       every setting locks read-only and End Game takes over. -->
+  <aside class="col" id="gameControl">
+    <div class="seclabel">Game Control</div>
     <div class="pad">
-      <div class="banner" id="phaseBanner">Loading…</div>
-      <div class="hint" id="hint"></div>
-    </div>
-    <div class="seclabel">Controls</div>
-    <div class="pad" id="controls"></div>
-    <div class="seclabel">Players</div>
-    <div class="pad" id="seats"></div>
-    <div class="seclabel">Game status</div>
-    <div id="log"></div>
-    <div class="seclabel">Characters</div>
-    <div class="pad roster" id="roster"></div>
-    <div class="seclabel">Selected character</div>
-    <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
-  </aside>
-</div>
-<div id="tokenMenu" class="menu" style="display:none"></div>
-<div id="setup">
-  <div id="setupBox">
-    <div class="banner">New game</div>
-    <div style="margin-top:8px">
-      <label>Rules
+      <div class="gc-lock">🔒 Settings locked while a game is in progress — press End Game to change them.</div>
+      <label>Rule set
         <select id="profile">
           <option value="Classic Melee">Classic Melee</option>
           <option value="Tarmar">Tarmar (d20)</option>
         </select>
       </label>
-    </div>
-    <div style="margin-top:8px">
-      <label>Mode
-        <select id="mode">
+      <div class="gc-section gc-opp">
+        <div class="muted">Opponent</div>
+        <button id="oppComputer" class="primary" onclick="setOpponent('pxai')">Add computer opponent</button>
+        <button id="oppHuman" onclick="setOpponent('pxp')">Add human opponent</button>
+        <!-- The two buttons drive this hidden value the rest of the flow reads. -->
+        <select id="mode" hidden>
           <option value="pxai">Player vs Computer</option>
           <option value="pxp">Player vs Player (same screen)</option>
         </select>
-      </label>
+        <div class="gc-note">You play the first side; the opponent is the second.
+          Human = same-screen hot-seat, Computer = AI.</div>
+      </div>
+      <div class="gc-section">
+        <label>Characters per player
+          <select id="perTeam"><option>1</option><option selected>2</option></select>
+        </label>
+        <span class="muted">— max 2</span>
+        <!-- Two sides only: you + one opponent. -->
+        <select id="teams" hidden><option selected>2</option></select>
+      </div>
+      <div class="gc-section">
+        <label><input type="checkbox" id="practiceMode"> Practice combat
+          <span class="muted">— blunted weapons, no missiles, drop out at ST&nbsp;3</span>
+        </label>
+      </div>
+      <div class="gc-section">
+        <button id="editCharBtn" onclick="openEditor()">✎ Edit character…</button>
+        <div class="gc-note">Generate or load a saved character per fighter; an admin may override the rules.</div>
+      </div>
+      <div class="gc-buttons">
+        <button class="primary" id="newGameBtn" onclick="newGame()">New Game</button>
+        <button id="endGameBtn" onclick="endGame()">End Game</button>
+      </div>
     </div>
-    <div style="margin-top:8px">
-      <label>Teams <select id="teams"><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
-      <label>Combatants per team <select id="perTeam"><option>1</option><option selected>2</option><option>3</option></select></label>
+  </aside>
+  <!-- Right column: the Characters tracker (former Players + Characters panels,
+       merged), grouped by side, each row showing its chosen action this phase.
+       The end-phase action button (#controls) is pinned at the bottom. -->
+  <aside class="col tracker">
+    <div class="pad">
+      <div class="banner" id="phaseBanner">Loading…</div>
+      <div class="hint" id="hint"></div>
     </div>
-    <div style="margin-top:8px">
-      <label><input type="checkbox" id="practiceMode"> Practice combat
-        <span class="muted">— blunted weapons (half damage), no missiles, drop out at ST&nbsp;3</span>
-      </label>
+    <div class="trackerScroll">
+      <div class="seclabel">Characters</div>
+      <div class="pad roster" id="roster"></div>
+      <div class="seclabel">Selected character</div>
+      <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
+      <div class="seclabel">Game status</div>
+      <div id="log"></div>
     </div>
-    <div style="margin-top:12px">
-      <button onclick="openEditor()">✎ Edit fighters…</button>
-      <span class="muted">— customise each team's stats &amp; gear (optional)</span>
-    </div>
-    <div style="margin-top:10px">
-      <button class="primary" onclick="startSetup()">Begin game</button>
-      <button onclick="closeSetup()">Cancel</button>
-    </div>
-  </div>
+    <div class="pad" id="controls"></div>
+  </aside>
 </div>
+<div id="tokenMenu" class="menu" style="display:none"></div>
 <div id="editor">
   <div id="editorBox">
     <div class="banner">Customize fighters</div>
