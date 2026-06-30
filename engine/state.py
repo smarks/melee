@@ -94,6 +94,7 @@ class PendingAttack:
     hth_damage: object | None = None  # DamageDice override for a grapple (HTH) attack
     weapon: object | None = None  # Weapon override (off-hand main-gauche jab); else ready
     second_target: Figure | None = None  # a two-shot bow's 2nd arrow may aim elsewhere (p.5, p.10)
+    shield_rush: bool = False  # this "attack" is a shield-rush, resolved in adjDX order (p.13, #151)
 
 
 class GameState:
@@ -843,6 +844,10 @@ class GameState:
             raise IllegalAction(f"{dest} is not a free hex to disengage into")
         figure.position = dest
         figure.attacked_this_turn = True          # the move replaces its attack
+        # Flag the disengage so resolve_combat's melee branch applies the p.19 DX
+        # timing: a higher-or-equal-DX foe still strikes as the figure leaves, a
+        # lower-DX foe gets no chance (#147).
+        figure.disengaged_this_turn = True
         line = narrate_move(figure, Option.DISENGAGE, True)
         if line:
             self.log.append(line)
@@ -885,18 +890,21 @@ class GameState:
                 if enemy.position in fronts]
 
     def shield_rush(self, attacker: Figure, target: Figure) -> str:
-        """Strike with a ready shield to floor a foe (p.13).
+        """Declare a shield-rush to floor a foe (p.13), resolved in adjDX order.
 
         Instead of a weapon attack, a figure with a ready shield rushes an
-        adjacent front enemy. Roll to hit as usual; a miss does nothing. On a hit
-        the target makes a saving roll against its adjDX or falls prone — a full
-        three dice when the rusher's *original* ST is at least the target's, only
-        two dice when the rusher is weaker. A 12 on two dice, or a 16/17/18 on
-        three, is an automatic fall. A shield-rush never inflicts hits, and has no
-        effect on a foe more than twice the rusher's (original) ST.
+        adjacent front enemy. "The shield-rush is considered an attack for all
+        purposes" (p.13), so — like every other blow — it resolves in adjDX order
+        during :meth:`resolve_combat`, not the instant it is declared (#151). It
+        is therefore *queued* here (mirroring how :meth:`_queue_hth_strike` queues
+        a grapple) and rolled at the rusher's adjDX slot, so a higher-DX victim
+        gets its own strike in *before* it is knocked down.
 
-        Returns the outcome: ``"miss"``, ``"no_effect"``, ``"fall"`` or
-        ``"stand"``.
+        The one outcome that needs neither a roll nor any ordering is a foe more
+        than twice the rusher's (original) ST: the rush simply cannot move it, so
+        that is settled at once. Returns ``"no_effect"`` in that case, otherwise
+        ``"queued"`` (the hit/save/knockdown land later in :meth:`resolve_combat`,
+        which logs the ``miss``/``fall``/``stand`` story).
         """
         if not self._can_shield_rush(attacker):
             raise IllegalAction(f"{attacker.name} cannot shield-rush")
@@ -907,6 +915,35 @@ class GameState:
             raise IllegalAction(
                 f"{target.name} is not an adjacent foe in {attacker.name}'s front")
         attacker.attacked_this_turn = True        # the rush replaces its attack
+        # Compare ORIGINAL ST (not the wounded current ST); a foe more than twice
+        # as strong simply isn't moved — no roll, no ordering, settle it now.
+        if target.strength > 2 * attacker.strength:
+            self.log.append(narrate_shield_rush(attacker, target, "no_effect"))
+            return "no_effect"
+        zone = attack_zone(layout, attacker, target)
+        self._pending.append(PendingAttack(
+            attacker, target, zone=zone, ignore_facing=False, range_penalty=0,
+            shield_rush=True))
+        return "queued"
+
+    def _resolve_shield_rush(self, pending: PendingAttack, results: list) -> None:
+        """Resolve a queued shield-rush at the rusher's adjDX slot (p.13, #151).
+
+        Roll to hit as usual; a miss does nothing. On a hit the target makes a
+        saving roll against its adjDX or falls prone — three dice when the rusher's
+        *original* ST is at least the target's, two when the rusher is weaker. A 12
+        on two dice, or 16/17/18 on three, is an automatic fall. A shield-rush
+        never inflicts hits. Resolving here (not at declaration) means a higher-DX
+        foe has already struck before it is floored.
+        """
+        attacker, target = pending.attacker, pending.target
+        if not attacker.can_act() or attacker.posture != Posture.STANDING:
+            return                       # floored or downed before its slot — rush lost
+        layout = self.arena.layout
+        if (target.is_dead or target.collapsed or target.position is None
+                or self.arena.distance(attacker.position, target.position) != 1
+                or target.position not in set(front_hexes(layout, attacker))):
+            return                       # the foe is gone, down, or no longer in reach
         zone = attack_zone(layout, attacker, target)
         needed = self.rules.to_hit_number(attacker, zone=zone)
         dice_count = self.rules.attack_dice_count(target, ranged=False)
@@ -915,12 +952,7 @@ class GameState:
             rolled, dice_count, needed)
         if not hit:
             self.log.append(narrate_shield_rush(attacker, target, "miss"))
-            return "miss"
-        # Compare ORIGINAL ST (not the wounded current ST); a foe more than twice
-        # as strong simply isn't moved.
-        if target.strength > 2 * attacker.strength:
-            self.log.append(narrate_shield_rush(attacker, target, "no_effect"))
-            return "no_effect"
+            return
         saving_dice = 3 if attacker.strength >= target.strength else 2
         save_roll = self.dice.total(saving_dice)
         auto_fall = ((saving_dice == 2 and save_roll == 12)
@@ -930,9 +962,8 @@ class GameState:
             if target.in_hth:
                 self._clear_hth(target)           # a floored grappler loses its hold
             self.log.append(narrate_shield_rush(attacker, target, "fall"))
-            return "fall"
-        self.log.append(narrate_shield_rush(attacker, target, "stand"))
-        return "stand"
+        else:
+            self.log.append(narrate_shield_rush(attacker, target, "stand"))
 
     def _pole_charge_dice(self, attacker: Figure, target: Figure,
                           weapon, adjacent: bool) -> int:
@@ -1380,6 +1411,22 @@ class GameState:
                           situational_note="-4 main-gauche", weapon=main_gauche)
         )
 
+    def _order_dx(self, pending: PendingAttack) -> int:
+        """The combat-ordering adjDX of a pending attack (Section VII, p.5/p.16).
+
+        The full adjDX "counting everything BUT missile and thrown weapon range":
+        the situational mods (prone-crossbow +1, over-body -2, sheltering -4,
+        halfling +2 throw, pole +2 vs charge) shift the order, but the range
+        penalty does not — a distant target makes you less accurate, not slower.
+        ``pending.situational`` already excludes range (that lives in
+        ``range_penalty``). Shared by attack ordering and the p.19 disengage DX
+        gate (#147) so both read the same value.
+        """
+        return self.rules.order_dx(
+            pending.attacker, zone=pending.zone,
+            ignore_facing=pending.ignore_facing,
+        ) + pending.situational
+
     def resolve_combat(self) -> list[AttackResult]:
         """Resolve all queued attacks, highest adjDX first (Section VII).
 
@@ -1394,17 +1441,7 @@ class GameState:
             # This is independent of the +1 damage die: even a one-hex pole charge
             # (no extra die) resolves first.
             charge_first = 0 if pending.charge_resolve_first else 1
-            # Ordering uses the full adjDX "counting everything BUT missile and
-            # thrown weapon range" (p.16): the situational mods (prone-crossbow
-            # +1, over-body -2, sheltering -4, halfling +2 throw, pole +2 vs
-            # charge) shift the order, but the range penalty does not — a distant
-            # target makes you less accurate, not slower. ``pending.situational``
-            # already excludes range (that lives in ``range_penalty``).
-            order_dx = self.rules.order_dx(
-                pending.attacker, zone=pending.zone,
-                ignore_facing=pending.ignore_facing,
-            ) + pending.situational
-            return (charge_first, -order_dx)
+            return (charge_first, -self._order_dx(pending))
 
         results: list[AttackResult] = []
         ordered = sorted(self._pending, key=ordering_key)
@@ -1435,6 +1472,11 @@ class GameState:
         attacker = pending.attacker
         if not attacker.can_act():
             return          # killed/knocked out before its turn to strike
+        if pending.shield_rush:
+            # A shield-rush resolves "for all purposes" as an attack at its slot
+            # (p.13, #151) — roll and knock-down here, in adjDX order.
+            self._resolve_shield_rush(pending, results)
+            return
         # Prone figures can't fight — except a prone crossbowman who may fire, or a
         # figure grappling on the ground in hand-to-hand. A prone crossbowman fires
         # steadied (p.16) — but NOT if it was knocked prone by damage earlier this
@@ -1473,6 +1515,11 @@ class GameState:
                 self._resolve_flight(pending, results)
             return
         # A melee/HTH/main-gauche blow — always a single shot, so shot_index is 0.
+        # Before rolling, a melee blow can fail to land outright (#147). HTH
+        # grapples (resolved on a shared hex, hth_damage set) are exempt.
+        if pending.hth_damage is None and self._melee_whiffs(pending, weapon):
+            self._whiff(attacker, pending.target, weapon, pending, results)
+            return
         # Recompute the facing zone against the target's CURRENT posture and facing:
         # an earlier attacker this phase may have knocked the target prone (so it now
         # has no front, scoring the +4 rear adjustment) or turned it. The declared
@@ -1505,6 +1552,54 @@ class GameState:
                 and not attacker.in_hth and pending.target.in_hth
                 and pending.hth_damage is None):
             self._cascade_into_pile(attacker, pending.target, weapon, pending, results)
+
+    def _melee_whiffs(self, pending: PendingAttack, weapon) -> bool:
+        """Whether a queued melee blow fails to connect before it is even rolled
+        (#147).
+
+        Two cases, both keyed off what has happened since the attack was declared:
+
+        * The target **disengaged** this turn (option n, p.19). Only a foe whose
+          combat-order adjDX is at least the fleer's own adjDX caught it "as it
+          leaves"; a lower-DX foe gets no chance and whiffs. The reach is *not*
+          re-checked here — the higher-DX strike lands at the moment of leaving,
+          while the figure was still adjacent, even though it now stands a hex off.
+        * The target is simply **out of reach** — now farther than the weapon's
+          reach (a force-retreat or other relocation between declaration and
+          resolution). Melee cannot reach across the gap.
+        """
+        attacker, target = pending.attacker, pending.target
+        if target.disengaged_this_turn:
+            target_adj_dx = self.rules.order_dx(target, zone=None, ignore_facing=True)
+            return self._order_dx(pending) < target_adj_dx
+        reach = weapon.reach if weapon is not None else 1
+        return (attacker.position is None or target.position is None
+                or self.arena.layout.distance(attacker.position, target.position) > reach)
+
+    def _whiff(self, attacker: Figure, target: Figure, weapon,
+               pending: PendingAttack, results: list) -> None:
+        """A melee blow that never lands — the foe slipped out of reach or fled
+        before a slower attacker could catch it (#147).
+
+        It consumes the attack and logs a clean miss, but rolls no dice (so a
+        deterministic dice stream stays in step) and deals no damage.
+        """
+        needed = self.rules.to_hit_number(
+            attacker, zone=pending.zone, ignore_facing=pending.ignore_facing,
+            range_penalty=pending.range_penalty, situational=pending.situational)
+        result = AttackResult(
+            hit=False, rolled=needed + 1, needed=needed,
+            dice_count=self.rules.attack_dice_count(target, ranged=False),
+            multiplier=1, raw_damage=0, damage=0,
+            dropped_weapon=False, broke_weapon=False, weapon=weapon,
+            zone=pending.zone,
+            to_hit_breakdown=self.rules.to_hit_breakdown(
+                attacker, zone=pending.zone, ignore_facing=pending.ignore_facing,
+                range_penalty=pending.range_penalty,
+                situational_note=pending.situational_note),
+        )
+        self._apply(attacker, target, result)
+        results.append(result)
 
     def victor(self) -> str | None:
         """The side that has won — the only one still standing, once at least two
