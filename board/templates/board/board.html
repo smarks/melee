@@ -56,8 +56,11 @@
      never clipped); the reference panels below share the remaining height and
      scroll, so the buttons are always reachable. */
   #controls { flex: 0 0 auto; }
-  #roster { flex: 0 1 150px; overflow: auto; }
-  #selInfo { flex: 0 1 220px; overflow: auto; }
+  /* min-height:0 lets these flex children shrink below their content so their
+     own overflow:auto scrollbar engages -- without it the aside's overflow:hidden
+     clipped the bottom panel and its scroll never worked (#181). */
+  #roster { flex: 0 1 150px; overflow: auto; min-height: 0; }
+  #selInfo { flex: 0 1 220px; overflow: auto; min-height: 0; }
   .seclabel { padding: 9px 16px 3px; color: var(--muted); font-size: 11px;
               text-transform: uppercase; letter-spacing: .6px; }
   .banner { font-weight: 600; }
@@ -79,7 +82,7 @@
   .chip.green { color: var(--green); border-color: var(--green); }
   .chip.gold { color: var(--gold); border-color: var(--gold); }
   .chip.violet { color: var(--violet); border-color: var(--violet); }
-  #log { flex: 1 1 110px; overflow: auto; padding: 6px 16px 10px; font-size: 15px; }
+  #log { flex: 1 1 110px; overflow: auto; min-height: 0; padding: 6px 16px 10px; font-size: 15px; }
   #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
   /* A blow that actually lands stands out from misses, dodges, and movement. */
   #log div.log-hit { color: var(--ink); font-weight: 600; font-size: 16.5px; }
@@ -127,16 +130,21 @@
   #controls .checklist .done { color: #8ad08a; }
   #controls .checklist .todo { color: var(--accent); font-weight: 600; }
   #controls .warnline { color: #e3b34d; font-size: 12.5px; margin-top: 8px; }
-  #editor, #setup, #admin { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
+  #editor, #setup, #admin, #liveEdit { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
             flex-direction: column; align-items: center; overflow: auto; }
-  #editor, #admin { z-index: 55; }   /* opens on top of the setup panel */
-  #editorBox, #setupBox, #adminBox { background: var(--panel); border: 1px solid var(--line);
+  #editor, #admin, #liveEdit { z-index: 55; }   /* opens on top of the setup panel */
+  #editorBox, #setupBox, #adminBox, #liveEditBox { background: var(--panel); border: 1px solid var(--line);
                border-radius: 10px; margin: 24px; padding: 16px 18px; width: min(700px, 94vw); }
-  #editorRoster .card { border: 1px solid var(--line); border-radius: 8px;
+  #editorRoster .card, #liveEditSlot .card { border: 1px solid var(--line); border-radius: 8px;
                         padding: 10px 12px; margin: 8px 0; }
-  #editor input, #editor select, #admin input { background: #2f2b3b; color: var(--ink);
+  #editor input, #editor select, #admin input,
+  #liveEdit input, #liveEdit select { background: #2f2b3b; color: var(--ink);
     border: 1px solid var(--line); border-radius: 5px; padding: 3px 5px; margin: 1px; }
-  #editor label { white-space: nowrap; }
+  #editor label, #liveEdit label { white-space: nowrap; }
+  /* The live-edit Apply button sits at full width so it is always obvious and
+     reachable inside the modal (#181). */
+  #liveEditSlot .card button.primary { display: block; width: 100%; margin-top: 12px;
+    padding: 11px 14px; font-size: 1.02rem; }
   .adminRow { display: flex; align-items: center; gap: 8px; padding: 3px 0;
               border-bottom: 1px solid var(--line); }
   button.link { background: none; border: none; color: var(--accent); cursor: pointer;
@@ -246,6 +254,16 @@
     <div id="adminChars"></div>
     <div style="margin-top:10px">
       <button onclick="closeAdmin()">Close</button>
+    </div>
+  </div>
+</div>
+<div id="liveEdit">
+  <div id="liveEditBox">
+    <div class="banner">Edit fighter</div>
+    <div class="muted" id="liveEditSub">Change this fighter's stats and gear, then apply the change to the live game.</div>
+    <div id="liveEditSlot"></div>
+    <div style="margin-top:8px">
+      <button onclick="closeLiveEdit()">Close</button>
     </div>
   </div>
 </div>
@@ -1080,12 +1098,29 @@ function drawSelInfo() {
   box.innerHTML = statusHeader(f) + planLine(f);
   if (!f.edit_spec) return;
   if (!CAT || !RULES || CAT.profile !== PROFILE) { ensureGameCatalog(); return; }
-  const label = document.createElement("div");
-  label.className = "muted"; label.style.margin = "8px 0 2px";
-  label.textContent = "Edit & apply live:";
-  box.appendChild(label);
-  box.appendChild(liveEditCard(f));
+  // The full editor opens in its own modal so the stats, gear, and Apply button
+  // get a first-class, always-reachable surface instead of being crammed into
+  // this corner panel where the Apply button was clipped (#181).
+  const edit = document.createElement("button");
+  edit.className = "primary"; edit.style.marginTop = "10px";
+  edit.textContent = "✎ Edit this fighter…";
+  edit.addEventListener("click", () => openLiveEdit(f.uid));
+  box.appendChild(edit);
 }
+
+let LIVE_EDIT_FOR = null;            // uid the live-edit modal is open for, if any
+function openLiveEdit(uid) {
+  const f = figByUid(uid);
+  if (!f || !f.edit_spec) return;
+  if (!CAT || !RULES || CAT.profile !== PROFILE) { ensureGameCatalog(); return; }
+  LIVE_EDIT_FOR = uid;
+  $("liveEditSub").textContent =
+    `Editing ${f.name} (${f.side}). Changes apply immediately to the running game.`;
+  const slot = $("liveEditSlot"); slot.innerHTML = "";
+  slot.appendChild(liveEditCard(f));
+  $("liveEdit").style.display = "flex";
+}
+function closeLiveEdit() { $("liveEdit").style.display = "none"; LIVE_EDIT_FOR = null; }
 function tokenBadge(f) {   // the same numbered disc the board draws, for matching
   return `<span class="tokenbadge" style="background:${fillFor(f.side)}">`
     + `${f.dead ? "✗" : hpCur(f)}</span>`;
@@ -1134,7 +1169,7 @@ function liveEditCard(f) {
 }
 async function applyEdit(card, uid) {
   const data = await act({type: "update_figure", uid, spec: readCard(card)});
-  if (data) { flash("Applied changes."); render(); }
+  if (data) { flash("Applied changes."); closeLiveEdit(); render(); }
 }
 function planLine(f) {
   const p = PLAN[f.uid];
@@ -1450,7 +1485,7 @@ async function startCustom() {
   if (data.error) { $("editorErr").textContent = "Can't start: " + data.error; return; }
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
-  closeEditor(); closeSetup(); resetSelection(); render();
+  closeEditor(); closeSetup(); closeLiveEdit(); resetSelection(); render();
 }
 
 // Configurable colours: each corner swatch drives one or more CSS variables and
