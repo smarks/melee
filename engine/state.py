@@ -245,59 +245,29 @@ class GameState:
         return False
 
     def legal_options(self, figure: Figure) -> list[Option]:
-        if figure.posture != Posture.STANDING:
-            # A grounded figure may rise (g) or, instead, crawl up to two hexes
-            # (g, p.7) — but only if there is somewhere to crawl to. It may also
-            # still fire a missile from the ground (#152).
-            grounded = [Option.STAND_UP]
-            if self.reachable(figure, Option.CRAWL):
-                grounded.append(Option.CRAWL)
-            if self._can_fire_from_posture(figure):
-                grounded.append(Option.MISSILE_ATTACK)
-            return grounded
-        weapon = figure.ready_weapon
-        has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
-        # A practice bout blunts every weapon and forbids missiles entirely (p.22).
-        can_fire = has_missile and figure.missile_cooldown == 0 and not self.practice
-        legal: list[Option] = []
-        for option in options_for(engaged=self.engaged(figure)):
-            option_spec = spec(option)
-            if option in (Option.STAND_UP, Option.CRAWL):
-                continue                       # already standing — nothing to do
-            if option_spec.is_missile and not can_fire:
-                continue                       # no missile ready, or still reloading
-            if option_spec.is_attack and not option_spec.is_missile and has_missile:
-                continue                       # a readied missile has no melee blow
-            if option == Option.SHIFT_DEFEND and has_missile:
-                continue                       # only a non-missile weapon can parry (p.20)
-            if option == Option.PICK_UP and not self.dropped_in_reach(figure):
-                continue                       # nothing on the ground within reach
-            if option == Option.GO_PRONE and not (has_missile and weapon.reload > 0):
-                continue                       # only a crossbow may fire prone (p.16); a
-                                               # bow that drops prone gets no shot — give it
-                                               # KNEEL instead (#154)
-            if option == Option.KNEEL and not has_missile:
-                continue                       # kneeling to fire is a missile move (f);
-                                               # any bow may fire from one knee (p.16)
-            if option == Option.HTH_ATTACK and not any(
-                    self._can_initiate_hth(figure, enemy)
-                    for enemy in self.enemies_of(figure)):
-                continue                       # no adjacent foe eligible to grapple (p.17)
-            legal.append(option)
-        return legal
+        """The options ``figure`` may legally choose this phase.
+
+        Derived from :meth:`option_availability` — exactly the options it leaves
+        untagged (reason ``None``) — so the legal set and the availability menu
+        share one source of truth and can never drift (#160). Many callers and
+        tests rely on this membership.
+        """
+        return [option for option, reason in self.option_availability(figure)
+                if reason is None]
 
     def option_availability(self, figure: Figure) -> list[tuple[Option, str | None]]:
         """The full candidate option set for ``figure`` this phase, each tagged with
         whether it is currently available and, if not, a short reason.
 
-        Companion to :meth:`legal_options` (which returns only the legal subset, a
-        contract many tests rely on). The UI uses this to show unavailable options
-        disabled — greyed with a why — instead of silently hiding them. The set of
-        options whose reason is ``None`` is exactly :meth:`legal_options`.
+        The single source of truth for "what is legal": :meth:`legal_options` is
+        exactly the options whose reason is ``None`` here. The UI uses the full
+        list to show unavailable options disabled — greyed with a why — instead of
+        silently hiding them.
         """
         standing = figure.posture == Posture.STANDING
         weapon = figure.ready_weapon
         has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+        # A practice bout blunts every weapon and forbids missiles entirely (p.22).
         can_fire = has_missile and figure.missile_cooldown == 0 and not self.practice
         result: list[tuple[Option, str | None]] = []
         for option in options_for(engaged=self.engaged(figure)):
@@ -321,6 +291,10 @@ class GameState:
                     reason = "no missiles in a practice bout"
                 else:
                     reason = "still reloading" if has_missile else "no missile weapon ready"
+            elif spec(option).is_attack and not spec(option).is_missile and has_missile:
+                # A readied missile weapon has no melee blow (#79): a non-missile
+                # attack option (charge/shift-attack/grapple) is unavailable.
+                reason = "missile weapon ready — no melee attack"
             elif option == Option.SHIFT_DEFEND and has_missile:
                 reason = "nothing to parry with — missile weapon ready"
             elif option == Option.PICK_UP and not self.dropped_in_reach(figure):
@@ -539,7 +513,23 @@ class GameState:
                 attacker, target, attacker.ready_weapon, True)
         held = self.occupied(exclude=attacker)
         adjdx = attacker.base_adj_dx
-        # 1) figures in the way roll to be missed — a low roll flies past (p.15).
+        # Three sequential phases, each able to end the flight: a blocker in the
+        # lane, the intended target, then a stray fly-on (p.15-16).
+        if self._flight_blockers_strike(pending, target, adjdx, held, results):
+            return
+        if self._flight_hit_target(pending, target, declared_zone, range_penalty,
+                                   situational, situational_note, results):
+            return
+        self._flight_fly_on(pending, target, adjdx, held, results)
+
+    def _flight_blockers_strike(
+        self, pending, target, adjdx: int, held: dict, results: list
+    ) -> bool:
+        """Phase 1: figures standing in the lane each roll to be missed — a low
+        roll flies past (p.15). The first one the weapon does not miss is struck
+        and the flight ends; returns True iff a blocker was hit."""
+        attacker = pending.attacker
+        layout = self.arena.layout
         for hex_pos in layout.line(attacker.position, target.position)[1:-1]:
             blocker = held.get(hex_pos)
             if blocker is None or blocker is target:
@@ -548,15 +538,27 @@ class GameState:
             if self.dice.total(3) <= adjdx - dist:
                 continue                                  # flew past this one
             self._flight_strike(pending, blocker, dist, results)
-            return
-        # 2) the intended target — a normal thrown/missile attack. A thrown
-        # weapon takes the target's facing bonus (ignore_facing False); a missile
-        # never does (p.16) — both are carried on the pending attack.
-        # A shot aimed at a pile of figures in HTH combat strikes a RANDOM member
-        # of the pile, not necessarily the one aimed at (p.18). The classic to-hit
-        # number is the attacker's adjDX and does not depend on which member is
-        # struck, so the pile member is rolled first and the shot then resolves
-        # against it (zone/absorption recomputed for whoever it caught).
+            return True
+        return False
+
+    def _flight_hit_target(
+        self, pending, target, declared_zone, range_penalty: int,
+        situational: int, situational_note: str, results: list
+    ) -> bool:
+        """Phase 2: the intended target — a normal thrown/missile attack. A thrown
+        weapon takes the target's facing bonus (ignore_facing False); a missile
+        never does (p.16) — both are carried on the pending attack.
+
+        A shot aimed at a pile of figures in HTH combat strikes a RANDOM member of
+        the pile, not necessarily the one aimed at (p.18). The classic to-hit
+        number is the attacker's adjDX and does not depend on which member is
+        struck, so the pile member is rolled first and the shot then resolves
+        against it (zone/absorption recomputed for whoever it caught).
+
+        Returns True when the flight ends here — a hit lands the weapon, or a
+        fumble (17 drops it, 18 breaks it; p.10) takes it out of the air so it does
+        NOT fly on. Returns False on a clean miss, which flies on (phase 3)."""
+        attacker = pending.attacker
         struck = target
         pile = self._hth_pile_at(target.position)
         if len(pile) >= 2:
@@ -576,14 +578,21 @@ class GameState:
         results.append(result)
         if result.hit:
             self._land_flight(pending, struck.position)
-            return
+            return True
         if result.dropped_weapon or result.broke_weapon:
-            # A 17 drops the weapon (in the target hex for a throw), an 18 breaks
-            # it (p.10) — either way it has left the hand and does NOT fly on to
-            # strike a figure behind the target. ``_apply`` already placed the
-            # dropped weapon or removed the broken one, so nothing lands here.
-            return
-        # 3) a clean miss — the weapon flies on up to ten hexes (p.15).
+            # ``_apply`` already placed the dropped weapon or removed the broken
+            # one, so nothing lands here — and it does not strike a figure behind.
+            return True
+        return False
+
+    def _flight_fly_on(
+        self, pending, target, adjdx: int, held: dict, results: list
+    ) -> None:
+        """Phase 3: a clean miss flies on up to ten hexes (p.15), striking the
+        first figure it does not miss; otherwise it spends itself and lands by the
+        target."""
+        attacker = pending.attacker
+        layout = self.arena.layout
         direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
         current = target.position
         for _ in range(10):
@@ -1323,33 +1332,8 @@ class GameState:
         also stand in the attacker's front arc.
         """
         option = attacker.current_option
-        if option is None or not spec(option).is_attack:
-            raise IllegalAction(
-                f"{attacker.name} did not choose an attack option this turn"
-            )
-        if not attacker.can_act():
-            raise IllegalAction(f"{attacker.name} cannot attack")
-        if attacker.flying:                       # a flyer lands to attack (p.21)
-            raise IllegalAction(f"{attacker.name} must land before it can attack")
-        # One attack per turn (Section VII): reject a second declaration, whether
-        # the figure already has an attack queued this combat phase or already
-        # resolved one. A multi-shot missile is a single PendingAttack with
-        # shots>1 (not repeated queue_attack calls), so this does not affect it.
-        if attacker.attacked_this_turn or any(
-            pending.attacker is attacker for pending in self._pending
-        ):
-            raise IllegalAction(f"{attacker.name} has already attacked this turn")
-        option_spec = spec(option)
-        weapon = attacker.ready_weapon
-        if weapon is None:
-            raise IllegalAction(f"{attacker.name} has no ready weapon")
+        weapon = self._validate_attack(attacker, target, option)
         is_missile = weapon.kind == WeaponKind.MISSILE
-        if option_spec.is_missile != is_missile:
-            raise IllegalAction(
-                f"{weapon.name} cannot be used with option {option.value}"
-            )
-        if is_missile and attacker.missile_cooldown > 0:
-            raise IllegalAction(f"{weapon.name} is still reloading")
         distance = self.arena.distance(attacker.position, target.position)
         # A throwable melee weapon aimed at a non-adjacent foe is hurled (p.15);
         # adjacent, it's a normal melee blow.
@@ -1359,74 +1343,123 @@ class GameState:
         situational, situational_note = self._situational_mods(
             attacker, target, weapon, ranged, is_throw=is_throw)
         if ranged:
-            # The target must lie in the attacker's front arc (p.15-16): you fire
-            # where you face. (Posture-independent, so a prone crossbowman may
-            # still shoot along its facing.)
-            if not self.in_front_arc(attacker, target.position):
-                raise IllegalAction(
-                    f"{target.name} is not in {attacker.name}'s front arc"
-                )
-            if is_throw:
-                range_penalty = -distance     # -1 DX per hex of distance (p.15)
-                shots = 1
-            else:
-                # Missile range is penalised by megahex (MH) distance, not raw
-                # hex count (p.16): the map's 7-hex flowers are the yardstick.
-                megahexes = megahex_distance(
-                    self.arena.layout, attacker.position, target.position)
-                range_penalty = self.rules.missile_range_penalty(megahexes)
-                shots = max_missile_shots(weapon, attacker.base_adj_dx)
-                if option == Option.ONE_LAST_SHOT:
-                    shots = 1     # the parting shot looses a single arrow (p.7
-                                  # option l); two-shot fire belongs to option f
-
-            # zone is carried so a ready shield still stops frontal fire, and it
-            # is the target's zone (as for melee) so a thrown weapon striking an
-            # exposed flank/rear earns the +2/+4 facing bonus -- a thrown attack
-            # is "treated exactly like a regular attack" (p.15). Only true missile
-            # weapons "never get a bonus for the target's facing" (p.16), so the
-            # facing add is suppressed for missiles alone (ignore_facing). The
-            # line-of-flight is traced from attacker to target either way, so
-            # intervening figures and fly-on resolve directionally regardless.
-            if second_target is not None:
-                if not is_missile:
-                    raise IllegalAction(
-                        "only a missile weapon may split its two shots between targets"
-                    )
-                if shots < 2:
-                    raise IllegalAction(
-                        f"{attacker.name} gets only one shot this turn — no second target"
-                    )
-                if not self.in_front_arc(attacker, second_target.position):
-                    raise IllegalAction(
-                        f"{second_target.name} is not in {attacker.name}'s front arc"
-                    )
-            self._pending.append(
-                PendingAttack(attacker, target, zone=zone,
-                              ignore_facing=is_missile, range_penalty=range_penalty,
-                              shots=shots, thrown=is_throw,
-                              situational=situational, situational_note=situational_note,
-                              second_target=second_target)
-            )
+            self._queue_ranged_attack(
+                attacker, target, option, weapon, is_missile, is_throw, distance,
+                zone, situational, situational_note, second_target)
         else:
-            if second_target is not None:
-                raise IllegalAction("a melee attack strikes a single target")
-            if target not in self.melee_targets(attacker, weapon):
-                raise IllegalAction(
-                    f"{target.name} is not within {attacker.name}'s reach"
-                )
-            adjacent = self.arena.distance(attacker.position, target.position) == 1
-            self._pending.append(
-                PendingAttack(attacker, target, zone=zone,
-                              ignore_facing=False, range_penalty=0,
-                              situational=situational, situational_note=situational_note,
-                              damage_dice_bonus=self._pole_charge_dice(
-                                  attacker, target, weapon, adjacent),
-                              charge_resolve_first=self._pole_charge_resolve_first(
-                                  attacker, target, weapon, adjacent))
-            )
+            self._queue_melee_attack(
+                attacker, target, weapon, zone, situational, situational_note,
+                second_target)
         if with_main_gauche:
             self._queue_main_gauche_jab(attacker, target)
+
+    def _validate_attack(self, attacker: Figure, target: Figure, option):
+        """Shared guards for declaring any attack (Section VII), returning the
+        attacker's ready weapon.
+
+        The figure must have chosen an attack option, be able to act, be on the
+        ground (a flyer lands to attack, p.21), not have attacked already this turn
+        (one attack per turn — a multi-shot bow is one PendingAttack with
+        ``shots>1``, not repeated calls), and hold a ready weapon whose kind matches
+        the chosen option (and, for a missile, not be reloading)."""
+        if option is None or not spec(option).is_attack:
+            raise IllegalAction(
+                f"{attacker.name} did not choose an attack option this turn"
+            )
+        if not attacker.can_act():
+            raise IllegalAction(f"{attacker.name} cannot attack")
+        if attacker.flying:                       # a flyer lands to attack (p.21)
+            raise IllegalAction(f"{attacker.name} must land before it can attack")
+        if attacker.attacked_this_turn or any(
+            pending.attacker is attacker for pending in self._pending
+        ):
+            raise IllegalAction(f"{attacker.name} has already attacked this turn")
+        weapon = attacker.ready_weapon
+        if weapon is None:
+            raise IllegalAction(f"{attacker.name} has no ready weapon")
+        is_missile = weapon.kind == WeaponKind.MISSILE
+        if spec(option).is_missile != is_missile:
+            raise IllegalAction(
+                f"{weapon.name} cannot be used with option {option.value}"
+            )
+        if is_missile and attacker.missile_cooldown > 0:
+            raise IllegalAction(f"{weapon.name} is still reloading")
+        return weapon
+
+    def _queue_ranged_attack(
+        self, attacker: Figure, target: Figure, option, weapon,
+        is_missile: bool, is_throw: bool, distance: int, zone,
+        situational: int, situational_note: str, second_target: Figure | None,
+    ) -> None:
+        """Queue a missile or thrown attack (p.15-16).
+
+        The target must lie in the attacker's front arc (you fire where you face —
+        posture-independent, so a prone crossbowman still shoots along its facing).
+        ``zone`` is carried so a ready shield still stops frontal fire, and is the
+        target's zone (as for melee) so a thrown weapon striking an exposed
+        flank/rear earns the +2/+4 facing bonus — a thrown attack is "treated
+        exactly like a regular attack" (p.15). Only true missile weapons "never get
+        a bonus for the target's facing" (p.16), so the facing add is suppressed for
+        missiles alone (``ignore_facing``)."""
+        if not self.in_front_arc(attacker, target.position):
+            raise IllegalAction(
+                f"{target.name} is not in {attacker.name}'s front arc"
+            )
+        if is_throw:
+            range_penalty = -distance     # -1 DX per hex of distance (p.15)
+            shots = 1
+        else:
+            # Missile range is penalised by megahex (MH) distance, not raw hex
+            # count (p.16): the map's 7-hex flowers are the yardstick.
+            megahexes = megahex_distance(
+                self.arena.layout, attacker.position, target.position)
+            range_penalty = self.rules.missile_range_penalty(megahexes)
+            shots = max_missile_shots(weapon, attacker.base_adj_dx)
+            if option == Option.ONE_LAST_SHOT:
+                shots = 1     # the parting shot looses a single arrow (p.7 option
+                              # l); two-shot fire belongs to option f
+        if second_target is not None:
+            if not is_missile:
+                raise IllegalAction(
+                    "only a missile weapon may split its two shots between targets"
+                )
+            if shots < 2:
+                raise IllegalAction(
+                    f"{attacker.name} gets only one shot this turn — no second target"
+                )
+            if not self.in_front_arc(attacker, second_target.position):
+                raise IllegalAction(
+                    f"{second_target.name} is not in {attacker.name}'s front arc"
+                )
+        self._pending.append(
+            PendingAttack(attacker, target, zone=zone,
+                          ignore_facing=is_missile, range_penalty=range_penalty,
+                          shots=shots, thrown=is_throw,
+                          situational=situational, situational_note=situational_note,
+                          second_target=second_target)
+        )
+
+    def _queue_melee_attack(
+        self, attacker: Figure, target: Figure, weapon, zone,
+        situational: int, situational_note: str, second_target: Figure | None,
+    ) -> None:
+        """Queue a single melee blow against a foe within reach (Section VII)."""
+        if second_target is not None:
+            raise IllegalAction("a melee attack strikes a single target")
+        if target not in self.melee_targets(attacker, weapon):
+            raise IllegalAction(
+                f"{target.name} is not within {attacker.name}'s reach"
+            )
+        adjacent = self.arena.distance(attacker.position, target.position) == 1
+        self._pending.append(
+            PendingAttack(attacker, target, zone=zone,
+                          ignore_facing=False, range_penalty=0,
+                          situational=situational, situational_note=situational_note,
+                          damage_dice_bonus=self._pole_charge_dice(
+                              attacker, target, weapon, adjacent),
+                          charge_resolve_first=self._pole_charge_resolve_first(
+                              attacker, target, weapon, adjacent))
+        )
 
     def _queue_main_gauche_jab(self, attacker: Figure, target: Figure) -> None:
         """Queue the off-hand main-gauche's separate -4 DX jab (p.13).
@@ -1468,6 +1501,14 @@ class GameState:
             ignore_facing=pending.ignore_facing,
         ) + pending.situational
 
+    @staticmethod
+    def _shot_count(pending: PendingAttack) -> int:
+        """How many shots/blows ``pending`` resolves this combat phase — its
+        ``shots`` (a high-adjDX bow fires twice), but never fewer than one. The
+        single definition of the ``max(1, shots)`` round count shared by the
+        rounds loop in :meth:`resolve_combat`."""
+        return max(1, pending.shots)
+
     def resolve_combat(self) -> list[AttackResult]:
         """Resolve all queued attacks, highest adjDX first (Section VII).
 
@@ -1492,10 +1533,10 @@ class GameState:
         # So two duelling archers fire A1, B1, A2, B2, not A1, A2, B1, B2 (#154).
         # Melee, thrown, HTH and main-gauche attacks are all single-shot and so
         # resolve entirely in the first round; only a two-shot bow reaches round 1.
-        max_shots = max((max(1, pending.shots) for pending in ordered), default=1)
+        max_shots = max((self._shot_count(pending) for pending in ordered), default=1)
         for shot_index in range(max_shots):
             for pending in ordered:
-                if shot_index < max(1, pending.shots):
+                if shot_index < self._shot_count(pending):
                     self._resolve_attack_shot(pending, shot_index, results)
         self._pending.clear()
         self._announce_victory()
@@ -1518,24 +1559,7 @@ class GameState:
             # (p.13, #151) — roll and knock-down here, in adjDX order.
             self._resolve_shield_rush(pending, results)
             return
-        # Prone figures can't fight — except a prone crossbowman who may fire, or a
-        # figure grappling on the ground in hand-to-hand. A prone crossbowman fires
-        # steadied (p.16) — but NOT if it was knocked prone by damage earlier this
-        # same phase: a figure knocked down "may not attack that turn" if it has not
-        # already (p.20). One already prone (chose to go prone/kneel last turn, or
-        # dropped prone to fire this turn via option f) still fires.
-        crossbow = (attacker.ready_weapon is not None
-                    and attacker.ready_weapon.kind == WeaponKind.MISSILE
-                    and attacker.ready_weapon.reload > 0
-                    and not attacker.knocked_down_this_turn)
-        if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
-            return
-        if shot_index >= 1 and (attacker.ready_weapon is None
-                                or attacker.ready_weapon.kind != WeaponKind.MISSILE):
-            # Only a two-shot bow reaches a later round. If its bow was dropped or
-            # broken on a first-shot fumble (17/18) there is nothing left in hand to
-            # loose the second arrow (#154) — and with the weapon gone the branch
-            # below would otherwise mis-resolve it as a phantom melee swing.
+        if not self._can_strike_now(attacker, shot_index):
             return
         # A flying weapon — hurled or fired — traces a line-of-flight: anyone in the
         # way may be hit, and a clean miss flies on (p.15-16). Thrown weapons are
@@ -1555,9 +1579,44 @@ class GameState:
             else:
                 self._resolve_flight(pending, results)
             return
-        # A melee/HTH/main-gauche blow — always a single shot, so shot_index is 0.
-        # Before rolling, a melee blow can fail to land outright (#147). HTH
-        # grapples (resolved on a shared hex, hth_damage set) are exempt.
+        self._resolve_one_melee(pending, weapon, results)
+
+    def _can_strike_now(self, attacker: Figure, shot_index: int) -> bool:
+        """Whether ``attacker`` may still land this shot/blow — the prone /
+        knocked-down / crossbow gate, re-checked every round.
+
+        Prone figures can't fight — except a prone crossbowman who may fire, or a
+        figure grappling on the ground in hand-to-hand. A prone crossbowman fires
+        steadied (p.16) — but NOT if it was knocked prone by damage earlier this
+        same phase: a figure knocked down "may not attack that turn" if it has not
+        already (p.20). One already prone (chose to go prone/kneel last turn, or
+        dropped prone to fire this turn via option f) still fires.
+
+        Only a two-shot bow reaches a later round. If its bow was dropped or broken
+        on a first-shot fumble (17/18) there is nothing left in hand to loose the
+        second arrow (#154) — and with the weapon gone the melee branch would
+        otherwise mis-resolve it as a phantom swing.
+        """
+        crossbow = (attacker.ready_weapon is not None
+                    and attacker.ready_weapon.kind == WeaponKind.MISSILE
+                    and attacker.ready_weapon.reload > 0
+                    and not attacker.knocked_down_this_turn)
+        if attacker.posture == Posture.PRONE and not crossbow and not attacker.in_hth:
+            return False
+        if shot_index >= 1 and (attacker.ready_weapon is None
+                                or attacker.ready_weapon.kind != WeaponKind.MISSILE):
+            return False
+        return True
+
+    def _resolve_one_melee(self, pending: PendingAttack, weapon, results: list) -> None:
+        """Resolve a single melee / HTH / main-gauche blow — always one shot.
+
+        Before rolling, a melee blow can fail to land outright (#147); HTH
+        grapples (resolved on a shared hex, ``hth_damage`` set) are exempt. On a
+        miss against a foe down in an HTH pile, a standing striker rolls on into
+        the pile (Hitting Your Friends, p.17-18).
+        """
+        attacker = pending.attacker
         if pending.hth_damage is None and self._melee_whiffs(pending, weapon):
             self._whiff(attacker, pending.target, weapon, pending, results)
             return
