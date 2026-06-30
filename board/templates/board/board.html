@@ -327,7 +327,10 @@ function drawSeats() {
     else if (open) { tag = "open"; btn = b(side, "claim", "Claim"); }
     return `<div style="margin:2px 0"><b style="text-transform:capitalize">${side}</b> <span class="muted">— ${tag}</span>${btn}</div>`;
   }).join("");
-  const copy = `<button style="margin-top:6px;padding:1px 7px;cursor:pointer" onclick="copyLink()">Copy invite link</button>`;
+  // No one to invite in a vs-computer game (#165): the AI side isn't joinable.
+  const vsComputer = Object.values(controllers).includes("computer");
+  const copy = vsComputer ? "" :
+    `<button style="margin-top:6px;padding:1px 7px;cursor:pointer" onclick="copyLink()">Copy invite link</button>`;
   const adminTag = IS_ADMIN
     ? `<div style="margin-bottom:5px;color:#e6b800"><b>★ Admin</b> <span class="muted">— you control every figure and can edit them outside the rules.</span></div>`
     : "";
