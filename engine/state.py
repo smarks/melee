@@ -192,13 +192,30 @@ class GameState:
         return [self.first_side] + [s for s in self.sides if s != self.first_side]
 
     # ---- movement ----
+    def _can_fire_from_posture(self, figure: Figure) -> bool:
+        """A grounded figure may still loose a missile (p.16): a crossbow from
+        prone, any bow from kneeling. A figure knocked prone by damage this turn
+        may not."""
+        weapon = figure.ready_weapon
+        if (weapon is None or weapon.kind != WeaponKind.MISSILE
+                or figure.missile_cooldown != 0):
+            return False
+        if figure.posture == Posture.KNEELING:
+            return True
+        if figure.posture == Posture.PRONE:
+            return weapon.reload > 0 and not figure.knocked_down_this_turn
+        return False
+
     def legal_options(self, figure: Figure) -> list[Option]:
         if figure.posture != Posture.STANDING:
             # A grounded figure may rise (g) or, instead, crawl up to two hexes
-            # (g, p.7) — but only if there is somewhere to crawl to.
+            # (g, p.7) — but only if there is somewhere to crawl to. It may also
+            # still fire a missile from the ground (#152).
             grounded = [Option.STAND_UP]
             if self.reachable(figure, Option.CRAWL):
                 grounded.append(Option.CRAWL)
+            if self._can_fire_from_posture(figure):
+                grounded.append(Option.MISSILE_ATTACK)
             return grounded
         weapon = figure.ready_weapon
         has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
@@ -246,7 +263,11 @@ class GameState:
                 elif not self.reachable(figure, Option.CRAWL):
                     reason = "nowhere to crawl"
             elif not standing:
-                reason = "must stand up first"
+                # A crossbow (prone) or any bow (kneeling) may still fire (#152).
+                if option == Option.MISSILE_ATTACK and self._can_fire_from_posture(figure):
+                    reason = None
+                else:
+                    reason = "must stand up first"
             elif spec(option).is_missile and not can_fire:
                 reason = "still reloading" if has_missile else "no missile weapon ready"
             elif option == Option.SHIFT_DEFEND and has_missile:

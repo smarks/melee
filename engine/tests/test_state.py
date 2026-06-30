@@ -111,6 +111,27 @@ def test_a_missile_hit_does_not_arm_a_force_retreat() -> None:
     assert not state.can_force_retreat(archer, foe)        # but a missile hit doesn't arm it
 
 
+def test_a_grounded_figure_may_still_fire_a_missile() -> None:
+    # #152: a crossbow fires from prone, any bow from kneeling (p.16); a plain
+    # bow may not fire from prone.
+    from engine.rules_data import LIGHT_CROSSBOW, SMALL_BOW
+
+    def shooter(name, side, weapon, posture, pos):
+        f = create_human(name, 12, 12, side, weapons=[weapon],
+                         ready_weapon=weapon, armor=NO_ARMOR)
+        f.position, f.posture = pos, posture
+        return f
+
+    arena = Arena(cols=21, rows=21)
+    prone_xbow = shooter("X", "a", LIGHT_CROSSBOW, Posture.PRONE, Hex(2, 2))
+    prone_bow = shooter("B", "b", SMALL_BOW, Posture.PRONE, Hex(10, 2))
+    kneel_bow = shooter("K", "c", SMALL_BOW, Posture.KNEELING, Hex(18, 2))
+    state = GameState(arena, [prone_xbow, prone_bow, kneel_bow])
+    assert Option.MISSILE_ATTACK in state.legal_options(prone_xbow)      # crossbow, prone
+    assert Option.MISSILE_ATTACK not in state.legal_options(prone_bow)   # plain bow can't
+    assert Option.MISSILE_ATTACK in state.legal_options(kneel_bow)       # any bow, kneeling
+
+
 def test_kneeling_figure_has_no_front() -> None:
     from engine.facing import REAR, attack_zone
     arena = Arena(cols=9, rows=15)
