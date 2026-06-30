@@ -612,6 +612,19 @@ def test_victory_is_logged_once_one_side_is_left_standing() -> None:
     assert len(state.log) == before
 
 
+def test_victor_reports_the_last_side_standing() -> None:
+    # Single source of the win condition (#157): undecided while both stand, the
+    # survivor once the other is down, and never a win with fewer than two sides
+    # (the guard the board's old _victory lacked).
+    from engine.arena import Arena
+    state, a, b = _duel()
+    assert state.victor() is None
+    b.damage_taken = b.strength + 5               # blue collapses
+    assert state.victor() == a.side
+    solo = GameState(Arena(cols=9, rows=15), [a])
+    assert solo.victor() is None                  # one side is not a victory
+
+
 def test_engaged_figure_gets_engaged_options() -> None:
     state, a, b = _duel()
     assert state.engaged(a) and state.engaged(b)

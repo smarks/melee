@@ -178,7 +178,7 @@ def _meta(game: dict) -> dict:
         "move_order": game["order"],
         "moving_side": moving,
         "winner": game["winner"],
-        "victory": _victory(state),
+        "victory": state.victor(),
         "controllers": game.get("controllers", {}),
         "queued": len(state._pending),
         "force_retreat_options": retreat_options,
@@ -390,19 +390,6 @@ def _human_force_retreat_available(game: dict) -> bool:
         if controllers.get(attacker.side, "human") == "human":
             return True
     return False
-
-
-def _victory(state: GameState) -> str | None:
-    """A side wins when every enemy is down (Combat to the Death)."""
-    standing = {}
-    for figure in state.figures:
-        if not figure.collapsed and not figure.is_dead:
-            standing.setdefault(figure.side, 0)
-            standing[figure.side] += 1
-    alive_sides = [side for side, count in standing.items() if count > 0]
-    if len(alive_sides) == 1:
-        return alive_sides[0]
-    return None
 
 
 def _payload(game: dict) -> dict:
@@ -821,7 +808,7 @@ def api_game_award(request, gid):
     state: GameState = game["state"]
     awards = experience.award_experience(
         state.figures, combat_type,
-        winning_side=_victory(state),
+        winning_side=state.victor(),
         ran_away_unhurt=body.get("ran_away_unhurt", []))
     _persist_game(gid, game)
     payload = _payload(game)
