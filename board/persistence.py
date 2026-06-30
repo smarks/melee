@@ -43,6 +43,7 @@ from hexarena.dice import Dice
 from hexarena.hex import Hex
 
 from engine.arena import Arena
+from engine.experience import CombatType
 from engine.figure import PER_TURN_FLAGS, Figure, Posture, Race
 from engine.options import Option
 from engine.profile import PROFILES
@@ -100,6 +101,7 @@ def _figure_to_json(figure: Figure) -> dict:
         "wounded_last_turn": figure.wounded_last_turn,
         "unconscious": figure.unconscious,
         "dead": figure.dead,
+        "dropped_out": figure.dropped_out,
         "current_option": figure.current_option.value
         if figure.current_option is not None else None,
         "missile_cooldown": figure.missile_cooldown,
@@ -167,6 +169,7 @@ def _figure_from_json(data: dict) -> Figure:
     figure.wounded_last_turn = data["wounded_last_turn"]
     figure.unconscious = data["unconscious"]
     figure.dead = data["dead"]
+    figure.dropped_out = data.get("dropped_out", False)  # default: pre-practice snapshots
     option = data["current_option"]
     figure.current_option = Option(option) if option is not None else None
     figure.missile_cooldown = data["missile_cooldown"]
@@ -224,6 +227,7 @@ def state_to_json(state: GameState) -> dict:
     return {
         "version": SCHEMA_VERSION,
         "ruleset": _ruleset_name(state.rules),
+        "combat_type": state.combat_type.value,
         "arena": _arena_to_json(state.arena),
         "turn_number": state.turn_number,
         "first_side": state.first_side,
@@ -245,7 +249,9 @@ def state_from_json(data: dict) -> GameState:
     figures = [_figure_from_json(figure) for figure in data["figures"]]
     dice = Dice(scripted=data.get("dice_scripted") or [])
     ruleset = PROFILES[data["ruleset"]].ruleset
-    state = GameState(arena, figures, dice=dice, ruleset=ruleset)
+    combat_type = CombatType(data.get("combat_type", CombatType.DEATH.value))
+    state = GameState(arena, figures, dice=dice, ruleset=ruleset,
+                      combat_type=combat_type)
     state.turn_number = data["turn_number"]
     state.first_side = data["first_side"]
     state.log = list(data.get("log", []))

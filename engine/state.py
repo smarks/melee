@@ -38,9 +38,11 @@ from .facing import (
 from .figure import PER_TURN_FLAGS, Figure, Posture, Race, footprint_for
 from .megahex import megahex_distance
 from .movement import reachable_moves
+from .experience import PRACTICE_DROPOUT_ST, CombatType
 from .narrative import (
     narrate_attack,
     narrate_cascade,
+    narrate_dropout,
     narrate_fumble,
     narrate_hth,
     narrate_hth_disengage,
@@ -124,6 +126,7 @@ class GameState:
         *,
         dice: Dice | None = None,
         ruleset: Ruleset | None = None,
+        combat_type: CombatType = CombatType.DEATH,
     ):
         self.arena = arena
         self.figures = figures
@@ -131,6 +134,11 @@ class GameState:
         # The swappable mechanics. Default: classic Melee. Pass a Ruleset
         # subclass to swap in different combat/injury/movement mechanics.
         self.rules = ruleset or Ruleset()
+        # The combat variant (Section IX, p.22). Practice combat is the only one
+        # that changes the fight itself — blunted half-damage weapons, no missiles,
+        # and a drop-out at ST <= 3 (see ``practice``). Death/Arena differ only in
+        # the XP awarded at the end (engine.experience).
+        self.combat_type = combat_type
         self.turn_number = 1
         self.log: list[str] = []
         self._pending: list[PendingAttack] = []
@@ -140,6 +148,13 @@ class GameState:
         for index, figure in enumerate(figures):
             if not figure.uid:
                 figure.uid = f"f{index}"
+
+    @property
+    def practice(self) -> bool:
+        """Whether this is a practice bout (p.22): weapons blunted to half damage,
+        no missiles, and figures drop out at ST <= 3. The single mode flag the
+        combat rules read."""
+        return self.combat_type is CombatType.PRACTICE
 
     # ---- rosters / occupancy ----
     @property
@@ -216,7 +231,9 @@ class GameState:
     def _can_fire_from_posture(self, figure: Figure) -> bool:
         """A grounded figure may still loose a missile (p.16): a crossbow from
         prone, any bow from kneeling. A figure knocked prone by damage this turn
-        may not."""
+        may not. No missile may be loosed at all in a practice bout (p.22)."""
+        if self.practice:
+            return False
         weapon = figure.ready_weapon
         if (weapon is None or weapon.kind != WeaponKind.MISSILE
                 or figure.missile_cooldown != 0):
@@ -240,7 +257,8 @@ class GameState:
             return grounded
         weapon = figure.ready_weapon
         has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
-        can_fire = has_missile and figure.missile_cooldown == 0
+        # A practice bout blunts every weapon and forbids missiles entirely (p.22).
+        can_fire = has_missile and figure.missile_cooldown == 0 and not self.practice
         legal: list[Option] = []
         for option in options_for(engaged=self.engaged(figure)):
             option_spec = spec(option)
@@ -280,7 +298,7 @@ class GameState:
         standing = figure.posture == Posture.STANDING
         weapon = figure.ready_weapon
         has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
-        can_fire = has_missile and figure.missile_cooldown == 0
+        can_fire = has_missile and figure.missile_cooldown == 0 and not self.practice
         result: list[tuple[Option, str | None]] = []
         for option in options_for(engaged=self.engaged(figure)):
             reason: str | None = None
@@ -299,7 +317,10 @@ class GameState:
                 else:
                     reason = "must stand up first"
             elif spec(option).is_missile and not can_fire:
-                reason = "still reloading" if has_missile else "no missile weapon ready"
+                if self.practice:
+                    reason = "no missiles in a practice bout"
+                else:
+                    reason = "still reloading" if has_missile else "no missile weapon ready"
             elif option == Option.SHIFT_DEFEND and has_missile:
                 reason = "nothing to parry with — missile weapon ready"
             elif option == Option.PICK_UP and not self.dropped_in_reach(figure):
@@ -549,7 +570,7 @@ class GameState:
             range_penalty=range_penalty,
             situational=situational,
             situational_note=situational_note,
-            ranged=True)
+            ranged=True, blunted=self.practice)
         result.thrown = pending.thrown
         self._apply(attacker, struck, result)
         results.append(result)
@@ -584,7 +605,8 @@ class GameState:
         result = self.rules.resolve_attack(
             self.dice, attacker, victim,
             zone=attack_zone(self.arena.layout, attacker, victim),
-            ignore_facing=True, range_penalty=-dist, force_hit=True, ranged=True)
+            ignore_facing=True, range_penalty=-dist, force_hit=True, ranged=True,
+            blunted=self.practice)
         result.thrown = pending.thrown
         self._apply(attacker, victim, result)
         results.append(result)
@@ -766,7 +788,7 @@ class GameState:
                     self.dice, defender, attacker,
                     zone=attack_zone(self.arena.layout, defender, attacker),
                     dice_count=self.rules.attack_dice_count(attacker, ranged=False),
-                    force_hit=True)
+                    force_hit=True, blunted=self.practice)
                 self.log.append(narrate_hth(attacker, defender, "free_hit"))
                 self._apply(defender, attacker, counter)
                 return "free_hit"
@@ -1558,6 +1580,7 @@ class GameState:
             situational_note=pending.situational_note,
             extra_dice=pending.damage_dice_bonus,
             hth_damage=pending.hth_damage,
+            blunted=self.practice,
         )
         result.thrown = pending.thrown
         self._apply(attacker, pending.target, result)
@@ -1668,6 +1691,7 @@ class GameState:
                 range_penalty=pending.range_penalty,
                 situational=pending.situational,
                 situational_note=pending.situational_note,
+                blunted=self.practice,
             )
             result.thrown = pending.thrown
             self._apply(attacker, victim, result)
@@ -1722,6 +1746,13 @@ class GameState:
         aftermath = narrate_status(target, status)
         if aftermath:
             self.log.append(aftermath)
+        # Practice bout (p.22): a figure worn down to ST <= 3 drops out of the
+        # friendly fight — out of play (``collapsed``) but alive (not ``is_dead``).
+        if (self.practice and not target.is_dead and not target.dropped_out
+                and target.current_st <= PRACTICE_DROPOUT_ST):
+            target.dropped_out = True
+            target.posture = Posture.PRONE
+            self.log.append(narrate_dropout(target))
         if (target.is_dead or target.collapsed) and target.in_hth:
             self._clear_hth(target)              # a downed grappler releases its hold
 

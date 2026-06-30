@@ -141,6 +141,13 @@ class Ruleset:
         """Pre-armor damage a hit deals. Override to change the damage model."""
         return roll_weapon_damage(dice, weapon, multiplier)
 
+    @staticmethod
+    def _blunt(raw_damage: int, blunted: bool) -> int:
+        """Halve a blunted (practice-combat) blow's pre-armor damage, rounding
+        down (p.22) — a 6 becomes 3, a 5 becomes 2. A normal blow is unchanged.
+        Armor still stops hits as usual, off the reduced figure."""
+        return raw_damage // 2 if blunted else raw_damage
+
     def absorbed(self, target: Figure, *, zone: str | None) -> int:
         """Hits stopped by armor (and a frontal shield). Override for new armor."""
         return target.hits_stopped(
@@ -163,6 +170,7 @@ class Ruleset:
         hth_damage: object | None = None,
         force_hit: bool = False,
         ranged: bool = False,
+        blunted: bool = False,
     ) -> AttackResult:
         """Roll one attack and return its result (no state is mutated).
 
@@ -188,11 +196,13 @@ class Ruleset:
         damage = 0
         if hit and hth_damage is not None:      # grapple strike (dagger or bare hands)
             raw_damage = roll_damage(dice, hth_damage, multiplier)
+            raw_damage = self._blunt(raw_damage, blunted)
             damage = max(0, raw_damage - self.absorbed(target, zone=zone))
         elif hit and weapon is not None:
             raw_damage = self.weapon_damage(dice, weapon, multiplier)
             if extra_dice:                      # pole weapon in/against a charge:
                 raw_damage += dice.total(extra_dice)   # classic adds it AFTER the crit multiplier (cf. Tarmar; #154)
+            raw_damage = self._blunt(raw_damage, blunted)
             stopped = self.absorbed(target, zone=zone) + main_gauche_parry(
                 target, weapon, zone)
             damage = max(0, raw_damage - stopped)

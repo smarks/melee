@@ -32,6 +32,26 @@ def test_new_game_via_setup_dialog(live_server, page: Page) -> None:
 
 
 @pytest.mark.django_db
+def test_practice_toggle_starts_a_practice_bout(live_server, page: Page) -> None:
+    # #139: the setup wizard's "Practice combat" checkbox starts a p.22 practice
+    # bout (blunted weapons, no missiles, drop-out at ST 3).
+    page.goto(live_server.url)
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+
+    page.get_by_role("button", name="New game").click()
+    expect(page.locator("#setup")).to_be_visible()
+    page.locator("#practiceMode").check()
+    page.get_by_role("button", name="Begin game").click()
+    expect(page.locator("#setup")).to_be_hidden()
+
+    # The deep-link URL carries the new game id; the API confirms the bout's mode.
+    match = re.search(r"/game/([0-9a-f]+)", page.url)
+    assert match, f"expected a /game/<gid> URL, got {page.url}"
+    state = page.request.get(f"{live_server.url}/api/game/{match.group(1)}").json()
+    assert state["state"]["practice"] is True
+
+
+@pytest.mark.django_db
 def test_initiative_autorolls_then_advances_to_movement(live_server, page: Page) -> None:
     page.goto(live_server.url)
     banner = page.locator("#phaseBanner")
