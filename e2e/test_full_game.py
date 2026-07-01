@@ -34,7 +34,14 @@ def _advance_once(page: Page) -> bool:
     mid-turn / mid-render)."""
     phase = page.locator("#phaseBanner").inner_text()
     if "Action selection" in phase:
-        return _click(page, "Do nothing (hold)")
+        # The selection controls now live inline under the active character
+        # (#198/#199); the active figure's block is the enabled one.
+        hold = page.locator("#roster .charctl.enabled").get_by_role(
+            "button", name="Do nothing (hold)", exact=True)
+        if hold.count() and hold.first.is_enabled():
+            hold.first.click()
+            return True
+        return False
     if "Combat" in phase:
         # Resolve (damage lands), then End turn -- two clean steps.
         return (_click(page, "Resolve attacks") or _click(page, "Resolve combat")

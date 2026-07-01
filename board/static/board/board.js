@@ -465,11 +465,13 @@ function drawArena() {
       ring.setAttribute("stroke", "#7CFC8C"); ring.setAttribute("stroke-width", "2.5");
       g.appendChild(ring);
     }
-    // Amber pulse ring = the figure whose turn it is to act right now (#192).
+    // Amber highlight = the figure whose turn it is to act right now (#192; the
+    // inline per-character controls key off the same active figure, #199). A bold
+    // pulsing, glowing gold ring so it's unmistakable which counter is live.
     if (S.phase === "select" && f.uid === S.active_uid && !f.dead) {
       const ring = document.createElementNS(SVG, "circle");
       ring.setAttribute("cx", h.cx); ring.setAttribute("cy", h.cy);
-      ring.setAttribute("r", LAYOUT.size * 0.9);
+      ring.setAttribute("r", LAYOUT.size * 0.92);
       ring.setAttribute("class", "activering");
       g.appendChild(ring);
     }
@@ -539,7 +541,10 @@ function drawControls() {
 
   if (phase === "select") {
     // Per-character initiative selection (#192): only the active figure may act,
-    // and each choice submits immediately, lighting up the next figure.
+    // and each choice submits immediately, lighting up the next figure. The
+    // action buttons themselves now live inline under each character in the
+    // roster (drawRoster / figControlsHtml, #198/#199) instead of pinned here at
+    // the bottom, so #controls just carries the "what to do now" hint.
     if (sel && chosenOption) { drawPlacement(c); return; }   // mid-placement keeps its UI
     const active = S.active_uid ? figByUid(S.active_uid) : null;
     if (!active) { setHint("Resolving the action pass…"); return; }
@@ -548,11 +553,9 @@ function drawControls() {
               + ` to set <b>${escapeHtml(active.name)}</b>'s action…`);
       return;
     }
-    setHint(`<b>${escapeHtml(active.name)}</b> has initiative — choose its action.`
-            + ` It submits immediately, then the next figure lights up.`);
-    bigPrimary(c, `Choose ${escapeHtml(active.name)}'s action →`, () => onFigureClick(active));
-    addBtn(c, "Do nothing (hold)", () => selectDoNothing(active));
-    if (canPass(active)) addBtn(c, "Pass — choose last", () => selectPass(active));
+    setHint(`<b>${escapeHtml(active.name)}</b> has initiative — choose its action`
+            + ` from its card above, on its counter, or the board. It submits`
+            + ` immediately, then the next figure lights up.`);
     return;
   }
 
@@ -1080,6 +1083,32 @@ function figActionHtml(f) {
   if (canFight && !f.dead) return `<span class="action todo">choose action</span>`;
   return `<span class="action idle">—</span>`;
 }
+// The inline per-character action controls shown UNDER each character row during
+// the selection phase (#198/#199 — moves the controls off the bottom of the
+// column and puts a copy beside every character). The active, controllable
+// figure's block is ENABLED, and its "Choose action" opens exactly the same board
+// action menu (openMenu) as clicking the token; every other not-yet-acted figure
+// shows the SAME block DISABLED, as a preview of the control that becomes theirs
+// on their turn. A figure that has already acted, passed, or is dead shows no
+// block (its chosen action / "Passed — waiting" badge stands instead).
+function figControlsHtml(f) {
+  if (S.phase !== "select") return "";
+  if (f.dead || f.collapsed || f.acted) return "";
+  // A passer that isn't up yet shows its "Passed — waiting" badge, not a control
+  // block; once it comes up last to choose, isActive is true and it gets the
+  // enabled block again (with Pass disabled -- it's already deferred).
+  if (hasPassed(f) && !isActive(f)) return "";
+  const enabled = isActive(f) && myControlled(f);
+  const dis = enabled ? "" : " disabled";
+  const passDis = (enabled && canPass(f)) ? "" : " disabled";
+  return `<div class="charctl ${enabled ? "enabled" : "disabled"}" data-ctl="${escapeHtml(f.uid)}">`
+    + `<button class="ctl-choose primary" data-act="choose"${dis}>`
+    + `Choose ${escapeHtml(f.name)}'s action →</button>`
+    + `<div class="ctl-secondary">`
+    + `<button data-act="nothing"${dis}>Do nothing (hold)</button>`
+    + `<button data-act="pass"${passDis}>Pass — choose last</button>`
+    + `</div></div>`;
+}
 function drawRoster() {
   const r = $("roster"); if (!r || !S) return;
   const byside = {};
@@ -1100,7 +1129,8 @@ function drawRoster() {
         + (S.phase === "select" && !active && !f.acted && !dead ? " disabled" : "");
       html += `<div class="${cls}" data-uid="${escapeHtml(f.uid)}">`
         + `<span>${tokenBadge(f)} ${escapeHtml(f.name)} <span class="muted">${state}</span></span>`
-        + figActionHtml(f) + `</div>`;
+        + figActionHtml(f) + `</div>`
+        + figControlsHtml(f);
     }
   }
   html += inviteHtml();
@@ -1108,6 +1138,24 @@ function drawRoster() {
   r.querySelectorAll(".row[data-uid]").forEach(row => {
     const f = figByUid(row.dataset.uid);
     if (f) row.addEventListener("click", () => onFigureClick(f));
+  });
+  // Wire the inline per-character action controls (#198/#199). Disabled buttons
+  // (every non-active figure's preview) carry the `disabled` attribute and get no
+  // handler; the active figure's Choose opens the same menu as its token, and Do
+  // nothing / Pass submit immediately, exactly like the old bottom controls.
+  r.querySelectorAll(".charctl[data-ctl]").forEach(block => {
+    const f = figByUid(block.dataset.ctl);
+    if (!f) return;
+    block.querySelectorAll("button[data-act]").forEach(btn => {
+      if (btn.disabled) return;
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const kind = btn.dataset.act;
+        if (kind === "choose") onFigureClick(f);
+        else if (kind === "nothing") selectDoNothing(f);
+        else if (kind === "pass") selectPass(f);
+      });
+    });
   });
 }
 
