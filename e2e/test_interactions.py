@@ -179,6 +179,18 @@ def test_invite_link_shows_in_a_mixed_human_and_computer_game(live_server, page:
 
 
 @pytest.mark.django_db
+def test_generated_fighter_starts_with_a_missile_weapon(live_server, page: Page) -> None:
+    # regression: a generated fighter must start with a hand weapon AND a missile
+    # weapon (bow/crossbow), not two hand weapons. The editor ARCHETYPES defaulted
+    # weapon2 to a melee weapon (Mace/Shortsword), out of step with the engine
+    # archetypes and best_weapons, which pair each melee weapon with a bow.
+    page.goto(live_server.url)
+    page.locator("#editCharBtn").click()
+    weapon2 = page.locator('[data-eq="weapon2"]').first
+    expect(weapon2).to_have_value(re.compile(r"bow", re.IGNORECASE), timeout=15_000)
+
+
+@pytest.mark.django_db
 def test_live_fighter_editor_opens_in_a_modal(live_server, page: Page) -> None:
     # #181: editing a fighter mid-game happens in a first-class modal whose Apply
     # button is always reachable -- not crammed into the bottom corner panel where
