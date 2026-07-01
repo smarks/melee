@@ -1454,10 +1454,13 @@ async function startCustom() {
   closeEditor(); closeSetup(); closeLiveEdit(); resetSelection(); render();
 }
 
-// Configurable colours: each corner swatch drives one or more CSS variables and
-// remembers the choice in localStorage. bg swatch also recolours the controls.
-const THEME = { bgColor: ["--bg", "--panel"], textColor: ["--ink"], hexColor: ["--hex"] };
-const RESET_VARS = ["--bg", "--panel", "--ink", "--hex"];
+// Theming: a chosen PRESET (see window.MELEE_THEMES in board.html) sets every
+// design token at once; on top of that, each corner swatch can override one or
+// more tokens as a per-user "Custom" tweak. Both the active preset name and any
+// swatch overrides are remembered in localStorage and re-applied on load (the
+// preset before first paint, in board.html's <head>). The swatch->token map is
+// the single source shared with that pre-paint script.
+const THEME = window.MELEE_SWATCH_VARS;
 const cleanHex = v => { v = (v || "").trim(); return /^#[0-9a-f]{6}$/i.test(v) ? v : null; };
 function luminance(hex) {
   const m = cleanHex(hex); if (!m) return 0;
@@ -1481,33 +1484,57 @@ function ensureTextContrast() {  // keep text readable against the chosen backgr
     root().style.setProperty("--ink", good);
     localStorage.setItem("melee.theme.textColor", good);
     $("textColor").value = good;
+    syncMuted();                                     // a forced ink change drags muted along
+  } else if (localStorage.getItem("melee.theme.textColor")) {
+    syncMuted();                                     // a custom text colour keeps muted matched to it
   }
-  syncMuted();
+  // With no custom text override the preset's own --muted is respected as-is.
+}
+function syncSwatchInputs() {  // point each colour input at the value now in effect
+  const cs = getComputedStyle(root());
+  for (const [id, vars] of Object.entries(THEME)) {
+    const saved = localStorage.getItem("melee.theme." + id);
+    const current = cleanHex(saved) || cleanHex(cs.getPropertyValue(vars[0]));
+    if (current) $(id).value = current;
+  }
+}
+function populateThemePicker() {
+  const picker = $("themePicker");
+  if (!picker) return;
+  for (const name of Object.keys(window.MELEE_THEMES)) {
+    const option = document.createElement("option");
+    option.value = name; option.textContent = name;
+    picker.appendChild(option);
+  }
+  picker.value = window.meleeActivePreset();
+  picker.addEventListener("change", () => {
+    localStorage.setItem("melee.theme.preset", picker.value);
+    window.meleeApplyPreset(picker.value);   // re-layers any saved swatch overrides on top
+    syncSwatchInputs();
+    ensureTextContrast();
+  });
 }
 function applyTheme() {
+  // The preset (+ any saved swatches) is already applied pre-paint by the <head>
+  // script; here we sync the inputs and wire live editing of the custom swatches.
+  syncSwatchInputs();
   for (const [id, vars] of Object.entries(THEME)) {
-    const input = $(id);
-    const saved = localStorage.getItem("melee.theme." + id);
-    if (saved) vars.forEach(v => root().style.setProperty(v, saved));
-    const current = cleanHex(saved) || cleanHex(getComputedStyle(root()).getPropertyValue(vars[0]));
-    if (current) input.value = current;
-    input.addEventListener("input", () => {
-      vars.forEach(v => root().style.setProperty(v, input.value));
-      localStorage.setItem("melee.theme." + id, input.value);
+    $(id).addEventListener("input", () => {
+      const value = $(id).value;
+      vars.forEach(v => root().style.setProperty(v, value));
+      localStorage.setItem("melee.theme." + id, value);
       ensureTextContrast();
     });
   }
+  populateThemePicker();
   ensureTextContrast();
 }
 function resetTheme() {
+  // Drop the custom swatch tweaks and fall back to the ACTIVE preset (not the CSS
+  // :root default) -- reset returns to the chosen theme, minus per-user overrides.
   ["bgColor", "textColor", "hexColor"].forEach(id => localStorage.removeItem("melee.theme." + id));
-  RESET_VARS.forEach(v => root().style.removeProperty(v));   // fall back to the CSS :root defaults
-  const cs = getComputedStyle(root());
-  for (const [id, vars] of Object.entries(THEME)) {
-    const c = cleanHex(cs.getPropertyValue(vars[0]));
-    if (c) $(id).value = c;
-  }
-  syncMuted();
+  window.meleeApplyPreset(window.meleeActivePreset());
+  syncSwatchInputs();
 }
 
 applyTheme();

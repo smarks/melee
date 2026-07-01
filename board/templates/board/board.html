@@ -7,7 +7,7 @@
 <style>
   :root {
     --bg: #34313f; --panel: #3f3c4c; --ink: #f1eff6; --muted: #c0b9cf;
-    --line: #5a546b; --hex: #4d4960; --hex-stroke: #6a6480;
+    --line: #5a546b; --hex: #4d4960; --hex-stroke: #6a6480; --hex-entrance: #262338;
     --red: #d0524f; --blue: #4f86d0; --green: #57b894; --gold: #e0b13c; --violet: #b07ad8;
     --reach: #3a6f4a; --reach2: #5fae74;
     --target: #d8b54a; --accent: #8a78d0;
@@ -19,6 +19,19 @@
            display: flex; align-items: center; gap: 16px; }
   header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
   header .sub { color: var(--muted); font-size: 12px; }
+  /* Theme picker: a native-looking dropdown in the header's right cluster. */
+  .headright { display: inline-flex; align-items: center; gap: 12px; }
+  .themepick { display: inline-flex; align-items: center; gap: 6px; color: var(--muted);
+               font-size: 12px; }
+  #themePicker { background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+                 border-radius: 6px; padding: 3px 22px 3px 7px; font: inherit; font-size: 12px;
+                 cursor: pointer; appearance: none; -webkit-appearance: none;
+                 background-image:
+                   linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                   linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+                 background-position: right 10px center, right 6px center;
+                 background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+  #themePicker:hover { border-color: var(--accent); }
   .wrap { display: flex; gap: 0; height: calc(100vh - 49px); }
   /* Three columns: Map (largest) | Game Control | Characters. Each side column
      scrolls internally (min-height:0) so the right-column scroll bug (#181)
@@ -145,7 +158,7 @@
      hexes or tokens beneath it. */
   line.mhborder { stroke: var(--gold); stroke-width: 2; stroke-linecap: round;
                   opacity: .4; pointer-events: none; }
-  polygon.hex.entrance { fill: #262338; }
+  polygon.hex.entrance { fill: var(--hex-entrance); }
   polygon.hex.reach { fill: var(--reach); cursor: pointer; }
   polygon.hex.reach:hover { fill: var(--reach2); }
   polygon.hex.chosen { fill: #c9a227; stroke: #fff; stroke-width: 2.5; cursor: pointer; }
@@ -203,6 +216,81 @@
   button.link { background: none; border: none; color: var(--accent); cursor: pointer;
                 padding: 0; font: inherit; text-decoration: underline; }
 </style>
+<script>
+  // Preset themes. Each preset is a COMPLETE map of every design token the UI is
+  // drawn from, so switching a preset restyles the whole app (panels, board SVG,
+  // chips, menus, buttons) in one pass. "Dark" mirrors the :root defaults above,
+  // so the out-of-the-box look is unchanged. This runs in <head>, BEFORE the body
+  // paints, so a saved non-default theme is applied with no flash of the default.
+  window.MELEE_THEME_TOKENS = [
+    "--bg", "--panel", "--ink", "--muted", "--line",
+    "--hex", "--hex-stroke", "--hex-entrance",
+    "--red", "--blue", "--green", "--gold", "--violet",
+    "--reach", "--reach2", "--target", "--accent",
+  ];
+  // The corner colour swatches each drive one or more tokens; a saved swatch is a
+  // "Custom" tweak layered ON TOP of whatever preset is active.
+  window.MELEE_SWATCH_VARS = { bgColor: ["--bg", "--panel"], textColor: ["--ink"], hexColor: ["--hex"] };
+  window.MELEE_THEMES = {
+    "Dark": {
+      "--bg": "#34313f", "--panel": "#3f3c4c", "--ink": "#f1eff6", "--muted": "#c0b9cf", "--line": "#5a546b",
+      "--hex": "#4d4960", "--hex-stroke": "#6a6480", "--hex-entrance": "#262338",
+      "--red": "#d0524f", "--blue": "#4f86d0", "--green": "#57b894", "--gold": "#e0b13c", "--violet": "#b07ad8",
+      "--reach": "#3a6f4a", "--reach2": "#5fae74", "--target": "#d8b54a", "--accent": "#8a78d0",
+    },
+    "Light": {
+      "--bg": "#f2f0f7", "--panel": "#ffffff", "--ink": "#211d2b", "--muted": "#5d566e", "--line": "#cbc5d8",
+      "--hex": "#e4e0ee", "--hex-stroke": "#b3accb", "--hex-entrance": "#cdd6ea",
+      "--red": "#c23b38", "--blue": "#2f66b8", "--green": "#2b8f6a", "--gold": "#b07d12", "--violet": "#8348c4",
+      "--reach": "#bfe3cc", "--reach2": "#57b98d", "--target": "#c98f12", "--accent": "#6f57c4",
+    },
+    "High contrast": {
+      "--bg": "#000000", "--panel": "#0a0a0a", "--ink": "#ffffff", "--muted": "#d0d0d0", "--line": "#4d4d4d",
+      "--hex": "#1a1a1a", "--hex-stroke": "#808080", "--hex-entrance": "#202b45",
+      "--red": "#ff5b57", "--blue": "#5aa2ff", "--green": "#46e39a", "--gold": "#ffd23d", "--violet": "#d18cff",
+      "--reach": "#12683f", "--reach2": "#2ecb82", "--target": "#ffd23d", "--accent": "#8a5cf0",
+    },
+    "Parchment": {
+      "--bg": "#f2e6cf", "--panel": "#faf1dd", "--ink": "#3a2e1c", "--muted": "#6f5c3e", "--line": "#d8c39a",
+      "--hex": "#e6d6b3", "--hex-stroke": "#bfa878", "--hex-entrance": "#cdd8c2",
+      "--red": "#b23a2e", "--blue": "#2f6ea8", "--green": "#4a7d3a", "--gold": "#b8860b", "--violet": "#7d4aa0",
+      "--reach": "#c3ddb0", "--reach2": "#6fae5a", "--target": "#b8860b", "--accent": "#9a6a3c",
+    },
+    "Solarized": {
+      "--bg": "#002b36", "--panel": "#073642", "--ink": "#eee8d5", "--muted": "#93a1a1", "--line": "#0f4a5a",
+      "--hex": "#073642", "--hex-stroke": "#35707f", "--hex-entrance": "#0b4a5c",
+      "--red": "#dc322f", "--blue": "#268bd2", "--green": "#859900", "--gold": "#b58900", "--violet": "#6c71c4",
+      "--reach": "#0f5a3f", "--reach2": "#2aa198", "--target": "#b58900", "--accent": "#268bd2",
+    },
+    "Terminal": {
+      "--bg": "#050805", "--panel": "#0b120b", "--ink": "#33ff66", "--muted": "#1f9d43", "--line": "#14401f",
+      "--hex": "#0d1a0d", "--hex-stroke": "#1f6b32", "--hex-entrance": "#123a1a",
+      "--red": "#ff5f5f", "--blue": "#5fd7ff", "--green": "#33ff66", "--gold": "#eaff5f", "--violet": "#b96bff",
+      "--reach": "#0f4a24", "--reach2": "#33ff66", "--target": "#eaff5f", "--accent": "#12b33f",
+    },
+  };
+  window.meleeActivePreset = function () {
+    var saved = localStorage.getItem("melee.theme.preset");
+    return (saved && window.MELEE_THEMES[saved]) ? saved : "Dark";
+  };
+  // Apply a preset's full token set, then re-layer any saved custom swatches on top.
+  window.meleeApplyPreset = function (name) {
+    var palette = window.MELEE_THEMES[name] || window.MELEE_THEMES["Dark"];
+    var rootEl = document.documentElement;
+    window.MELEE_THEME_TOKENS.forEach(function (token) {
+      if (palette[token]) rootEl.style.setProperty(token, palette[token]);
+    });
+    Object.keys(window.MELEE_SWATCH_VARS).forEach(function (swatchId) {
+      var saved = localStorage.getItem("melee.theme." + swatchId);
+      if (saved && /^#[0-9a-f]{6}$/i.test(saved)) {
+        window.MELEE_SWATCH_VARS[swatchId].forEach(function (token) {
+          rootEl.style.setProperty(token, saved);
+        });
+      }
+    });
+  };
+  window.meleeApplyPreset(window.meleeActivePreset());  // before first paint — no flash
+</script>
 </head>
 <body>
 <header>
@@ -210,7 +298,10 @@
   {% if request.user.is_staff %}<button onclick="openAdmin()" title="Manage users and characters">⚙ Admin</button>{% endif %}
   <span class="sub">The Fantasy Trip — man-to-man combat</span>
   <span class="sub" id="turnInfo"></span>
-  <span class="sub" style="margin-left:auto">
+  <span class="sub headright" style="margin-left:auto">
+    <label class="themepick">Theme
+      <select id="themePicker" title="Choose a colour theme"></select>
+    </label>
     {% if request.user.is_authenticated %}
       <a href="{% url 'origami_auth:profile' %}" style="color:var(--accent)">{{ request.user.username }}</a>
     {% else %}
