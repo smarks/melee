@@ -17,6 +17,12 @@ def _fighter(name: str, side: str, weapon=BROADSWORD, **kw):
                         ready_weapon=weapon, armor=NO_ARMOR, **kw)
 
 
+def _drive(state: GameState, side: str) -> None:
+    """Play each of ``side``'s figures through the per-figure AI (#192)."""
+    for figure in [f for f in state.figures if f.side == side and f.can_act()]:
+        ai.take_action(state, figure)
+
+
 def test_ai_closes_the_distance() -> None:
     arena = Arena(cols=7, rows=7)
     layout = arena.layout
@@ -30,7 +36,7 @@ def test_ai_closes_the_distance() -> None:
     state = GameState(arena, [red, blue], dice=Dice(seed=1))
 
     before = layout.distance(red.position, blue.position)
-    ai.take_movement(state, "red")
+    _drive(state, "red")
     after = layout.distance(red.position, blue.position)
     assert after < before                    # it moved toward the enemy
 
@@ -51,7 +57,7 @@ def test_ai_drives_a_multihex_giant_without_crashing() -> None:
 
     assert giant.size > 1                              # really multi-hex
     before = layout.distance(giant.position, foe.position)
-    ai.take_movement(state, "red")                    # must not raise IllegalAction
+    _drive(state, "red")                    # must not raise IllegalAction
     after = layout.distance(giant.position, foe.position)
     assert after <= before                            # made a legal move toward the foe
 
@@ -67,7 +73,7 @@ def test_ai_engaged_attacks_and_resolves() -> None:
     # scripted: 3d6 to-hit = 9 (clean hit, not a special), then 2d6 damage = 12.
     state = GameState(arena, [red, blue], dice=Dice(scripted=[3, 3, 3, 6, 6]))
 
-    ai.take_movement(state, "red")
+    _drive(state, "red")
     assert spec(red.current_option).is_attack          # chose an attack option
     ai.queue_attacks(state, "red")
     results = state.resolve_combat()
@@ -94,7 +100,7 @@ def test_ai_fires_a_missile_in_movement() -> None:
     state = GameState(arena, [archer, foe], dice=Dice(seed=1))
     assert not state.engaged(archer)         # out of contact, so it can loose
 
-    ai.take_movement(state, "red")
+    _drive(state, "red")
     assert archer.current_option == Option.MISSILE_ATTACK
     assert state.in_front_arc(archer, foe.position)   # it faced the lane first
 
@@ -113,7 +119,7 @@ def test_ai_holds_and_faces_while_reloading() -> None:
     state = GameState(arena, [archer, foe], dice=Dice(seed=1))
     held = archer.position
 
-    ai.take_movement(state, "red")
+    _drive(state, "red")
     assert archer.current_option == Option.MOVE       # held, did not charge
     assert archer.position == held                    # stayed put
     assert state.in_front_arc(archer, foe.position)   # faced the foe
@@ -152,7 +158,7 @@ def test_ai_queues_a_missile_attack_in_combat() -> None:
         foe.position = layout.neighbor(foe.position, 0)
     foe.facing = 3
     state = GameState(arena, [archer, foe], dice=Dice(seed=1))
-    ai.take_movement(state, "red")           # faces and chooses MISSILE_ATTACK
+    _drive(state, "red")           # faces and chooses MISSILE_ATTACK
     assert archer.current_option == Option.MISSILE_ATTACK
 
     ai.queue_attacks(state, "red")
@@ -169,7 +175,7 @@ def test_ai_stands_a_prone_figure() -> None:
     downed.posture = Posture.PRONE
     state = GameState(arena, [downed, foe], dice=Dice(seed=1))
 
-    ai.take_movement(state, "red")
+    _drive(state, "red")
     assert downed.current_option == Option.STAND_UP
 
 

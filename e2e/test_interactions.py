@@ -134,18 +134,25 @@ def test_practice_toggle_starts_a_practice_bout(live_server, page: Page) -> None
 
 
 @pytest.mark.django_db
-def test_initiative_autorolls_then_advances_to_movement(live_server, page: Page) -> None:
+def test_selection_phase_lights_up_the_active_figure(live_server, page: Page) -> None:
     page.goto(live_server.url)
-    # A fresh hot-seat game; initiative auto-rolls (#176), then the winner picks
-    # who moves first via the "<side> moves first" buttons.
+    # A fresh hot-seat game opens straight into per-character action selection
+    # (#192): no initiative roll / move-order pick. The banner reads "Action
+    # selection" and exactly one roster row is the active (highlighted) figure.
     _start_inline_game(page, human=True)
 
-    controls = page.locator("#controls")
-    first = controls.get_by_role("button", name=re.compile(r"moves first"))
-    expect(first.first).to_be_visible(timeout=10_000)
-    first.first.click()
-
-    expect(page.locator("#phaseBanner")).to_contain_text("Movement", timeout=10_000)
+    expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
+    expect(page.locator("#roster .row.active")).to_have_count(1)
+    # Holding the active figure (Do nothing) commits its action and advances the
+    # highlight to the next figure in initiative order.
+    active_before = page.locator("#roster .row.active").get_attribute("data-uid")
+    page.locator("#controls").get_by_role("button", name="Do nothing (hold)").click()
+    # The highlight moves to a DIFFERENT figure (wait for the re-render to settle).
+    expect(page.locator(
+        f'#roster .row.active:not([data-uid="{active_before}"])')).to_have_count(1)
+    # ...and the figure that just held now shows its committed "Do nothing" action.
+    expect(page.locator(f'#roster .row[data-uid="{active_before}"] .action')
+           ).to_have_text("Do nothing")
 
 
 @pytest.mark.django_db
@@ -156,6 +163,19 @@ def test_no_invite_link_in_a_vs_computer_game(live_server, page: Page) -> None:
     _start_inline_game(page)                       # computer opponent
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
     expect(page.get_by_role("button", name="Copy invite link")).to_have_count(0)
+
+
+@pytest.mark.django_db
+def test_invite_link_shows_in_a_mixed_human_and_computer_game(live_server, page: Page) -> None:
+    # #192: a game with a second human seat needs the invite link for that player,
+    # even when a computer is also in the game. #165 wrongly hid it whenever ANY
+    # computer was present, suppressing the invite the second human needs.
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add human player").click()   # a 2nd human seat
+    page.get_by_role("button", name="Add AI player").click()       # + a computer
+    page.get_by_role("button", name="New Game").click()
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    expect(page.get_by_role("button", name="Copy invite link")).to_have_count(1)
 
 
 @pytest.mark.django_db
@@ -246,3 +266,69 @@ def test_mixed_roster_starts_and_runs(live_server, page: Page) -> None:
         f"{live_server.url}/api/game/{match.group(1)}").json()["state"]["controllers"]
     # Players: [you=human red, human blue, AI green] -> only green is AI.
     assert ctrl == {"red": "human", "blue": "human", "green": "computer"}
+
+
+def _active_uid(page: Page):
+    row = page.locator("#roster .row.active")
+    return row.get_attribute("data-uid") if row.count() else None
+
+
+@pytest.mark.django_db
+def test_pass_defers_the_lead_and_it_acts_last(live_server, page: Page) -> None:
+    # #192: passing the figure with initiative defers it -- it greys to a "waiting"
+    # badge, the others proceed, and the passer re-enables last to set a real action.
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)          # hot-seat: tester controls every side
+    expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
+    controls = page.locator("#controls")
+
+    lead = _active_uid(page)
+    assert lead is not None
+    controls.get_by_role("button", name="Pass — choose last").click()
+
+    lead_row = page.locator(f'#roster .row[data-uid="{lead}"]')
+    expect(lead_row).to_have_class(re.compile(r"waiting"))       # greyed, deferred
+    expect(lead_row.locator(".action.passed")).to_be_visible()   # "Passed — waiting"
+    assert _active_uid(page) != lead                             # someone else is up now
+
+    # Hold each remaining (non-passing) figure; the deferred lead then comes up last.
+    for _ in range(6):
+        if _active_uid(page) == lead or _active_uid(page) is None:
+            break
+        controls.get_by_role("button", name="Do nothing (hold)").click()
+        page.wait_for_timeout(90)
+    assert _active_uid(page) == lead                             # the passer acts last
+    expect(lead_row).to_have_class(re.compile(r"active"))
+
+
+@pytest.mark.django_db
+def test_multiple_passers_resolve_in_initiative_order(live_server, page: Page) -> None:
+    # #192: two passers defer; once the non-passers commit, the passers resolve
+    # among themselves in initiative order (the higher-initiative one first).
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)
+    expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
+    controls = page.locator("#controls")
+
+    first_passer = _active_uid(page)
+    controls.get_by_role("button", name="Pass — choose last").click()
+    page.wait_for_timeout(90)
+    second_passer = _active_uid(page)
+    assert second_passer not in (None, first_passer)
+    controls.get_by_role("button", name="Pass — choose last").click()
+    page.wait_for_timeout(90)
+
+    # Commit every remaining non-passer.
+    for _ in range(6):
+        active = _active_uid(page)
+        if active in (first_passer, second_passer, None):
+            break
+        controls.get_by_role("button", name="Do nothing (hold)").click()
+        page.wait_for_timeout(90)
+
+    # The passers now resolve in initiative order: the first to defer (higher
+    # initiative) comes up before the second.
+    assert _active_uid(page) == first_passer
+    controls.get_by_role("button", name="Do nothing (hold)").click()
+    page.wait_for_timeout(90)
+    assert _active_uid(page) == second_passer

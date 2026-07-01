@@ -92,9 +92,8 @@ def test_per_turn_flags_survive_a_round_trip() -> None:
 
 
 def _play_a_turn(state: GameState) -> None:
-    """Run initiative -> a faced attack -> resolve -> end turn, mutating state."""
-    state.roll_initiative()
-    state.choose_first(state.sides[0])
+    """Run selection -> a faced attack -> resolve -> end turn, mutating state."""
+    state.begin_selection()
     attacker, target = state.figures[0], state.figures[1]
     attacker.current_option = Option.SHIFT_ATTACK
     # Force a hit so damage is recorded (scripted low roll for the to-hit check).
@@ -129,7 +128,9 @@ def _assert_figures_equal(left, right) -> None:
 def _assert_state_equal(left: GameState, right: GameState) -> None:
     assert left.turn_number == right.turn_number
     assert left.combat_type == right.combat_type
-    assert left.first_side == right.first_side
+    assert left.initiative_order == right.initiative_order
+    assert left.active_index == right.active_index
+    assert left.passed == right.passed
     assert left.sides == right.sides
     assert left.log == right.log
     assert left.arena.cols == right.arena.cols
@@ -176,8 +177,7 @@ def test_practice_mode_and_drop_out_round_trip() -> None:
 def test_pending_attacks_round_trip(profile_name: str) -> None:
     """A save taken mid-combat (attacks queued, not resolved) restores exactly."""
     state = _two_figure_game(profile_name)
-    state.roll_initiative()
-    state.choose_first(state.sides[0])
+    state.begin_selection()
     attacker, target = state.figures[0], state.figures[1]
     attacker.current_option = Option.SHIFT_ATTACK
     state.queue_attack(attacker, target)
@@ -208,10 +208,7 @@ def test_saved_game_model_round_trips() -> None:
     _play_a_turn(state)
     game = {
         "state": state,
-        "phase": "initiative",
-        "order": state.sides,
-        "moving": 0,
-        "winner": None,
+        "phase": "select",
         "profile": "Tarmar",
         "controllers": {"red": "human", "blue": "computer"},
         "seats": {"red": "pid-abc", "blue": "computer"},
@@ -223,7 +220,7 @@ def test_saved_game_model_round_trips() -> None:
     reloaded = SavedGame.objects.get(pk=row.pk)
     restored = persistence.game_from_json(reloaded.data)
 
-    assert restored["phase"] == "initiative"
+    assert restored["phase"] == "select"
     assert restored["profile"] == "Tarmar"
     assert restored["controllers"] == {"red": "human", "blue": "computer"}
     assert restored["seats"] == {"red": "pid-abc", "blue": "computer"}
@@ -239,9 +236,9 @@ def test_game_survives_registry_eviction() -> None:
     created = client.get("/api/game/new?seed=1&profile=Tarmar").json()
     gid = created["gid"]
 
-    # Play a turn so there is real state to preserve.
+    # Advance a turn so there is real state to preserve.
     client.post(f"/api/game/{gid}/action",
-                data=json.dumps({"type": "roll_initiative"}),
+                data=json.dumps({"type": "end_turn"}),
                 content_type="application/json")
 
     before = client.get(f"/api/game/{gid}").json()
@@ -292,8 +289,7 @@ def test_experience_progression_round_trips_through_saved_game() -> None:
     fighter = state.figures[1]
     fighter.experience = 50
     fighter.added_dx = 3
-    game = {"state": state, "phase": "initiative", "order": state.sides,
-            "moving": 0, "winner": None, "profile": "Classic Melee",
+    game = {"state": state, "phase": "select", "profile": "Classic Melee",
             "controllers": {}, "seats": {}}
 
     SavedGame.objects.create(gid="xp1", data=persistence.game_to_json(game),

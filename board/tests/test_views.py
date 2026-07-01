@@ -16,13 +16,17 @@ def _new(client: Client) -> dict:
     return client.get("/api/game/new?seed=1").json()
 
 
-def test_new_game_has_four_figures_in_initiative(client: Client) -> None:
+def test_new_game_has_four_figures_in_selection(client: Client) -> None:
     data = _new(client)
     assert "gid" in data
-    assert data["state"]["phase"] == "initiative"
+    assert data["state"]["phase"] == "select"
     assert len(data["state"]["figures"]) == 4
     sides = {f["side"] for f in data["state"]["figures"]}
     assert sides == {"red", "blue"}
+    # The per-character selection is live: a full initiative order and an active
+    # figure to act first (#192).
+    assert len(data["state"]["initiative_order"]) == 4
+    assert data["state"]["active_uid"] == data["state"]["initiative_order"][0]
 
 
 def test_new_game_practice_flag_starts_a_practice_bout(client: Client) -> None:
@@ -63,55 +67,67 @@ def _post(client: Client, gid: str, body: dict) -> dict:
     ).json()
 
 
-def test_initiative_move_and_combat_flow(client: Client) -> None:
+def _drive_selection(client: Client, gid: str) -> dict:
+    """Set every active figure's action to a no-op for the CURRENT turn (#192).
+
+    Walks the per-character initiative order, do-nothing-ing each active figure in
+    turn, and stops as soon as the selection pass ends — the phase leaves
+    ``select`` (combat opened) or the turn auto-ends and rolls over.
+    """
+    out = client.get(f"/api/game/{gid}").json()
+    turn = out["state"]["turn"]
+    for _ in range(32):
+        state = out["state"]
+        if (state["phase"] != "select" or state["turn"] != turn
+                or state["active_uid"] is None):
+            return out
+        out = _post(client, gid, {"type": "do_nothing", "uid": state["active_uid"]})
+    return out
+
+
+def test_selection_advances_figure_by_figure_then_opens_combat(client: Client) -> None:
     data = _new(client)
     gid = data["gid"]
-    figures = data["state"]["figures"]
+    order = data["state"]["initiative_order"]
 
-    init = _post(client, gid, {"type": "roll_initiative"})
-    winner = init["state"]["winner"]
-    assert winner in {"red", "blue"}
-
-    chosen = _post(client, gid, {"type": "choose_first", "side": "red"})
-    assert chosen["state"]["phase"] == "move"
-    assert chosen["state"]["moving_side"] == "red"
-
-    # move a red figure one of its reachable hexes
-    red = next(f for f in figures if f["side"] == "red")
-    opts = client.get(f"/api/game/{gid}/options?uid={red['uid']}").json()
+    # The highest-initiative figure acts first; setting its action advances the
+    # pointer to the next figure in the initiative order (#192).
+    active = data["state"]["active_uid"]
+    assert active == order[0]
+    opts = client.get(f"/api/game/{gid}/options?uid={active}").json()
     move_opt = next(o for o in opts["options"] if o["option"] == "move")
     dest = move_opt["reach"][0]
     moved = _post(client, gid, {
-        "type": "move", "uid": red["uid"], "option": "move",
-        "dest": dest, "facing": 2,
+        "type": "move", "uid": active, "option": "move", "dest": dest, "facing": 2,
     })
     assert moved.get("error") is None
-    moved_fig = next(f for f in moved["state"]["figures"] if f["uid"] == red["uid"])
+    moved_fig = next(f for f in moved["state"]["figures"] if f["uid"] == active)
     assert moved_fig["label"] == dest
     assert moved_fig["facing"] == 2
+    assert moved["state"]["active_uid"] == order[1]     # advanced to the next figure
 
-    # Both sides end movement. Combat may stay open if anyone can still attack
-    # (e.g. an archer's shot); otherwise it auto-ends. Either way, ending the
-    # turn lands back in initiative on turn 2.
-    _post(client, gid, {"type": "end_side_move"})
-    out = _post(client, gid, {"type": "end_side_move"})
+    # Set the rest of the pass. Once every figure has an action the phase opens
+    # combat (unless nothing is left to resolve, in which case the turn auto-ends
+    # to a fresh selection on turn 2).
+    out = _drive_selection(client, gid)
     if out["state"]["phase"] == "combat":
         out = _post(client, gid, {"type": "end_turn"})
-    assert out["state"]["phase"] == "initiative"
+    assert out["state"]["phase"] == "select"
     assert out["state"]["turn"] == 2
 
 
-def test_illegal_move_is_rejected(client: Client) -> None:
+def test_only_the_active_figure_may_act(client: Client) -> None:
     data = _new(client)
     gid = data["gid"]
-    _post(client, gid, {"type": "roll_initiative"})
-    _post(client, gid, {"type": "choose_first", "side": "red"})
-    blue = next(f for f in data["state"]["figures"] if f["side"] == "blue")
-    # blue cannot move during red's movement
+    order = data["state"]["initiative_order"]
+    active = data["state"]["active_uid"]
+    # A figure that is not the active character cannot act out of turn (#192).
+    not_active = next(uid for uid in order if uid != active)
     out = _post(client, gid, {
-        "type": "move", "uid": blue["uid"], "option": "move", "facing": 0,
+        "type": "move", "uid": not_active, "option": "move", "facing": 0,
     })
     assert "error" in out
+    assert "turn to act" in out["error"]
 
 
 def test_move_to_an_unreachable_hex_is_rejected(client: Client) -> None:
@@ -119,13 +135,10 @@ def test_move_to_an_unreachable_hex_is_rejected(client: Client) -> None:
     'destination not reachable' rather than silently teleporting it."""
     data = _new(client)
     gid = data["gid"]
-    _post(client, gid, {"type": "roll_initiative"})
-    moved = _post(client, gid, {"type": "choose_first", "side": "red"})
-    assert moved["state"]["moving_side"] == "red"
-    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+    active = data["state"]["active_uid"]     # the figure whose turn it is to act
     out = client.post(
         f"/api/game/{gid}/action",
-        data=json.dumps({"type": "move", "uid": red["uid"], "option": "move",
+        data=json.dumps({"type": "move", "uid": active, "option": "move",
                          "dest": "0000", "facing": 0}),   # far corner, beyond its MA
         content_type="application/json",
     )
@@ -163,26 +176,20 @@ def test_vs_computer_sets_controllers_and_plays_a_turn(client: Client) -> None:
     gid = data["gid"]
     assert data["state"]["controllers"] == {"red": "human", "blue": "computer"}
 
-    out = _post(client, gid, {"type": "roll_initiative"})
-    assert "error" not in out
-    # If red (the human) won initiative it must choose; if blue won, the
-    # computer has already chosen and moved, so we're past initiative.
-    if out["state"]["phase"] == "initiative":
-        out = _post(client, gid, {"type": "choose_first", "side": "red"})
-        assert "error" not in out
+    # At new-game the computer has already auto-played its own figures up to the
+    # first human active figure (#192): every active char now belongs to red.
+    state = client.get(f"/api/game/{gid}").json()["state"]
+    if state["phase"] == "select":
+        active = state["active_uid"]
+        assert active is None or state["controllers"][
+            next(f["side"] for f in state["figures"] if f["uid"] == active)] == "human"
 
-    # End movement turns. Turn 1 has no one in contact, so once both sides have
-    # moved the combat phase has nothing to do and auto-ends back to initiative.
-    guard = 0
-    while out["state"]["phase"] == "move" and guard < 6:
-        out = _post(client, gid, {"type": "end_side_move"})
-        assert "error" not in out
-        guard += 1
-    # Combat may stay open if the human still has a shot; ending the turn (or an
-    # idle auto-end) returns to initiative on turn 2.
+    # Drive red's figures through their actions; the computer fills its own as
+    # their turns come up, and the pass then opens combat.
+    out = _drive_selection(client, gid)
     if out["state"]["phase"] == "combat":
         out = _post(client, gid, {"type": "end_turn"})
-    assert out["state"]["phase"] == "initiative"
+    assert out["state"]["phase"] == "select"
     assert out["state"]["turn"] == 2
 
 
@@ -207,17 +214,17 @@ def test_auto_end_turn_when_no_attacks_remain() -> None:
                       if layout.neighbor(red.position, d) == blue.position)
     game = {
         "state": GameState(arena, [red, blue]),
-        "phase": "combat", "order": ["red", "blue"], "moving": 0, "winner": None,
+        "phase": "combat",
         "controllers": {"red": "human", "blue": "computer"}, "combat_prepared": True,
     }
     # Red still has an attack to declare -> the turn must NOT auto-end.
     red.current_option = Option.SHIFT_ATTACK
     _auto_end_if_idle(game)
     assert game["phase"] == "combat"
-    # Red has already attacked -> nothing left -> auto-end.
+    # Red has already attacked -> nothing left -> auto-end into a fresh selection.
     red.attacked_this_turn = True
     _auto_end_if_idle(game)
-    assert game["phase"] == "initiative"
+    assert game["phase"] == "select"
 
 
 def _combat_duel():
@@ -240,7 +247,7 @@ def _combat_duel():
                       if grid.neighbor(red.position, d) == blue.position)
     GAMES["duel-test"] = {
         "state": GameState(arena, [red, blue]), "layout": board_layout(arena),
-        "phase": "combat", "order": ["red", "blue"], "moving": 0, "winner": None,
+        "phase": "combat",
         "controllers": {"red": "human", "blue": "human"}, "combat_prepared": True,
     }
     return red, blue
@@ -496,11 +503,11 @@ def test_new_custom_game_rejects_an_illegal_fighter(client: Client) -> None:
 def test_move_can_switch_the_ready_weapon(client: Client) -> None:
     data = _new(client)            # same screen default skirmish
     gid = data["gid"]
-    _post(client, gid, {"type": "roll_initiative"})
-    _post(client, gid, {"type": "choose_first", "side": "red"})
-    # The Archer starts disengaged carrying a Longbow + Shortsword + Dagger.
+    # The Archer (Longbow) has the highest initiative, so it is the first active
+    # figure and may set its action right away.
     archer = next(f for f in data["state"]["figures"]
                   if f["side"] == "red" and f["weapon"] == "Longbow")
+    assert data["state"]["active_uid"] == archer["uid"]
     assert "Shortsword" in archer["weapons"]
     out = _post(client, gid, {"type": "move", "uid": archer["uid"],
                               "option": "ready_weapon", "facing": archer["facing"],
@@ -576,15 +583,38 @@ def test_mode_still_drives_ai_when_no_computer_param(client: Client) -> None:
     assert ctrl["blue"] == "computer" and ctrl["red"] == "human"
 
 
-def test_choose_first_is_rejected_outside_the_initiative_phase(client: Client) -> None:
-    """choose_first must guard its phase like every sibling action (#79)."""
+def test_queue_attack_is_rejected_during_selection(client: Client) -> None:
+    """Combat actions must guard their phase: a queue_attack in the ``select``
+    phase comes back 400 'not the combat phase' (#192)."""
     data = _new(client)
     gid = data["gid"]
-    _post(client, gid, {"type": "roll_initiative"})
-    moved = _post(client, gid, {"type": "choose_first", "side": "red"})
-    assert moved["state"]["phase"] == "move"             # now past initiative
-    again = _post(client, gid, {"type": "choose_first", "side": "blue"})
-    assert again["error"] == "not the initiative phase"
+    figures = data["state"]["figures"]
+    red = next(f for f in figures if f["side"] == "red")
+    blue = next(f for f in figures if f["side"] == "blue")
+    out = client.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "queue_attack", "uid": red["uid"],
+                         "target": blue["uid"]}),
+        content_type="application/json")
+    assert out.status_code == 400
+    assert out.json()["error"] == "not the combat phase"
+
+
+def test_move_is_rejected_during_combat(client: Client) -> None:
+    """A ``move`` (a selection action) is rejected once combat has opened (#192)."""
+    data = _new(client)
+    gid = data["gid"]
+    active = data["state"]["active_uid"]
+    _drive_selection(client, gid)                 # run the pass to combat
+    state = client.get(f"/api/game/{gid}").json()["state"]
+    if state["phase"] != "combat":
+        return                                    # idle turn auto-ended; skip
+    out = client.post(
+        f"/api/game/{gid}/action",
+        data=json.dumps({"type": "move", "uid": active, "option": "move"}),
+        content_type="application/json")
+    assert out.status_code == 400
+    assert out.json()["error"] == "not the selection phase"
 
 
 def test_force_retreat_is_rejected_outside_the_combat_phase(client: Client) -> None:
@@ -659,20 +689,18 @@ def test_bad_or_missing_option_is_a_clean_400(client: Client) -> None:
     # Malformed client input should be a 400, not an uncaught 500 (#82).
     data = _new(client)
     gid = data["gid"]
-    _post(client, gid, {"type": "roll_initiative"})
-    _post(client, gid, {"type": "choose_first", "side": "red"})
-    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+    active = data["state"]["active_uid"]         # the figure whose turn it is
 
     bad = client.post(
         f"/api/game/{gid}/action",
-        data=json.dumps({"type": "move", "uid": red["uid"], "option": "garbage"}),
+        data=json.dumps({"type": "move", "uid": active, "option": "garbage"}),
         content_type="application/json",
     )
     assert bad.status_code == 400
 
     missing = client.post(
         f"/api/game/{gid}/action",
-        data=json.dumps({"type": "move", "uid": red["uid"]}),
+        data=json.dumps({"type": "move", "uid": active}),
         content_type="application/json",
     )
     assert missing.status_code == 400
@@ -727,14 +755,14 @@ def test_only_the_owning_session_can_drive_the_game(client: Client) -> None:
     assert intruder.get(f"/api/game/{gid}").status_code == 200   # spectating is open
     blocked = intruder.post(
         f"/api/game/{gid}/action",
-        data=json.dumps({"type": "roll_initiative"}),
+        data=json.dumps({"type": "end_turn"}),
         content_type="application/json",
     )
     assert blocked.status_code == 403
 
     ok = client.post(
         f"/api/game/{gid}/action",
-        data=json.dumps({"type": "roll_initiative"}),
+        data=json.dumps({"type": "end_turn"}),
         content_type="application/json",
     )
     assert ok.status_code == 200
@@ -802,12 +830,12 @@ def test_admin_bypasses_seat_ownership(client: Client, django_user_model) -> Non
 
     plain = Client()                             # neither the owner nor an admin
     blocked = plain.post(f"/api/game/{gid}/action",
-                         data=json.dumps({"type": "roll_initiative"}),
+                         data=json.dumps({"type": "end_turn"}),
                          content_type="application/json")
     assert blocked.status_code == 403
 
     ok = admin.post(f"/api/game/{gid}/action",
-                    data=json.dumps({"type": "roll_initiative"}),
+                    data=json.dumps({"type": "end_turn"}),
                     content_type="application/json")
     assert ok.status_code == 200
     assert ok.json()["is_admin"] is True
@@ -851,7 +879,7 @@ def test_spectator_sees_open_seat_then_claims_and_can_play(client: Client) -> No
     assert seen["you_control"] == []                       # owns nothing yet
 
     blocked = spectator.post(f"/api/game/{gid}/action",    # a spectator can't drive
-                             data=json.dumps({"type": "roll_initiative"}),
+                             data=json.dumps({"type": "end_turn"}),
                              content_type="application/json")
     assert blocked.status_code == 403
 
@@ -859,7 +887,7 @@ def test_spectator_sees_open_seat_then_claims_and_can_play(client: Client) -> No
                    data=json.dumps({"action": "claim", "side": "blue"}),
                    content_type="application/json")
     played = spectator.post(f"/api/game/{gid}/action",
-                            data=json.dumps({"type": "roll_initiative"}),
+                            data=json.dumps({"type": "end_turn"}),
                             content_type="application/json")
     assert played.status_code == 200
     assert played.json()["you_control"] == ["blue"]
@@ -1067,14 +1095,12 @@ def _hth_grapple_duel():
 
 def test_combat_action_endpoints_reject_the_wrong_phase(client: Client) -> None:
     """Every combat-only action guards its phase (#79): POSTing one during the
-    movement phase comes back 400 'not the combat phase'."""
+    selection phase comes back 400 'not the combat phase'."""
     data = _new(client)
     gid = data["gid"]
     figures = data["state"]["figures"]
     red = next(f for f in figures if f["side"] == "red")
     blue = next(f for f in figures if f["side"] == "blue")
-    _post(client, gid, {"type": "roll_initiative"})
-    _post(client, gid, {"type": "choose_first", "side": "red"})   # now in the move phase
 
     for body in (
         {"type": "queue_hth", "uid": red["uid"], "target": blue["uid"]},
@@ -1185,3 +1211,66 @@ def test_admin_site_serves_user_and_character_crud(client: Client, django_user_m
     plain = Client()
     plain.force_login(joe)
     assert plain.get("/admin/").status_code in (302, 403)   # non-staff turned away
+
+
+# ---- per-character initiative selection + Pass over the API (#192) ----------
+
+def test_pass_defers_the_active_figure_via_the_api(client: Client) -> None:
+    data = _new(client)
+    gid = data["gid"]
+    order = data["state"]["initiative_order"]
+    lead = data["state"]["active_uid"]
+
+    passed = _post(client, gid, {"type": "pass", "uid": lead})
+    assert passed.get("error") is None
+    assert lead in passed["state"]["passed"]
+    assert passed["state"]["active_uid"] == order[1]      # advanced past the passer
+
+    # Commit every non-passer in turn; the passer then becomes active last (#192).
+    for uid in order[1:]:
+        state = client.get(f"/api/game/{gid}").json()["state"]
+        assert state["active_uid"] == uid
+        _post(client, gid, {"type": "do_nothing", "uid": uid})
+    final = client.get(f"/api/game/{gid}").json()["state"]
+    assert final["active_uid"] == lead                    # the deferred figure acts last
+
+
+def test_do_nothing_sets_the_action_and_advances_the_pointer(client: Client) -> None:
+    data = _new(client)
+    gid = data["gid"]
+    order = data["state"]["initiative_order"]
+    active = data["state"]["active_uid"]
+    out = _post(client, gid, {"type": "do_nothing", "uid": active})
+    assert out.get("error") is None
+    held = next(f for f in out["state"]["figures"] if f["uid"] == active)
+    assert held["option"] == "do_nothing" and held["acted"] is True
+    assert out["state"]["active_uid"] == order[1]         # pointer advanced
+
+
+def test_advance_computer_plays_its_figures_one_at_a_time(client: Client) -> None:
+    data = client.get("/api/game/new?seed=3&computer=blue").json()
+    gid = data["gid"]
+    turn = data["state"]["turn"]
+    state = client.get(f"/api/game/{gid}").json()["state"]
+    # The computer auto-plays its own figures up to each human active char, so
+    # every figure that comes up active during selection is human-controlled.
+    for _ in range(12):
+        if state["phase"] != "select" or state["turn"] != turn or not state["active_uid"]:
+            break
+        side = next(f["side"] for f in state["figures"]
+                    if f["uid"] == state["active_uid"])
+        assert state["controllers"][side] == "human"
+        state = _post(client, gid, {"type": "do_nothing", "uid": state["active_uid"]})["state"]
+
+
+def test_seat_auth_blocks_do_nothing_and_pass_for_non_owners(client: Client) -> None:
+    data = _new(client)                          # the fixture client owns both sides
+    gid = data["gid"]
+    active = data["state"]["active_uid"]
+    intruder = Client()                          # a spectator, owns no seat
+    for action in ("do_nothing", "pass"):
+        blocked = intruder.post(
+            f"/api/game/{gid}/action",
+            data=json.dumps({"type": action, "uid": active}),
+            content_type="application/json")
+        assert blocked.status_code == 403

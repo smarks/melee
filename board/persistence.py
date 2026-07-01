@@ -12,7 +12,8 @@ Everything needed to resume a fight:
 
 * the arena (dimensions, name, walls);
 * the rules profile / ruleset identity (Classic Melee vs Tarmar);
-* the turn number, the initiative winner's ``first_side``, the victory flag;
+* the turn number, the per-character initiative selection state
+  (``initiative_order``/``active_index``/``passed``), the victory flag;
 * the narrative ``log`` and the dropped-weapons list;
 * any queued-but-unresolved attacks (``_pending``), so a save taken mid-combat
   resumes exactly; and
@@ -230,7 +231,10 @@ def state_to_json(state: GameState) -> dict:
         "combat_type": state.combat_type.value,
         "arena": _arena_to_json(state.arena),
         "turn_number": state.turn_number,
-        "first_side": state.first_side,
+        # Per-character initiative selection state (#192).
+        "initiative_order": list(state.initiative_order),
+        "active_index": state.active_index,
+        "passed": list(state.passed),
         "victory_announced": getattr(state, "_victory_announced", False),
         "dice_scripted": list(state.dice._scripted),
         "figures": [_figure_to_json(figure) for figure in state.figures],
@@ -253,7 +257,9 @@ def state_from_json(data: dict) -> GameState:
     state = GameState(arena, figures, dice=dice, ruleset=ruleset,
                       combat_type=combat_type)
     state.turn_number = data["turn_number"]
-    state.first_side = data["first_side"]
+    state.initiative_order = list(data.get("initiative_order", []))
+    state.active_index = data.get("active_index", 0)
+    state.passed = list(data.get("passed", []))
     state.log = list(data.get("log", []))
     if data.get("victory_announced"):
         state._victory_announced = True
@@ -277,9 +283,6 @@ def game_to_json(game: dict) -> dict:
     return {
         "state": state_to_json(game["state"]),
         "phase": game["phase"],
-        "order": list(game["order"]),
-        "moving": game["moving"],
-        "winner": game["winner"],
         "profile": game.get("profile"),
         "controllers": dict(game.get("controllers", {})),
         "seats": dict(game.get("seats", {})),
@@ -294,9 +297,6 @@ def game_from_json(data: dict) -> dict:
         "state": state,
         "layout": layout(state.arena),
         "phase": data["phase"],
-        "order": list(data["order"]),
-        "moving": data["moving"],
-        "winner": data["winner"],
         "profile": data.get("profile"),
         "controllers": dict(data.get("controllers", {})),
         "seats": dict(data.get("seats", {})),
