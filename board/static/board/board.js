@@ -52,7 +52,6 @@ async function startGame(query) {
   resetSelection(); ensureGameCatalog(); render();
   GAME_ACTIVE = true; syncGameControl();
 }
-function bootGame() { startGame("teams=2&per_team=2&mode=pxai"); }  // default on load
 // The setup controls are now an always-visible inline "Game Control" panel, so
 // open/close are no-ops kept only for the callers that still reference them (the
 // post-login ?setup deep link, the editor's Back button).
@@ -76,13 +75,12 @@ function setOpponent(mode) {
 }
 // New Game starts a match through the existing setup flow, then locks the panel.
 async function newGame() { if (GAME_ACTIVE) return; await startSetup(); }
-// End Game abandons the running match client-side (no backend endpoint needed):
-// stop tracking the game, clear the board + tracker, and return Game Control to
-// its editable state with New Game enabled again. (#192)
-function endGame() {
+// The editable pre-game state: no game tracked, Game Control unlocked with New
+// Game live, the Map blank, and the Characters tracker empty. This is what a
+// fresh load (no deep-link) shows, and where End Game returns to. (#192)
+function showPreGame() {
   GID = null; S = null; LAYOUT = null; GAME_ACTIVE = false;
   _lastStateJSON = ""; resetAll(); closeMenu();
-  history.replaceState({}, "", "/");
   $("svg").innerHTML = "";
   $("phaseBanner").textContent = "No game — set up the players and press New Game.";
   $("hint").textContent = "";
@@ -93,6 +91,9 @@ function endGame() {
   $("turnInfo").textContent = "";
   syncGameControl();
 }
+// End Game abandons the running match client-side (no backend endpoint needed)
+// and drops back to the editable pre-game state. (#192)
+function endGame() { history.replaceState({}, "", "/"); showPreGame(); }
 // Reflect the lock state: while a game runs every setting is read-only, New Game
 // is disabled, and End Game is live; before/after a game the reverse holds. (#192)
 function syncGameControl() {
@@ -1359,12 +1360,15 @@ function resetTheme() {
 }
 
 applyTheme();
-// Deep link: /game/<gid> joins or spectates an existing game; otherwise start fresh.
-const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
-if (urlGid) { GID = urlGid; refresh(); } else { bootGame(); }
 // Shared view: poll so every browser on this game sees moves as they happen.
 // Re-render only when the server state actually changed, to avoid flicker.
+// (Declared before the boot dispatch below, which calls showPreGame() ->
+// _lastStateJSON, so the reference isn't in the temporal dead zone.)
 let _lastStateJSON = "";
+// Deep link: /game/<gid> joins or spectates an existing game; a fresh load shows
+// the editable pre-game Game Control (no auto-boot -- New Game starts a match).
+const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
+if (urlGid) { GID = urlGid; refresh(); } else { showPreGame(); }
 const POLL = setInterval(async () => {
   if (!GID) return;
   const data = await api(`/api/game/${GID}`);

@@ -1,6 +1,6 @@
 """Watchable full-game end-to-end test.
 
-Loading the board auto-boots a Player-vs-Computer match, so this test simply
+This starts a Player-vs-Computer match from the inline Game Control, then simply
 advances the turns through the game's own controls (initiative -> movement ->
 combat -> end turn) while the AI plays its side, until one side wins the field.
 It drives the entire stack together -- template, inline-JS SPA, the JSON API,
@@ -70,7 +70,7 @@ def _turn_number(banner_text: str) -> int:
 
 @pytest.mark.django_db
 def test_full_game_plays_out(live_server, page: Page) -> None:
-    """Drive the auto-booted Player-vs-Computer match through its real controls
+    """Drive a Player-vs-Computer match through its real controls
     while the AI plays its side, and verify it genuinely plays out: turns
     advance, the combat log fills, and real damage is dealt (a figure hurt or
     downed) -- an outright victory being the happy path. Records video, so the
@@ -81,6 +81,10 @@ def test_full_game_plays_out(live_server, page: Page) -> None:
     run, so requiring victory would flake -- but damage and turn progression are
     guaranteed once the sides engage."""
     page.goto(live_server.url)
+    # No auto-boot any more (#192): start the default Player-vs-Computer match
+    # from the inline Game Control (computer opponent, 2 fighters per side).
+    page.get_by_role("button", name="Add computer opponent").click()
+    page.get_by_role("button", name="New Game").click()
     banner = page.locator("#phaseBanner")
     expect(banner).to_contain_text("Turn", timeout=20_000)
 
