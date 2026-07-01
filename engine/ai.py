@@ -86,11 +86,21 @@ def take_action(state: GameState, figure: Figure) -> None:
     facing = _facing_toward(layout, figure.position, target.position)
 
     if state.engaged(figure):
-        # Stay in contact and attack (one last shot if a loaded bow is stuck).
-        option = (Option.ONE_LAST_SHOT if can_fire
-                  else Option.SHIFT_ATTACK if not has_missile
-                  else Option.SHIFT_DEFEND)   # reloading in melee: keep guard up
-        state.move(figure, option, facing=facing)
+        if can_fire:
+            state.move(figure, Option.ONE_LAST_SHOT, facing=facing)   # loaded bow: shoot
+            return
+        if not has_missile:
+            state.move(figure, Option.SHIFT_ATTACK, facing=facing)    # blade in hand: strike
+            return
+        # Engaged with a reloading bow: it can neither shift-attack nor parry with a
+        # missile weapon (both illegal, p.13/#79). Drop the bow for a carried melee
+        # weapon so it can fight next turn; if it has none, hold (a legal no-op).
+        melee = next((w for w in figure.weapons
+                      if w.kind != WeaponKind.MISSILE and w is not weapon), None)
+        if melee is not None:
+            state.move(figure, Option.CHANGE_WEAPONS, facing=facing, ready=melee.name)
+        else:
+            state.set_do_nothing(figure)
         return
 
     if can_fire:

@@ -31,16 +31,19 @@ from engine.tarmar import create_tarmar_fighter
 
 def _archetypes(side: str) -> dict[str, Figure]:
     """Fresh instances of each archetype for ``side`` (weapons are per-figure)."""
+    # Each fighter starts with its MISSILE weapon readied so it can fire on turn 1
+    # without first switching weapons (#204); the melee weapon is still carried and
+    # can be readied when the fight closes.
     return {
         "Knight": create_human(
             "Knight", 13, 11, side, armor=PLATE, shield=LARGE_SHIELD,
-            weapons=[BROADSWORD, LIGHT_CROSSBOW, DAGGER], ready_weapon=BROADSWORD),
+            weapons=[BROADSWORD, LIGHT_CROSSBOW, DAGGER], ready_weapon=LIGHT_CROSSBOW),
         "Swordsman": create_human(
             "Swordsman", 12, 12, side, armor=CHAINMAIL, shield=SMALL_SHIELD,
-            weapons=[SHORTSWORD, LONGBOW, DAGGER], ready_weapon=SHORTSWORD),
+            weapons=[SHORTSWORD, LONGBOW, DAGGER], ready_weapon=LONGBOW),
         "Spearman": create_human(
             "Spearman", 13, 11, side, armor=LEATHER,
-            weapons=[SPEAR, LONGBOW, DAGGER], ready_weapon=SPEAR),
+            weapons=[SPEAR, LONGBOW, DAGGER], ready_weapon=LONGBOW),
         "Archer": create_human(
             "Archer", 14, 10, side, armor=NO_ARMOR,
             weapons=[LONGBOW, SHORTSWORD, DAGGER], ready_weapon=LONGBOW),
@@ -54,16 +57,16 @@ def _tarmar_archetypes(side: str) -> dict[str, Figure]:
         "Knight": create_tarmar_fighter(
             "Knight", strength=13, dexterity=11, constitution=12, side=side,
             armor=PLATE, shield=LARGE_SHIELD, weapons=[BROADSWORD, LIGHT_CROSSBOW, DAGGER],
-            ready_weapon=BROADSWORD,
+            ready_weapon=LIGHT_CROSSBOW,
             weapon_skill={"Broadsword": 3, "Light crossbow": 2, "Dagger": 1}),
         "Swordsman": create_tarmar_fighter(
             "Swordsman", strength=12, dexterity=12, constitution=11, side=side,
             armor=CHAINMAIL, shield=SMALL_SHIELD, weapons=[SHORTSWORD, LONGBOW, DAGGER],
-            ready_weapon=SHORTSWORD,
+            ready_weapon=LONGBOW,
             weapon_skill={"Shortsword": 3, "Longbow": 2, "Dagger": 1}),
         "Spearman": create_tarmar_fighter(
             "Spearman", strength=13, dexterity=11, constitution=11, side=side,
-            armor=LEATHER, weapons=[SPEAR, LONGBOW, DAGGER], ready_weapon=SPEAR,
+            armor=LEATHER, weapons=[SPEAR, LONGBOW, DAGGER], ready_weapon=LONGBOW,
             weapon_skill={"Spear": 2, "Longbow": 2, "Dagger": 1}),
         "Archer": create_tarmar_fighter(
             "Archer", strength=12, dexterity=14, constitution=10, side=side,
