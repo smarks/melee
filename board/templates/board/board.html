@@ -38,7 +38,12 @@
   /* Game Control panel (the former New-game modal, now always inline). */
   .gc-section { margin-top: 12px; }
   .gc-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
-  .gc-opp button.primary { font-weight: 600; }
+  .gc-players .gc-add { margin-top: 8px; display: flex; gap: 8px; }
+  .gc-players .gc-add button { flex: 1; }
+  #playerRoster { margin-top: 6px; }
+  .pl-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .pl-row .pl-type { flex: 1; }
+  .pl-row .pl-remove { padding: 1px 8px; cursor: pointer; }
   .gc-buttons { margin-top: 14px; display: flex; gap: 8px; }
   .gc-buttons button { flex: 1; }
   #gameControl.locked .gc-lock { display: block; }
@@ -207,25 +212,23 @@
           <option value="Tarmar">Tarmar (d20)</option>
         </select>
       </label>
-      <div class="gc-section gc-opp">
-        <div class="muted">Opponent</div>
-        <button id="oppComputer" class="primary" onclick="setOpponent('pxai')">Add computer opponent</button>
-        <button id="oppHuman" onclick="setOpponent('pxp')">Add human opponent</button>
-        <!-- The two buttons drive this hidden value the rest of the flow reads. -->
-        <select id="mode" hidden>
-          <option value="pxai">Player vs Computer</option>
-          <option value="pxp">Player vs Player (same screen)</option>
-        </select>
-        <div class="gc-note">You play the first side; the opponent is the second.
-          Human = same-screen hot-seat, Computer = AI.</div>
+      <div class="gc-section gc-players">
+        <div class="muted">Players — <span id="playerCount">1</span>/5</div>
+        <!-- The roster: player 0 is always the local human; the rest are added,
+             freely mixing human (same-screen) and AI, up to 5 total. -->
+        <div id="playerRoster"></div>
+        <div class="gc-add">
+          <button id="addHumanBtn" onclick="addPlayer('human')">＋ Add human player</button>
+          <button id="addAiBtn" onclick="addPlayer('ai')">＋ Add AI player</button>
+        </div>
+        <div class="gc-note">You are the first player. Freely mix humans (same-screen
+          hot-seat) and AI opponents, up to 5 players total. A game needs at least 2.</div>
       </div>
       <div class="gc-section">
         <label>Characters per player
           <select id="perTeam"><option>1</option><option selected>2</option></select>
         </label>
-        <span class="muted">— max 2</span>
-        <!-- Two sides only: you + one opponent. -->
-        <select id="teams" hidden><option selected>2</option></select>
+        <span class="muted">— max 2, applied to every player</span>
       </div>
       <div class="gc-section">
         <label><input type="checkbox" id="practiceMode"> Practice combat
@@ -240,6 +243,7 @@
         <button class="primary" id="newGameBtn" onclick="newGame()">New Game</button>
         <button id="endGameBtn" onclick="endGame()">End Game</button>
       </div>
+      <div id="newGameReason" class="gc-note"></div>
     </div>
   </aside>
   <!-- Right column: the Characters tracker (former Players + Characters panels,

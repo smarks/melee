@@ -680,8 +680,16 @@ def api_new_game(request):
         teams = min(teams, scenario.MAX_TEAMS)
         per_team = min(per_team, scenario.MAX_PER_TEAM)
         arena, figures = scenario.build_game(profile.name, teams, per_team)
-        # P x AI: exactly one AI team (the last); you play the rest. P x P: all human.
-        if request.GET.get("mode", "pxai") == "pxai":
+        # An explicit ``computer=`` list names the AI sides directly — this is how
+        # the mixed human/AI players roster (#192 follow-up) seats any subset of
+        # sides as AI, and it overrides the ``mode`` shorthand. When ``computer``
+        # is absent we fall back to ``mode`` (backward-compat with older calls):
+        # P x AI = exactly one AI team (the last), P x P = all human.
+        computer_param = request.GET.get("computer")
+        if computer_param is not None:
+            valid_sides = set(scenario.TEAM_IDS[:teams])
+            computer_sides = {s for s in computer_param.split(",") if s in valid_sides}
+        elif request.GET.get("mode", "pxai") == "pxai":
             computer_sides = {scenario.TEAM_IDS[teams - 1]}
         else:
             computer_sides = set()
