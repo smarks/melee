@@ -149,9 +149,20 @@
   .roster .charctl.enabled { border-color: var(--accent);
       background: rgba(230, 184, 0, .1); }
   .roster .charctl.disabled { opacity: .55; }
-  .roster .charctl .ctl-choose { width: 100%; margin: 0; }
-  .roster .charctl .ctl-secondary { display: flex; gap: 6px; }
-  .roster .charctl .ctl-secondary button { flex: 1; margin: 0; }
+  /* The inline option list (#202): every action for the character, the valid ones
+     live, the rest greyed with the server's reason. */
+  .roster .charctl .opt-list { display: flex; flex-direction: column; gap: 4px; }
+  .roster .charctl .opt { width: 100%; margin: 0; text-align: left; display: flex;
+      justify-content: space-between; align-items: baseline; gap: 8px; }
+  .roster .charctl .opt .why { font-size: 11.5px; color: var(--muted);
+      font-style: italic; font-weight: 400; white-space: nowrap; }
+  /* Mid-placement confirm, rendered right under the character (not the far panel
+     #200 stranded it in): destination hexes light on the board, Set action here. */
+  .roster .charctl.placing { border-color: var(--gold); background: rgba(230, 184, 0, .16); }
+  .roster .charctl .place-head { font-size: 13px; }
+  .roster .charctl .place-hint { font-size: 12px; color: var(--accent); }
+  .roster .charctl .place-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .roster .charctl .place-btns button { flex: 1; margin: 0; min-width: 56px; }
   polygon.hex { fill: var(--hex); stroke: var(--hex-stroke); stroke-width: 1.2; }
   /* Megahex boundaries (Melee p.16): the seams between 7-hex flowers, drawn a
      touch heavier and tinted so the megahex grid reads without burying the
