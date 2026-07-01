@@ -146,7 +146,10 @@ def test_selection_phase_lights_up_the_active_figure(live_server, page: Page) ->
     # Holding the active figure (Do nothing) commits its action and advances the
     # highlight to the next figure in initiative order.
     active_before = page.locator("#roster .row.active").get_attribute("data-uid")
-    page.locator("#controls").get_by_role("button", name="Do nothing (hold)").click()
+    # The action controls now live inline under the active character (#198/#199),
+    # not pinned at the bottom of the column.
+    page.locator(f'#roster .charctl[data-ctl="{active_before}"]').get_by_role(
+        "button", name="Do nothing (hold)").click()
     # The highlight moves to a DIFFERENT figure (wait for the re-render to settle).
     expect(page.locator(
         f'#roster .row.active:not([data-uid="{active_before}"])')).to_have_count(1)
@@ -285,6 +288,17 @@ def _active_uid(page: Page):
     return row.get_attribute("data-uid") if row.count() else None
 
 
+def _active_ctl(page: Page):
+    """The inline action-control block for the currently active character.
+
+    The action buttons moved off the bottom of the column into a per-character
+    block under each character row (#198/#199); the active figure's block is the
+    enabled one.
+    """
+    uid = _active_uid(page)
+    return page.locator(f'#roster .charctl[data-ctl="{uid}"]')
+
+
 @pytest.mark.django_db
 def test_pass_defers_the_lead_and_it_acts_last(live_server, page: Page) -> None:
     # #192: passing the figure with initiative defers it -- it greys to a "waiting"
@@ -292,11 +306,10 @@ def test_pass_defers_the_lead_and_it_acts_last(live_server, page: Page) -> None:
     page.goto(live_server.url)
     _start_inline_game(page, human=True)          # hot-seat: tester controls every side
     expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
-    controls = page.locator("#controls")
 
     lead = _active_uid(page)
     assert lead is not None
-    controls.get_by_role("button", name="Pass — choose last").click()
+    _active_ctl(page).get_by_role("button", name="Pass — choose last").click()
 
     lead_row = page.locator(f'#roster .row[data-uid="{lead}"]')
     expect(lead_row).to_have_class(re.compile(r"waiting"))       # greyed, deferred
@@ -307,7 +320,7 @@ def test_pass_defers_the_lead_and_it_acts_last(live_server, page: Page) -> None:
     for _ in range(6):
         if _active_uid(page) == lead or _active_uid(page) is None:
             break
-        controls.get_by_role("button", name="Do nothing (hold)").click()
+        _active_ctl(page).get_by_role("button", name="Do nothing (hold)").click()
         page.wait_for_timeout(90)
     assert _active_uid(page) == lead                             # the passer acts last
     expect(lead_row).to_have_class(re.compile(r"active"))
@@ -320,14 +333,13 @@ def test_multiple_passers_resolve_in_initiative_order(live_server, page: Page) -
     page.goto(live_server.url)
     _start_inline_game(page, human=True)
     expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
-    controls = page.locator("#controls")
 
     first_passer = _active_uid(page)
-    controls.get_by_role("button", name="Pass — choose last").click()
+    _active_ctl(page).get_by_role("button", name="Pass — choose last").click()
     page.wait_for_timeout(90)
     second_passer = _active_uid(page)
     assert second_passer not in (None, first_passer)
-    controls.get_by_role("button", name="Pass — choose last").click()
+    _active_ctl(page).get_by_role("button", name="Pass — choose last").click()
     page.wait_for_timeout(90)
 
     # Commit every remaining non-passer.
@@ -335,12 +347,69 @@ def test_multiple_passers_resolve_in_initiative_order(live_server, page: Page) -
         active = _active_uid(page)
         if active in (first_passer, second_passer, None):
             break
-        controls.get_by_role("button", name="Do nothing (hold)").click()
+        _active_ctl(page).get_by_role("button", name="Do nothing (hold)").click()
         page.wait_for_timeout(90)
 
     # The passers now resolve in initiative order: the first to defer (higher
     # initiative) comes up before the second.
     assert _active_uid(page) == first_passer
-    controls.get_by_role("button", name="Do nothing (hold)").click()
+    _active_ctl(page).get_by_role("button", name="Do nothing (hold)").click()
     page.wait_for_timeout(90)
     assert _active_uid(page) == second_passer
+
+
+@pytest.mark.django_db
+def test_inline_controls_active_enabled_others_disabled(live_server, page: Page) -> None:
+    # #198/#199: the action controls sit inline under each character during
+    # selection, no longer pinned at the bottom of the column. The active
+    # figure's block is enabled; every other not-yet-acted figure shows the same
+    # block, disabled, as a preview of the control that becomes theirs.
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)          # 2 humans x 2 figures = 4 characters
+    expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
+
+    # Exactly one enabled inline block (the active character), with a live Choose.
+    enabled = page.locator("#roster .charctl.enabled")
+    expect(enabled).to_have_count(1)
+    expect(enabled.get_by_role("button", name=re.compile(r"Choose .* action"))).to_be_enabled()
+    expect(enabled.get_by_role("button", name="Do nothing (hold)")).to_be_enabled()
+    # ...and it belongs to the active row.
+    assert enabled.get_attribute("data-ctl") == _active_uid(page)
+
+    # At least one other character shows a disabled (greyed) preview block whose
+    # buttons cannot be clicked.
+    disabled = page.locator("#roster .charctl.disabled")
+    expect(disabled.first).to_be_visible()
+    expect(disabled.first.get_by_role("button", name="Do nothing (hold)")).to_be_disabled()
+    expect(disabled.first.get_by_role(
+        "button", name=re.compile(r"Choose .* action"))).to_be_disabled()
+
+    # No selection controls remain pinned at the bottom of the column.
+    expect(page.locator("#controls").get_by_role(
+        "button", name="Do nothing (hold)")).to_have_count(0)
+
+
+@pytest.mark.django_db
+def test_inline_choose_action_opens_the_board_menu(live_server, page: Page) -> None:
+    # #199: the inline "Choose action" is a copy of the same access as clicking
+    # the token -- it opens the board action menu (openMenu), not a replacement.
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)
+    expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
+    expect(page.locator("#tokenMenu")).to_be_hidden()
+
+    _active_ctl(page).get_by_role("button", name=re.compile(r"Choose .* action")).click()
+    menu = page.locator("#tokenMenu")
+    expect(menu).to_be_visible()
+    # The board popup still lists real per-figure options (e.g. holding).
+    expect(menu.get_by_text("Do nothing (hold)")).to_be_visible()
+
+
+@pytest.mark.django_db
+def test_active_figure_token_is_highlighted_on_the_map(live_server, page: Page) -> None:
+    # #199: when a character becomes active its counter on the map is highlighted
+    # (the pulsing amber ring), keyed to the same active figure as the controls.
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)
+    expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
+    expect(page.locator("#svg .fig .activering")).to_have_count(1)
