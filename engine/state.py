@@ -46,9 +46,8 @@ from .narrative import (
     narrate_fumble,
     narrate_hth,
     narrate_hth_disengage,
-    narrate_initiative,
     narrate_move,
-    narrate_move_order,
+    narrate_pass,
     narrate_ready,
     narrate_retreat,
     narrate_shield_rush,
@@ -165,32 +164,89 @@ class _RosterMixin:
 
 
 class _TurnMixin:
-    # ---- turn sequencing ----
-    def roll_initiative(self) -> dict:
-        """Each side rolls a die; higher total wins the choice of move order.
+    # ---- per-character initiative-ordered action selection (#192) ----
+    #
+    # Each turn every living figure sets one action, in initiative order. Order
+    # is adjusted DX (``base_adj_dx``) highest first, ties broken by uid — a pure
+    # ordering over an existing stat, so it draws ZERO dice and leaves the seeded
+    # combat stream byte-identical (combat RESOLUTION still runs adjDX-ordered and
+    # unchanged). The order is frozen at turn start; a figure that PASSes defers
+    # and chooses last, once every non-passer has committed.
+    def initiative(self) -> list[str]:
+        """uids of the living figures, in action-selection order (adjDX desc, uid)."""
+        living = [figure for figure in self.figures if not figure.is_dead]
+        ordered = sorted(living, key=lambda figure: (-figure.base_adj_dx, figure.uid))
+        return [figure.uid for figure in ordered]
 
-        Ties are re-rolled. Returns the rolls and the winning side; the winner
-        then calls :meth:`choose_first`.
+    def begin_selection(self) -> None:
+        """Freeze the initiative order for a fresh selection pass (turn start)."""
+        self.initiative_order = self.initiative()
+        self.active_index = 0
+        self.passed = []
+
+    def _figure_by_uid(self, uid: str) -> Figure | None:
+        return next((figure for figure in self.figures if figure.uid == uid), None)
+
+    def active_character(self) -> Figure | None:
+        """The figure whose turn it is to set an action, or ``None`` when the
+        whole selection pass is complete.
+
+        First pass: walk ``initiative_order`` from ``active_index``, skipping any
+        figure that cannot act (dead or unconscious), those that already set an
+        option, and those that passed. Once the first pass is exhausted, the
+        passers act last — in the initiative order they deferred in
+        (``self.passed``) — each seeing everyone's committed choices. ``None``
+        when nobody is left to act.
         """
-        sides = self.sides
-        while True:
-            rolls = {side: self.dice.roll() for side in sides}
-            best = max(rolls.values())
-            winners = [side for side, value in rolls.items() if value == best]
-            if len(winners) == 1:
-                self.log.append(narrate_initiative(rolls, winners[0]))
-                return {"rolls": rolls, "winner": winners[0]}
+        for uid in self.initiative_order[self.active_index:]:
+            figure = self._figure_by_uid(uid)
+            if figure is None or not figure.can_act():
+                continue
+            if uid in self.passed or figure.current_option is not None:
+                continue
+            return figure
+        for uid in self.passed:                     # deferred figures resolve last
+            figure = self._figure_by_uid(uid)
+            if figure is None or not figure.can_act():
+                continue
+            if figure.current_option is None:
+                return figure
+        return None
 
-    def choose_first(self, side: str) -> None:
-        if side not in self.sides:
-            raise IllegalAction(f"unknown side {side!r}")
-        self.first_side = side
-        self.log.append(narrate_move_order(side))
+    def _advance_active(self) -> None:
+        """Move the first-pass pointer past figures that are now done."""
+        while self.active_index < len(self.initiative_order):
+            uid = self.initiative_order[self.active_index]
+            figure = self._figure_by_uid(uid)
+            done = (figure is None or not figure.can_act()
+                    or uid in self.passed or figure.current_option is not None)
+            if not done:
+                break
+            self.active_index += 1
 
-    def move_order(self) -> list[str]:
-        if self.first_side is None:
-            return self.sides
-        return [self.first_side] + [s for s in self.sides if s != self.first_side]
+    def _require_active(self, figure: Figure) -> None:
+        """Raise unless it is ``figure``'s turn to act in the current selection."""
+        active = self.active_character()
+        if active is None or active.uid != figure.uid:
+            raise IllegalAction(f"not {figure.name}'s turn to act")
+
+    def pass_action(self, figure: Figure) -> None:
+        """Defer ``figure``'s action to choose last (the Pass rule, #192).
+
+        A passer waits until every non-passing figure has committed, then acts in
+        initiative order among the passers. It does NOT set ``current_option`` (so
+        it still counts as unset), and it may not pass a second time.
+        """
+        self._require_active(figure)
+        if figure.uid in self.passed:
+            raise IllegalAction(f"{figure.name} already passed and must act now")
+        self.passed.append(figure.uid)
+        self._advance_active()
+        self.log.append(narrate_pass(figure))
+
+    def set_do_nothing(self, figure: Figure) -> None:
+        """Set ``figure``'s action to a deliberate no-op (a real, set action)."""
+        self.move(figure, Option.DO_NOTHING)
 
     # ---- end of turn ----
     def end_turn(self) -> None:
@@ -223,9 +279,12 @@ class _TurnMixin:
                     self.log.append(narrate_ready(figure, dagger))
                 figure.hth_drew_dagger = False
         self._pending.clear()
-        self.first_side = None
         self.turn_number += 1
         self.log.append(narrate_turn(self.turn_number))
+        # Freeze a fresh initiative order for the new turn (skips the dead). No
+        # dice are drawn — ordering is by an existing stat — so the seeded combat
+        # stream stays byte-identical across turns.
+        self.begin_selection()
 
 
 class _MovementMixin:
@@ -311,6 +370,14 @@ class _MovementMixin:
                     for enemy in self.enemies_of(figure)):
                 reason = "no foe in reach to grapple"
             result.append((option, reason))
+        # DO NOTHING is always a legal, deliberate no-op — so "action is set"
+        # means current_option is not None, telling "held" apart from "not yet
+        # chosen". PASS is offered only while the figure is still in the first
+        # selection pass; a passer already resolving last cannot pass again (#192).
+        result.append((Option.DO_NOTHING, None))
+        pass_reason = (None if figure.uid not in self.passed
+                       else "already deferred — must act now")
+        result.append((Option.PASS, pass_reason))
         return result
 
     def reach_for(self, figure: Figure, option: Option) -> Reach:
@@ -1115,6 +1182,15 @@ class _ShieldRushMixin:
         """
         if not figure.can_act():
             raise IllegalAction(f"{figure.name} cannot act")
+        if option == Option.PASS:
+            # PASS defers rather than setting an action — it goes through
+            # pass_action(), never move() (which commits current_option).
+            raise IllegalAction("use pass_action to defer a turn")
+        # Enforce per-character initiative order, but only once a selection has
+        # actually been opened (begin_selection). While no order is frozen the
+        # guard is inert, so movement-mechanics tests still drive move() directly.
+        if self.initiative_order:
+            self._require_active(figure)
         if option not in self.legal_options(figure):
             raise IllegalAction(f"{option.value} not legal for {figure.name} now")
         path = path or []
@@ -1175,6 +1251,8 @@ class _ShieldRushMixin:
         line = narrate_move(figure, option, bool(path), self._faced_enemy(figure))
         if line:
             self.log.append(line)
+        # A valid set advances the initiative pointer to the next actor.
+        self._advance_active()
 
     def _validate_multihex_turn(
         self, figure: Figure, path: list[Hex], facing: int | None
@@ -1911,7 +1989,12 @@ class GameState(
         self.turn_number = 1
         self.log: list[str] = []
         self._pending: list[PendingAttack] = []
-        self.first_side: str | None = None
+        # Per-character initiative selection (#192). Left empty until a caller
+        # opens a selection with begin_selection(); while empty the move() turn
+        # guard is inert, so pure movement-mechanics tests drive move() freely.
+        self.initiative_order: list[str] = []
+        self.active_index: int = 0
+        self.passed: list[str] = []
         # Weapons lying on the ground (dropped, fumbled, or thrown), pick-up-able.
         self.dropped: list[tuple] = []        # (Hex, Weapon)
         for index, figure in enumerate(figures):

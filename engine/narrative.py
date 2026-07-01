@@ -110,7 +110,13 @@ _MOVE_VERB = {
     Option.DISENGAGE: "breaks away",
     Option.GO_PRONE: "drops prone",
     Option.KNEEL: "kneels",
+    Option.DO_NOTHING: "holds, taking no action",
 }
+
+
+def narrate_pass(figure: Figure) -> str:
+    """A figure that defers its action to choose last (#192, Pass rule)."""
+    return _cap(f"{_name(figure)} passes, deferring to act last.")
 
 
 def narrate_move(figure: Figure, option: Option, moved: bool,

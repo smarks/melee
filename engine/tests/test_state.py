@@ -362,12 +362,23 @@ def _duel(dice=None):
     return state, a, b
 
 
-def test_initiative_winner_chooses_order() -> None:
-    state, _, _ = _duel(Dice(scripted=[6, 2]))  # side 'a' rolls 6, 'b' rolls 2
-    result = state.roll_initiative()
-    assert result["winner"] == "a"
-    state.choose_first("b")
-    assert state.move_order() == ["b", "a"]
+def test_initiative_order_is_adjdx_desc_then_uid() -> None:
+    # Per-character initiative selection (#192): order by adjusted DX highest
+    # first, ties broken by uid — deterministic, and drawing zero dice.
+    arena = Arena(cols=9, rows=15)
+    from engine.rules_data import DAGGER
+    fast = create_human("Fast", 10, 14, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    slow = create_human("Slow", 14, 10, "b", weapons=[DAGGER], ready_weapon=DAGGER)
+    tie_a = create_human("TieA", 12, 12, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    tie_b = create_human("TieB", 12, 12, "b", weapons=[DAGGER], ready_weapon=DAGGER)
+    state = GameState(arena, [slow, tie_b, fast, tie_a])
+    by_uid = {f.name: f.uid for f in state.figures}
+    order = state.initiative()
+    # Fast (DX 14) first, Slow (DX 10) last; the two DX-12 figures between them in
+    # uid order (tie_a was created before tie_b -> f2 < f3).
+    assert order[0] == by_uid["Fast"]
+    assert order[-1] == by_uid["Slow"]
+    assert order[1:3] == sorted([by_uid["TieA"], by_uid["TieB"]])
 
 
 def test_main_gauche_parry_rules() -> None:
@@ -820,7 +831,9 @@ def test_legal_options_hide_illegal_choices() -> None:
 
     swordsman.posture = Posture.PRONE
     # A grounded figure may rise or crawl (g, p.7); open ground -> both offered.
-    assert state.legal_options(swordsman) == [Option.STAND_UP, Option.CRAWL]
+    # DO NOTHING (hold) and PASS (defer) are always offered on top (#192).
+    assert state.legal_options(swordsman) == [
+        Option.STAND_UP, Option.CRAWL, Option.DO_NOTHING, Option.PASS]
 
 
 def test_option_availability_surfaces_full_set_with_reasons() -> None:
@@ -847,9 +860,14 @@ def test_option_availability_surfaces_full_set_with_reasons() -> None:
     prone = dict(state.option_availability(swordsman))
     assert prone[Option.STAND_UP] is None
     assert prone[Option.CRAWL] is None
+    # DO NOTHING / PASS (#192) are turn-flow no-ops, always available regardless
+    # of posture — excluded from the "must stand up first" gating below.
+    assert prone[Option.DO_NOTHING] is None
+    assert prone[Option.PASS] is None
     assert all(reason == "must stand up first"
                for opt, reason in prone.items()
-               if opt not in (Option.STAND_UP, Option.CRAWL))
+               if opt not in (Option.STAND_UP, Option.CRAWL,
+                              Option.DO_NOTHING, Option.PASS))
 
 
 def test_attack_ordering_is_highest_adjdx_first() -> None:
@@ -1920,3 +1938,136 @@ def test_grapple_disabled_when_no_foe_in_reach() -> None:
     eligible = GameState(arena, [me, foe])
     assert dict(eligible.option_availability(me))[Option.HTH_ATTACK] is None
     assert Option.HTH_ATTACK in eligible.legal_options(me)
+
+
+# ---- per-character initiative selection + the Pass rule (#192) --------------
+
+def _selection_arena(dxs):
+    """A GameState of figures with the given (name, side, dx) specs, one selection
+    pass open. Figures stand far apart (all disengaged) unless moved."""
+    from engine.rules_data import DAGGER
+    arena = Arena(cols=13, rows=15)
+    figures = []
+    for index, (name, side, dexterity) in enumerate(dxs):
+        strength = 24 - dexterity            # keep the 24-point spread legal
+        figure = create_human(name, strength, dexterity, side,
+                              weapons=[DAGGER], ready_weapon=DAGGER, armor=NO_ARMOR)
+        figure.position = Hex(1 + 2 * index, 1)
+        figures.append(figure)
+    state = GameState(arena, figures)
+    state.begin_selection()
+    return state, {f.name: f for f in figures}
+
+
+def test_active_character_advances_as_each_figure_sets_an_action() -> None:
+    state, figs = _selection_arena(
+        [("Hi", "a", 14), ("Mid", "b", 12), ("Lo", "a", 10)])
+    # Highest adjDX acts first, then the next, then the lowest.
+    assert state.active_character() is figs["Hi"]
+    state.move(figs["Hi"], Option.DO_NOTHING)
+    assert state.active_character() is figs["Mid"]
+    state.move(figs["Mid"], Option.DO_NOTHING)
+    assert state.active_character() is figs["Lo"]
+    state.move(figs["Lo"], Option.DO_NOTHING)
+    assert state.active_character() is None          # selection complete
+
+
+def test_do_nothing_is_a_set_action_distinct_from_unset() -> None:
+    state, figs = _selection_arena([("Solo", "a", 12), ("Other", "b", 11)])
+    solo = figs["Solo"]
+    assert solo.current_option is None               # not yet chosen
+    state.set_do_nothing(solo)
+    assert solo.current_option is Option.DO_NOTHING   # held is a real, set action
+    assert state.active_character() is figs["Other"]  # and the pointer advanced
+
+
+def test_move_by_a_non_active_figure_is_rejected() -> None:
+    state, figs = _selection_arena([("Hi", "a", 14), ("Lo", "b", 10)])
+    # Lo is not the active character (Hi is) -> it may not act out of turn.
+    try:
+        state.move(figs["Lo"], Option.DO_NOTHING)
+        assert False, "expected IllegalAction"
+    except IllegalAction as exc:
+        assert "turn to act" in str(exc)
+
+
+def test_pass_defers_the_figure_to_choose_last() -> None:
+    state, figs = _selection_arena(
+        [("Hi", "a", 14), ("Mid", "b", 12), ("Lo", "a", 10)])
+    # The lead figure passes: it defers and the next figure becomes active.
+    state.pass_action(figs["Hi"])
+    assert figs["Hi"].uid in state.passed
+    assert figs["Hi"].current_option is None          # a pass does NOT set an action
+    assert state.active_character() is figs["Mid"]
+    state.set_do_nothing(figs["Mid"])
+    state.set_do_nothing(figs["Lo"])
+    # Every non-passer is committed -> the passer now acts last.
+    assert state.active_character() is figs["Hi"]
+    state.set_do_nothing(figs["Hi"])
+    assert state.active_character() is None
+
+
+def test_multiple_passers_resolve_in_initiative_order() -> None:
+    state, figs = _selection_arena(
+        [("Hi", "a", 14), ("Mid", "b", 12), ("Lo", "a", 10)])
+    # Hi and Lo pass; Mid commits. The passers then act last among themselves in
+    # initiative order: Hi (adjDX 14) before Lo (adjDX 10).
+    state.pass_action(figs["Hi"])
+    state.set_do_nothing(figs["Mid"])
+    state.pass_action(figs["Lo"])
+    assert state.active_character() is figs["Hi"]
+    state.set_do_nothing(figs["Hi"])
+    assert state.active_character() is figs["Lo"]
+    state.set_do_nothing(figs["Lo"])
+    assert state.active_character() is None
+
+
+def test_a_passer_may_do_nothing_when_resolving_last() -> None:
+    state, figs = _selection_arena([("Hi", "a", 14), ("Lo", "b", 10)])
+    state.pass_action(figs["Hi"])
+    state.set_do_nothing(figs["Lo"])
+    assert state.active_character() is figs["Hi"]      # the passer resolves last
+    state.set_do_nothing(figs["Hi"])                   # and may hold as its real action
+    assert figs["Hi"].current_option is Option.DO_NOTHING
+    assert state.active_character() is None
+
+
+def test_a_passer_cannot_pass_again() -> None:
+    state, figs = _selection_arena([("Hi", "a", 14), ("Lo", "b", 10)])
+    state.pass_action(figs["Hi"])
+    state.set_do_nothing(figs["Lo"])
+    assert state.active_character() is figs["Hi"]
+    # PASS is no longer offered to a passer already resolving last...
+    assert dict(state.option_availability(figs["Hi"]))[Option.PASS] is not None
+    # ...and attempting it raises rather than deferring a second time.
+    try:
+        state.pass_action(figs["Hi"])
+        assert False, "expected IllegalAction"
+    except IllegalAction as exc:
+        assert "already passed" in str(exc)
+
+
+def test_selection_flow_does_not_disturb_the_seeded_combat_stream() -> None:
+    # THE DETERMINISM GUARD. The reference resolves a seeded attack with no
+    # selection code in the path at all.
+    reference, ref_a, ref_b = _duel(Dice(seed=4242))
+    ref_a.current_option = Option.SHIFT_ATTACK
+    reference.queue_attack(ref_a, ref_b)
+    ref_results = reference.resolve_combat()
+
+    # The same seed, but the whole turn is driven through the NEW per-character
+    # selection: freeze initiative, move every figure (SHIFT_ATTACK), then queue
+    # and resolve. Ordering by adjDX and advancing the pointer draw ZERO dice, so
+    # the combat stream must come out byte-identical.
+    played, play_a, play_b = _duel(Dice(seed=4242))
+    played.begin_selection()
+    guard = 0
+    while (active := played.active_character()) is not None and guard < 10:
+        played.move(active, Option.SHIFT_ATTACK, facing=active.facing)
+        guard += 1
+    played.queue_attack(play_a, play_b)
+    play_results = played.resolve_combat()
+
+    assert [r.rolled for r in play_results] == [r.rolled for r in ref_results]
+    assert [(r.hit, r.damage, r.needed) for r in play_results] \
+        == [(r.hit, r.damage, r.needed) for r in ref_results]

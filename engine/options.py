@@ -18,6 +18,10 @@ from enum import Enum
 DISENGAGED = "disengaged"
 ENGAGED = "engaged"
 ANY = "any"
+# Turn-flow options that are not part of the engaged/disengaged movement menu:
+# they are injected by option_availability during the selection pass, never by
+# options_for, so they don't pollute the normal legal-move set.
+SPECIAL = "special"
 
 
 class Option(str, Enum):
@@ -40,6 +44,9 @@ class Option(str, Enum):
     PICK_UP = "pick_up"              # (q) bend over, take a dropped weapon in reach
     GO_PRONE = "go_prone"            # (f) drop prone (a crossbow fires from prone at +1)
     KNEEL = "kneel"                  # (f) drop to one knee (a bow may fire from kneeling)
+    # turn-flow (per-character initiative selection, #192)
+    DO_NOTHING = "do_nothing"        # hold: a real, legal no-op (the action IS set)
+    PASS = "pass"                    # defer: choose last, after everyone else commits
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,11 @@ _SPECS: dict[Option, OptionSpec] = {
         Option.GO_PRONE, DISENGAGED, "none", False, False, False),
     Option.KNEEL: OptionSpec(
         Option.KNEEL, DISENGAGED, "none", False, False, False),
+    # A no-op hold and a deferral: neither moves, attacks, dodges, nor defends.
+    Option.DO_NOTHING: OptionSpec(
+        Option.DO_NOTHING, SPECIAL, "none", False, False, False),
+    Option.PASS: OptionSpec(
+        Option.PASS, SPECIAL, "none", False, False, False),
 }
 
 

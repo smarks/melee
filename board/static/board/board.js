@@ -15,7 +15,6 @@ let pendingFacing = null;// facing index
 let pendingReady = null; // carried weapon to switch to
 let PLAN = {};           // uid -> pending action for this phase (executed on Continue)
 let warnKind = null;     // (legacy) kept for resetAll; the new flow warns inline
-let _rolling = false;    // guard so initiative auto-rolls exactly once
 let combatResolvedTurn = -1; // the turn whose combat is resolved -> then we offer "End turn"
 let lastPhase = null;    // detect phase changes to clear the plan
 let frAdvance = {};      // "attackerUid>targetUid" -> follow-into-vacated-hex toggle
@@ -209,7 +208,7 @@ function resetSelection() { sel = null; optInfo = null; chosenOption = null; pen
 function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 
 // human-readable labels + which options require a destination hex
-const PHASE_LABEL = {initiative: "Initiative", move: "Movement", combat: "Combat"};
+const PHASE_LABEL = {select: "Action selection", combat: "Combat"};
 const OPTION_LABEL = {
   move: "Full move", half_move: "Half move", charge_attack: "⚔ Charge & Attack", dodge: "Dodge",
   ready_weapon: "Ready Weapon", missile_attack: "⚔ Missile Attack", stand_up: "Stand Up", crawl: "Crawl 2",
@@ -217,6 +216,7 @@ const OPTION_LABEL = {
   one_last_shot: "⚔ One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
   hth_attack: "🤼 Grapple", pick_up: "Pick up weapon",
   go_prone: "Drop prone", kneel: "Kneel",
+  do_nothing: "Do nothing", pass: "Pass (choose last)",
 };
 // missile_attack is here so its optional 1-hex move (option f: "move up to 1 hex
 // and/or fire") gets a destination picker, not forced to hold position (#117).
@@ -448,12 +448,21 @@ function drawArena() {
         frac > 0.5 ? "#5fae74" : frac > 0.25 ? "#d8b54a" : "#d0524f"));
     }
 
-    if (PLAN[f.uid]) {                               // green ring = action set
+    // Green ring = action set (a combat plan, or a committed selection action).
+    if (PLAN[f.uid] || (S.phase === "select" && f.acted)) {
       const ring = document.createElementNS(SVG, "circle");
       ring.setAttribute("cx", h.cx); ring.setAttribute("cy", h.cy);
       ring.setAttribute("r", LAYOUT.size * 0.82);
       ring.setAttribute("fill", "none");
       ring.setAttribute("stroke", "#7CFC8C"); ring.setAttribute("stroke-width", "2.5");
+      g.appendChild(ring);
+    }
+    // Amber pulse ring = the figure whose turn it is to act right now (#192).
+    if (S.phase === "select" && f.uid === S.active_uid && !f.dead) {
+      const ring = document.createElementNS(SVG, "circle");
+      ring.setAttribute("cx", h.cx); ring.setAttribute("cy", h.cy);
+      ring.setAttribute("r", LAYOUT.size * 0.9);
+      ring.setAttribute("class", "activering");
       g.appendChild(ring);
     }
 
@@ -520,31 +529,22 @@ function drawControls() {
     return;
   }
 
-  if (phase === "initiative") {
-    if (!S.winner) {                       // the roll is random -- no click to make
-      if (!_rolling) {
-        _rolling = true;
-        setHint("Rolling initiative…");
-        act({type: "roll_initiative"}).then(() => { _rolling = false; render(); });
-      }
+  if (phase === "select") {
+    // Per-character initiative selection (#192): only the active figure may act,
+    // and each choice submits immediately, lighting up the next figure.
+    if (sel && chosenOption) { drawPlacement(c); return; }   // mid-placement keeps its UI
+    const active = S.active_uid ? figByUid(S.active_uid) : null;
+    if (!active) { setHint("Resolving the action pass…"); return; }
+    if (!myControlled(active)) {
+      setHint(`Waiting for <span class="chip ${active.side}">${sideName(active.side)}</span>`
+              + ` to set <b>${escapeHtml(active.name)}</b>'s action…`);
       return;
     }
-    setHint(`🎲 <b>${sideName(S.winner)}</b> won initiative — who moves first?`);
-    for (const side of S.sides)
-      bigPrimary(c, `${sideName(side)} moves first`,
-                 () => act({type: "choose_first", side}).then(after), side === S.winner);
-    return;
-  }
-
-  if (phase === "move") {
-    if (sel && chosenOption) { drawPlacement(c); return; }   // mid-placement keeps its UI
-    const movers = S.figures.filter(f => f.side === S.moving_side && f.can_act && f.label);
-    setHint(`<span class="chip ${S.moving_side}">${sideName(S.moving_side)}</span> — `
-            + `set each figure's move, then press Done.`);
-    figureChecklist(c, movers);
-    const idle = movers.filter(f => !PLAN[f.uid]).length;
-    if (idle) warnLine(c, `${idle} figure${idle > 1 ? "s" : ""} will hold position.`);
-    bigPrimary(c, "Done moving →", () => executePlans("move"));
+    setHint(`<b>${escapeHtml(active.name)}</b> has initiative — choose its action.`
+            + ` It submits immediately, then the next figure lights up.`);
+    bigPrimary(c, `Choose ${escapeHtml(active.name)}'s action →`, () => onFigureClick(active));
+    addBtn(c, "Do nothing (hold)", () => selectDoNothing(active));
+    if (canPass(active)) addBtn(c, "Pass — choose last", () => selectPass(active));
     return;
   }
 
@@ -660,9 +660,9 @@ function drawPlacement(c) {
   addBtn(c, "⟲ turn", () => { pendingFacing = (facingNow() + 5) % 6; render(); });
   addBtn(c, "⟳ turn", () => { pendingFacing = (facingNow() + 1) % 6; render(); });
   addBtn(c, "Set action", () => {
-    PLAN[sel] = {uid: sel, phase: "move", option: chosenOption, label: optLabel(chosenOption),
-                 dest: pendingDest, facing: pendingFacing, ready: swap ? pendingReady : null};
-    chosenOption = null; pendingDest = null; pendingReady = null; render();
+    // Selection phase: placement complete -> submit the move immediately (#192).
+    submitMove(f, chosenOption,
+               {dest: pendingDest, facing: pendingFacing, ready: swap ? pendingReady : null});
   }, true, needHex && !pendingDest);
   addBtn(c, "Cancel", () => { chosenOption = null; pendingDest = null; pendingReady = null; render(); });
 }
@@ -671,16 +671,25 @@ function drawPlacement(c) {
 function closeMenu() { $("tokenMenu").style.display = "none"; }
 function openMenu(f) {
   const rows = [];
-  if (S.phase === "move") {
-    // The full option set: available ones are clickable, unavailable ones are
-    // shown disabled with their reason (issue #73), never hidden.
-    for (const o of (optInfo.options || [])) {
-      if (o.available === false)
-        rows.push({label: optLabel(o.option), reason: o.reason, disabled: true});
-      else
-        rows.push({label: optLabel(o.option), act: () => chooseMoveOption(f, o.option)});
+  if (S.phase === "select") {
+    // Only the active figure may act; everyone else is a read-only preview.
+    if (!isActive(f)) rows.push({label: "Not this figure's turn yet", muted: true});
+    else {
+      // The full option set: available ones are clickable, unavailable ones are
+      // shown disabled with their reason (issue #73), never hidden. do_nothing
+      // and pass ride in the list from option_availability; render them as their
+      // own dedicated rows below rather than inline.
+      for (const o of (optInfo.options || [])) {
+        if (o.option === "do_nothing" || o.option === "pass") continue;
+        if (o.available === false)
+          rows.push({label: optLabel(o.option), reason: o.reason, disabled: true});
+        else
+          rows.push({label: optLabel(o.option), act: () => chooseMoveOption(f, o.option)});
+      }
+      rows.push({label: "Do nothing (hold)", act: () => selectDoNothing(f)});
+      if (canPass(f)) rows.push({label: "Pass — choose last", act: () => selectPass(f)});
+      else rows.push({label: "Pass — choose last", reason: "already deferred", disabled: true});
     }
-    if (!rows.length) rows.push({label: "No moves available", muted: true});
   } else if (S.phase === "combat") {
     const grappling = (f.hth_opponents || []).length > 0;
     for (const uid of (optInfo._targets || [])) {
@@ -761,13 +770,11 @@ function chooseMoveOption(f, option) {
   if (NEEDS_DEST.has(option) || pickWeapon) {
     chosenOption = option; pendingFacing = "auto"; render();       // enter placement
   } else {
-    const plan = {uid: f.uid, phase: "move", option, label: optLabel(option), facing: "auto"};
-    if (WEAPON_CHANGE.has(option)) plan.ready = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
-    if (option === "pick_up") {
-      plan.ready = (optInfo.pickups || [])[0];
-      plan.label = `Pick up ${plan.ready || "weapon"}`;
-    }
-    PLAN[f.uid] = plan; chosenOption = null; render();
+    // Selection phase: a simple option needs no placement, so submit it now (#192).
+    let ready = null;
+    if (WEAPON_CHANGE.has(option)) ready = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
+    if (option === "pick_up") ready = (optInfo.pickups || [])[0];
+    submitMove(f, option, {facing: "auto", ready});
   }
 }
 function setHth(f, target) {
@@ -800,6 +807,24 @@ function setDoNothing(f) {
   PLAN[f.uid] = {uid: f.uid, phase: "combat", none: true, label: "Do nothing"};
   render();
 }
+// ---- selection phase: immediate submission (#192) ---------------------------
+// In the select phase there is no batch: each choice POSTs right away and the
+// server lights up the next figure in initiative order.
+function isActive(f) { return !!f && S.active_uid === f.uid; }
+function hasPassed(f) { return !!f && (S.passed || []).includes(f.uid); }
+function canPass(f) { return isActive(f) && !hasPassed(f); }
+function selectDoNothing(f) {
+  closeMenu();
+  act({type: "do_nothing", uid: f.uid}).then(after);
+}
+function selectPass(f) {
+  closeMenu();
+  act({type: "pass", uid: f.uid}).then(after);
+}
+function submitMove(f, option, {dest = null, facing = "auto", ready = null} = {}) {
+  closeMenu(); chosenOption = null; pendingDest = null; pendingReady = null;
+  act({type: "move", uid: f.uid, option, dest, facing, ready}).then(after);
+}
 function clearPlan(f) {
   delete PLAN[f.uid];
   if (sel === f.uid) { chosenOption = null; pendingDest = null; }
@@ -808,23 +833,18 @@ function clearPlan(f) {
 function resetAll() { PLAN = {}; warnKind = null; resetSelection(); closeMenu(); }
 
 async function executePlans(kind) {
+  // The combat phase still batches its attack plans (the selection phase submits
+  // each action immediately, so it never routes through here) (#192).
   closeMenu();
   const plans = Object.values(PLAN).filter(p => p.phase === kind);
-  if (kind === "move") {
-    for (const p of plans)
-      await act({type: "move", uid: p.uid, option: p.option, dest: p.dest,
-                 facing: p.facing, ready: p.ready || null});
-    resetAll(); await act({type: "end_side_move"}); after();
-  } else {
-    for (const p of plans) {
-      if (p.disengage) await act({type: "hth_disengage", uid: p.uid});
-      else if (p.disengageMove) await act({type: "disengage_move", uid: p.uid, dest: p.dest});
-      else if (p.rush) await act({type: "shield_rush", uid: p.uid, target: p.target});
-      else if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
-                                    uid: p.uid, target: p.target});
-    }
-    resetAll(); await act({type: "resolve_combat"}); render();
+  for (const p of plans) {
+    if (p.disengage) await act({type: "hth_disengage", uid: p.uid});
+    else if (p.disengageMove) await act({type: "disengage_move", uid: p.uid, dest: p.dest});
+    else if (p.rush) await act({type: "shield_rush", uid: p.uid, target: p.target});
+    else if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
+                                  uid: p.uid, target: p.target});
   }
+  resetAll(); await act({type: "resolve_combat"}); render();
 }
 
 function after() { render(); }
@@ -851,9 +871,9 @@ async function loadOptions(f) {
 
 async function onFigureClick(f) {
   flash("");
-  if (S.phase === "move") {
-    if (f.side !== S.moving_side) { flash(`${f.name} is on another side.`); return; }
-    if (!f.can_act) { flash(`${f.name} can't move this turn.`); return; }
+  if (S.phase === "select") {
+    if (!isActive(f)) { flash(`It is not ${f.name}'s turn to act yet.`); return; }
+    if (!myControlled(f)) { flash(`${f.name} isn't yours to command.`); return; }
     sel = f.uid; chosenOption = null; pendingDest = null; pendingFacing = f.facing; pendingReady = null;
     optInfo = await loadOptions(f);
     render(); openMenu(f);
@@ -881,7 +901,7 @@ function scheduleHoverClose() {
 }
 function hoverActionable(f) {
   if (!S || S.victory || chosenOption) return false;   // not mid-placement
-  if (S.phase === "move") return f.side === S.moving_side && !!f.can_act && myControlled(f);
+  if (S.phase === "select") return isActive(f) && !!f.can_act && myControlled(f);
   if (S.phase === "combat") return myControlled(f) && !!f.can_act;
   return false;
 }
@@ -1001,7 +1021,11 @@ function planLine(f) {
   const p = PLAN[f.uid];
   if (p) return `<div style="margin-top:8px" class="muted">Action set: <b>${p.label}</b>`
     + `${p.dest ? " → " + p.dest : ""}</div>`;
-  if ((S.phase === "move" && f.side === S.moving_side && f.can_act) ||
+  if (S.phase === "select" && f.acted)
+    return `<div style="margin-top:8px" class="muted">Action set: <b>${optLabel(f.option)}</b></div>`;
+  if (S.phase === "select" && hasPassed(f) && !f.acted)
+    return `<div style="margin-top:8px" class="muted">Passed — waiting to choose last.</div>`;
+  if ((S.phase === "select" && isActive(f) && myControlled(f) && f.can_act) ||
       (S.phase === "combat" && myControlled(f) && f.can_act))
     return `<div style="margin-top:8px" class="muted">Click this counter on the board for its options.</div>`;
   return "";
@@ -1013,19 +1037,39 @@ function planLine(f) {
 // otherwise in their stable order (PR 1 reflects today's flow -- no reordering
 // of the engine itself; that is PR 2). (#192)
 function orderedSides() {
+  // Group by player as in the mockup, ordering the players by their best figure's
+  // place in the frozen initiative order (#192).
   const sides = (S.sides && S.sides.length)
     ? S.sides.slice() : Object.keys(S.controllers || {});
-  const lead = S.winner && sides.includes(S.winner) ? S.winner
-    : (S.moving_side && sides.includes(S.moving_side) ? S.moving_side : null);
-  return lead ? [lead, ...sides.filter(s => s !== lead)] : sides;
+  const order = S.initiative_order || [];
+  const rank = side => {
+    const idx = order.findIndex(uid => {
+      const fig = figByUid(uid);
+      return fig && fig.side === side;
+    });
+    return idx < 0 ? order.length : idx;
+  };
+  return sides.slice().sort((left, right) => rank(left) - rank(right));
+}
+// Figures within a side's group, ordered by the frozen initiative order (#192).
+function sideFiguresInInitiative(figs) {
+  const order = S.initiative_order || [];
+  const place = f => { const i = order.indexOf(f.uid); return i < 0 ? order.length : i; };
+  return figs.slice().sort((left, right) => place(left) - place(right));
 }
 function figActionHtml(f) {
-  const plan = PLAN[f.uid];
+  const plan = PLAN[f.uid];                        // combat phase still batches
   if (plan) return `<span class="action">${escapeHtml(plan.label)}`
     + `${plan.dest ? " → " + escapeHtml(plan.dest) : ""}</span>`;
-  const canMove = S.phase === "move" && f.side === S.moving_side && f.can_act;
+  if (S.phase === "select") {
+    if (f.acted) return `<span class="action">${escapeHtml(optLabel(f.option))}</span>`;
+    if (hasPassed(f)) return `<span class="action passed">Passed — waiting</span>`;
+    if (isActive(f) && myControlled(f) && !f.dead)
+      return `<span class="action todo">choose action</span>`;
+    return `<span class="action idle">—</span>`;
+  }
   const canFight = S.phase === "combat" && myControlled(f) && f.can_act;
-  if ((canMove || canFight) && !f.dead) return `<span class="action todo">choose action</span>`;
+  if (canFight && !f.dead) return `<span class="action todo">choose action</span>`;
   return `<span class="action idle">—</span>`;
 }
 function drawRoster() {
@@ -1036,11 +1080,17 @@ function drawRoster() {
   for (const side of orderedSides()) {
     html += `<div class="grouphd"><span class="chip ${side}">${escapeHtml(sideName(side))}</span>`
       + ` ${seatTag(side)}</div>`;
-    for (const f of (byside[side] || [])) {
+    for (const f of sideFiguresInInitiative(byside[side] || [])) {
       const dead = f.dead || f.collapsed;
       const state = f.dead ? "dead" : f.collapsed ? "down"
         : `${hpCur(f)}/${hpMax(f)}` + (f.posture !== "standing" ? " · " + f.posture : "");
-      html += `<div class="row${dead ? " dead" : ""}" data-uid="${escapeHtml(f.uid)}">`
+      // Highlight the figure whose turn it is; dim the rest during selection.
+      const active = S.phase === "select" && isActive(f);
+      const waiting = S.phase === "select" && hasPassed(f) && !f.acted;
+      const cls = "row" + (dead ? " dead" : "") + (active ? " active" : "")
+        + (waiting ? " waiting" : "")
+        + (S.phase === "select" && !active && !f.acted && !dead ? " disabled" : "");
+      html += `<div class="${cls}" data-uid="${escapeHtml(f.uid)}">`
         + `<span>${tokenBadge(f)} ${escapeHtml(f.name)} <span class="muted">${state}</span></span>`
         + figActionHtml(f) + `</div>`;
     }

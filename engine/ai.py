@@ -14,8 +14,10 @@ deliberately simple but not foolish:
     so the AI is profile-agnostic while the *resolution* (and thus the value of
     a given weapon vs a given armour) stays profile-correct in the ruleset.
 
-The board calls :func:`take_movement` during a computer side's movement turn and
-:func:`queue_attacks` when the combat phase opens.
+The board calls :func:`take_action` for each computer-controlled figure as its
+turn comes up in the per-character initiative order (#192), and
+:func:`queue_attacks` when the combat phase opens. The AI never PASSes — it always
+sets a real action (or holds when boxed in).
 """
 from __future__ import annotations
 
@@ -54,69 +56,80 @@ def _best_target(state: GameState, figure: Figure, candidates: list[Figure]) -> 
     )
 
 
-def take_movement(state: GameState, side: str) -> None:
-    """Play the movement phase for every figure on ``side``."""
+def take_action(state: GameState, figure: Figure) -> None:
+    """Set the action for ONE computer-controlled ``figure`` (#192).
+
+    Drives a single figure through the same engine verbs a human would use, as
+    its turn comes up in the initiative order. The AI never PASSes; a figure with
+    nothing useful to do holds position (a real, set action) so the selection
+    pass always advances.
+    """
     layout = state.arena.layout
-    for figure in [f for f in state.figures if f.side == side and f.can_act()]:
-        if figure.in_hth:
-            continue                     # grappling on the ground; it fights in combat
-        if figure.posture != Posture.STANDING:
-            state.move(figure, Option.STAND_UP)
-            continue
-        target = _nearest_enemy(state, figure)
-        if target is None:
-            continue
+    if not figure.can_act():
+        return
+    if figure.in_hth:
+        # Grappling on the ground; it fights in combat. Commit a no-op so the
+        # selection pass counts this figure as done and advances.
+        state.set_do_nothing(figure)
+        return
+    if figure.posture != Posture.STANDING:
+        state.move(figure, Option.STAND_UP)
+        return
+    target = _nearest_enemy(state, figure)
+    if target is None:
+        state.set_do_nothing(figure)
+        return
 
-        weapon = figure.ready_weapon
-        has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
-        can_fire = has_missile and figure.missile_cooldown == 0
-        facing = _facing_toward(layout, figure.position, target.position)
+    weapon = figure.ready_weapon
+    has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+    can_fire = has_missile and figure.missile_cooldown == 0
+    facing = _facing_toward(layout, figure.position, target.position)
 
-        if state.engaged(figure):
-            # Stay in contact and attack (one last shot if a loaded bow is stuck).
-            option = (Option.ONE_LAST_SHOT if can_fire
-                      else Option.SHIFT_ATTACK if not has_missile
-                      else Option.SHIFT_DEFEND)   # reloading in melee: keep guard up
-            state.move(figure, option, facing=facing)
-            continue
+    if state.engaged(figure):
+        # Stay in contact and attack (one last shot if a loaded bow is stuck).
+        option = (Option.ONE_LAST_SHOT if can_fire
+                  else Option.SHIFT_ATTACK if not has_missile
+                  else Option.SHIFT_DEFEND)   # reloading in melee: keep guard up
+        state.move(figure, option, facing=facing)
+        return
 
-        if can_fire:
-            # Hold position and fire down the lane.
-            state.move(figure, Option.MISSILE_ATTACK, facing=facing)
-            continue
+    if can_fire:
+        # Hold position and fire down the lane.
+        state.move(figure, Option.MISSILE_ATTACK, facing=facing)
+        return
 
-        if has_missile:
-            # Reloading: hold and face the enemy; the weapon reloads automatically.
-            state.move(figure, Option.MOVE, facing=facing)
-            continue
+    if has_missile:
+        # Reloading: hold and face the enemy; the weapon reloads automatically.
+        state.move(figure, Option.MOVE, facing=facing)
+        return
 
-        # Melee: charge into contact if reachable this turn, else close distance.
-        charge = state.reach_for(figure, Option.CHARGE_ATTACK)
-        contact = [
-            h for h in charge.reachable_hexes()
-            if layout.distance(h, target.position) == 1
-        ]
-        # A multi-hex figure may translate OR turn-in-place, but not both in one
-        # move (the engine defers combined rotation+translation, #153). So when it
-        # moves along a path it keeps its facing; a single-hex figure still turns
-        # to face its target.
-        def _move_facing(dest):
-            return None if figure.size > 1 else _facing_toward(layout, dest, target.position)
+    # Melee: charge into contact if reachable this turn, else close distance.
+    charge = state.reach_for(figure, Option.CHARGE_ATTACK)
+    contact = [
+        h for h in charge.reachable_hexes()
+        if layout.distance(h, target.position) == 1
+    ]
+    # A multi-hex figure may translate OR turn-in-place, but not both in one
+    # move (the engine defers combined rotation+translation, #153). So when it
+    # moves along a path it keeps its facing; a single-hex figure still turns
+    # to face its target.
+    def _move_facing(dest):
+        return None if figure.size > 1 else _facing_toward(layout, dest, target.position)
 
-        if contact:
-            dest = min(contact, key=lambda h: layout.distance(h, target.position))
-            state.move(figure, Option.CHARGE_ATTACK, path=charge.path_to(dest),
-                       facing=_move_facing(dest))
-            continue
+    if contact:
+        dest = min(contact, key=lambda h: layout.distance(h, target.position))
+        state.move(figure, Option.CHARGE_ATTACK, path=charge.path_to(dest),
+                   facing=_move_facing(dest))
+        return
 
-        run = state.reach_for(figure, Option.MOVE)
-        approach = run.reachable_hexes()
-        if approach:
-            dest = min(approach, key=lambda h: layout.distance(h, target.position))
-            state.move(figure, Option.MOVE, path=run.path_to(dest),
-                       facing=_move_facing(dest))
-        else:
-            state.move(figure, Option.MOVE, facing=facing)  # boxed in; just face the foe
+    run = state.reach_for(figure, Option.MOVE)
+    approach = run.reachable_hexes()
+    if approach:
+        dest = min(approach, key=lambda h: layout.distance(h, target.position))
+        state.move(figure, Option.MOVE, path=run.path_to(dest),
+                   facing=_move_facing(dest))
+    else:
+        state.move(figure, Option.MOVE, facing=facing)  # boxed in; just face the foe
 
 
 def queue_attacks(state: GameState, side: str) -> None:

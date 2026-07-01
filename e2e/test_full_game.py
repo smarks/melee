@@ -1,11 +1,11 @@
 """Watchable full-game end-to-end test.
 
 This starts a Player-vs-Computer match from the inline Game Control, then simply
-advances the turns through the game's own controls (initiative -> movement ->
-combat -> end turn) while the AI plays its side, until one side wins the field.
-It drives the entire stack together -- template, inline-JS SPA, the JSON API,
-the rules engine, and the AI -- and records video the whole way, so the match
-can be watched after the fact (or live with ``--headed --slowmo``).
+advances the turns through the game's own controls (per-character action
+selection -> combat -> end turn) while the AI plays its side, until one side
+wins the field. It drives the entire stack together -- template, inline-JS SPA,
+the JSON API, the rules engine, and the AI -- and records video the whole way,
+so the match can be watched after the fact (or live with ``--headed --slowmo``).
 """
 from __future__ import annotations
 
@@ -13,9 +13,6 @@ import re
 
 import pytest
 from playwright.sync_api import Page, expect
-
-# "<side> moves first" -- the choose-who-moves-first buttons (side id is dynamic).
-_FIRST_MOVE = re.compile(r"moves first")
 
 
 def _click(page: Page, name, exact: bool = True) -> bool:
@@ -28,21 +25,16 @@ def _click(page: Page, name, exact: bool = True) -> bool:
 
 
 def _advance_once(page: Page) -> bool:
-    """Take the one forward-moving step for the current phase (redesigned flow, #176).
+    """Take the one forward-moving step for the current phase (#192).
 
-    Initiative auto-rolls (only the first-mover choice ever needs a click);
-    Movement is a single 'Done moving' press; Combat resolves ('Resolve attacks')
-    and then ends ('End turn →'). No confirmation step. Returns False when no
-    control is available (computer mid-turn / auto-rolling)."""
+    In Action selection each active human figure holds (Do nothing), which
+    commits its action and lights up the next figure; the AI plays its own
+    figures server-side. Combat resolves ('Resolve attacks') and then ends
+    ('End turn →'). Returns False when no control is available (computer
+    mid-turn / mid-render)."""
     phase = page.locator("#phaseBanner").inner_text()
-    if "Initiative" in phase:
-        button = page.locator("#controls").get_by_role("button", name=_FIRST_MOVE)
-        if button.count() and button.first.is_enabled():
-            button.first.click()
-            return True
-        return False                                # auto-rolling / computer's pick
-    if "Movement" in phase:
-        return _click(page, "Done moving →")
+    if "Action selection" in phase:
+        return _click(page, "Do nothing (hold)")
     if "Combat" in phase:
         # Resolve (damage lands), then End turn -- two clean steps.
         return (_click(page, "Resolve attacks") or _click(page, "Resolve combat")

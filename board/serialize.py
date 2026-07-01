@@ -76,6 +76,8 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "engaged": state.engaged(figure) if figure.can_act() else False,
         "can_act": figure.can_act(),
         "acted": figure.current_option is not None,
+        # The action set this selection pass (its Option value), for the tracker.
+        "option": figure.current_option.value if figure.current_option else None,
         "armor": figure.armor.name,
         "model": "melee",
         # Section IX progression (#10) so the UI can show XP and advancement.

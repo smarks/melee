@@ -169,16 +169,18 @@ def _force_retreat_options(state: GameState) -> list[dict]:
 
 def _meta(game: dict) -> dict:
     state: GameState = game["state"]
-    moving = None
-    if game["phase"] == "move" and game["order"]:
-        moving = game["order"][game["moving"]]
+    active = state.active_character() if game["phase"] == "select" else None
     retreat_options = (_force_retreat_options(state)
                        if game["phase"] == "combat" else [])
     return {
         "phase": game["phase"],
-        "move_order": game["order"],
-        "moving_side": moving,
-        "winner": game["winner"],
+        # The figure whose turn it is to set an action, the frozen initiative
+        # order, and who has deferred (Pass) — the per-character turn state (#192).
+        "active_uid": active.uid if active else None,
+        "initiative_order": list(state.initiative_order),
+        "passed": list(state.passed),
+        # The active figure's side, kept as ``moving_side`` for client compat.
+        "moving_side": active.side if active else None,
         "victory": state.victor(),
         "practice": state.practice,
         "controllers": game.get("controllers", {}),
@@ -202,36 +204,38 @@ def _combat_actionable(state: GameState) -> list:
     return actionable
 
 
-def _advance_computer(game: dict) -> None:
-    """Drive every computer-controlled side as far as it can, then yield.
+def _advance_selection(game: dict) -> None:
+    """Open combat once every figure has set its action (the select pass is done).
 
-    Called after each human action (and at new-game): it auto-chooses move
-    order, plays the computer's movement turns, and queues the computer's
-    attacks when combat opens, stopping as soon as the human must act.
+    The per-character initiative selection is complete when the engine reports no
+    active character left — every living figure (including deferred passers) has
+    committed. That's the cue to move from ``select`` to ``combat`` (#192).
+    """
+    state: GameState = game["state"]
+    if game["phase"] == "select" and state.active_character() is None:
+        game["phase"] = "combat"
+
+
+def _advance_computer(game: dict) -> None:
+    """Drive computer-controlled figures as far as they can, then yield.
+
+    In the ``select`` phase it plays each computer figure's action one at a time,
+    exactly as its turn comes up in the initiative order, stopping the moment a
+    human figure is the active character (or the pass completes → combat). When
+    combat opens it queues the computer's attacks. It never PASSes.
     """
     state: GameState = game["state"]
     controllers = game.get("controllers", {})
-    if "computer" not in controllers.values():
-        return
-    for _ in range(64):  # bounded; a turn needs only a few transitions
+    for _ in range(256):  # bounded; one iteration per figure/transition
         phase = game["phase"]
-        if phase == "initiative":
-            winner = game["winner"]
-            if winner is None or controllers.get(winner) != "computer":
-                return                       # human rolls / picks move order
-            state.choose_first(winner)       # the computer elects to move first
-            game["order"] = state.move_order()
-            game["moving"] = 0
-            game["phase"] = "move"
-            game["combat_prepared"] = False
-        elif phase == "move":
-            side = game["order"][game["moving"]]
-            if controllers.get(side) != "computer":
-                return                       # the human's movement turn
-            ai.take_movement(state, side)
-            game["moving"] += 1
-            if game["moving"] >= len(game["order"]):
-                game["phase"] = "combat"
+        if phase == "select":
+            active = state.active_character()
+            if active is None:
+                _advance_selection(game)     # select complete → combat
+                continue
+            if controllers.get(active.side) != "computer":
+                return                       # a human must set this figure's action
+            ai.take_action(state, active)    # one figure, then loop for the next
         elif phase == "combat":
             if not game.get("combat_prepared"):
                 for side, controller in controllers.items():
@@ -244,13 +248,10 @@ def _advance_computer(game: dict) -> None:
 
 
 def _do_end_turn(game: dict) -> None:
-    """End the turn and reset the board phase machine back to initiative."""
+    """End the turn and reopen a fresh per-character selection pass (#192)."""
     state: GameState = game["state"]
-    state.end_turn()
-    game["phase"] = "initiative"
-    game["order"] = state.sides
-    game["moving"] = 0
-    game["winner"] = None
+    state.end_turn()          # settles injury flags AND refreezes initiative order
+    game["phase"] = "select"
     game["combat_prepared"] = False
 
 
@@ -610,6 +611,7 @@ def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
                    else experience.CombatType.DEATH)
     state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset,
                       combat_type=combat_type)
+    state.begin_selection()   # freeze the turn-1 initiative order (#192)
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
     # Seats record who may drive each side. The creating session owns every human
@@ -622,10 +624,7 @@ def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
     GAMES[gid] = {
         "state": state,
         "layout": layout(arena),
-        "phase": "initiative",
-        "order": state.sides,
-        "moving": 0,
-        "winner": None,
+        "phase": "select",
         "profile": profile.name,
         "controllers": controllers,
         "seats": seats,
@@ -1012,7 +1011,8 @@ def _ownership_fields(game: dict, pid: str | None) -> dict:
     }
 
 
-_FIGURE_ACTIONS = {"move", "queue_attack", "force_retreat", "update_figure"}
+_FIGURE_ACTIONS = {"move", "do_nothing", "pass", "queue_attack",
+                   "force_retreat", "update_figure"}
 
 
 def _is_admin(request) -> bool:
@@ -1130,33 +1130,22 @@ def api_seat(request, gid):
 
 # A phase's internal name vs. the word used in its guard message. Kept as a small
 # map so the declarative dispatch table below produces byte-for-byte identical
-# "not the <X> phase" errors (notably "move" -> "movement").
-_PHASE_LABEL = {"initiative": "initiative", "move": "movement", "combat": "combat"}
+# "not the <X> phase" errors.
+_PHASE_LABEL = {"select": "selection", "combat": "combat"}
 
 
-def _act_roll_initiative(game: dict, body: dict, *, is_admin: bool = False):
-    state: GameState = game["state"]
-    outcome = state.roll_initiative()
-    game["winner"] = outcome["winner"]
-    return outcome
-
-
-def _act_choose_first(game: dict, body: dict, *, is_admin: bool = False):
-    state: GameState = game["state"]
-    side = body.get("side")
-    state.choose_first(side)
-    game["order"] = state.move_order()
-    game["moving"] = 0
-    game["phase"] = "move"
-    return None
+def _require_active(state: GameState, figure) -> None:
+    """Guard: it must be ``figure``'s turn in the per-character selection (#192)."""
+    active = state.active_character()
+    if active is None or active.uid != figure.uid:
+        who = active.name if active is not None else "no one"
+        raise IllegalAction(f"it is {who}'s turn to act, not {figure.name}")
 
 
 def _act_move(game: dict, body: dict, *, is_admin: bool = False):
     state: GameState = game["state"]
     figure = _figure(state, body.get("uid", ""))
-    moving_side = game["order"][game["moving"]]
-    if figure.side != moving_side:
-        raise IllegalAction(f"it is {moving_side}'s turn to move")
+    _require_active(state, figure)
     option = _option(body)
     facing = body.get("facing")
     dest = body.get("dest")
@@ -1171,13 +1160,27 @@ def _act_move(game: dict, body: dict, *, is_admin: bool = False):
     if facing == "auto":   # default: face an adjacent enemy, else the way you went
         facing = _auto_facing(state, figure, final_hex, path)
     state.move(figure, option, path=path, facing=facing, ready=body.get("ready"))
+    _advance_selection(game)
     return None
 
 
-def _act_end_side_move(game: dict, body: dict, *, is_admin: bool = False):
-    game["moving"] += 1
-    if game["moving"] >= len(game["order"]):
-        game["phase"] = "combat"
+def _act_do_nothing(game: dict, body: dict, *, is_admin: bool = False):
+    """Commit a figure to a deliberate no-op (a real, set action) (#192)."""
+    state: GameState = game["state"]
+    figure = _figure(state, body.get("uid", ""))
+    _require_active(state, figure)
+    state.set_do_nothing(figure)
+    _advance_selection(game)
+    return None
+
+
+def _act_pass(game: dict, body: dict, *, is_admin: bool = False):
+    """Defer a figure's action to choose last (the Pass rule, #192)."""
+    state: GameState = game["state"]
+    figure = _figure(state, body.get("uid", ""))
+    _require_active(state, figure)
+    state.pass_action(figure)
+    _advance_selection(game)
     return None
 
 
@@ -1264,10 +1267,9 @@ def _act_update_figure(game: dict, body: dict, *, is_admin: bool = False):
 # prologue in each branch; ``None`` means the action runs in any phase. Adding an
 # action is a new handler plus one line here, not surgery in a long if/elif chain.
 _ACTIONS = {
-    "roll_initiative": ("initiative", _act_roll_initiative),
-    "choose_first": ("initiative", _act_choose_first),
-    "move": ("move", _act_move),
-    "end_side_move": ("move", _act_end_side_move),
+    "move": ("select", _act_move),
+    "do_nothing": ("select", _act_do_nothing),
+    "pass": ("select", _act_pass),
     "queue_attack": ("combat", _act_queue_attack),
     "queue_hth": ("combat", _act_queue_hth),
     "shield_rush": ("combat", _act_shield_rush),
