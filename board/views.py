@@ -381,19 +381,22 @@ def _human_has_attack_left(game: dict) -> bool:
     return False
 
 
-def _auto_end_if_idle(game: dict) -> None:
+def _auto_end_if_idle(game: dict) -> bool:
     """End the turn automatically when nothing is left for the human to do.
 
     In the combat phase, if no attacks are queued and no human figure can still
     declare one, there's nothing to resolve — so skip the redundant End-turn.
+    Returns True when it actually ended the turn (opening a fresh select pass), so
+    the caller can re-drive the computer for that new pass.
     """
     if game["phase"] != "combat":
-        return
+        return False
     if game["state"]._pending or _human_has_attack_left(game):
-        return
+        return False
     if _human_force_retreat_available(game):
-        return                        # let the player take (or skip) a force-retreat
+        return False                  # let the player take (or skip) a force-retreat
     _do_end_turn(game)
+    return True
 
 
 def _human_force_retreat_available(game: dict) -> bool:
@@ -1059,8 +1062,14 @@ def api_action(request, gid):
     try:
         _authorize_action(game, request, body)
         result = _dispatch(game, body, is_admin=_is_admin(request))
-        _advance_computer(game)
-        _auto_end_if_idle(game)
+        # Drive the computer, then auto-end an idle combat turn -- and if that opens
+        # a fresh select pass led by a computer figure, drive that too. Without the
+        # re-drive, a combat turn that auto-ends into a computer-first initiative
+        # would hang, leaving the human waiting on a figure it cannot move.
+        for _ in range(256):
+            _advance_computer(game)
+            if not _auto_end_if_idle(game):
+                break
     except IllegalAction as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     except Forbidden as exc:

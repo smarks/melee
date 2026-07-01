@@ -34,10 +34,10 @@ def _advance_once(page: Page) -> bool:
     mid-turn / mid-render)."""
     phase = page.locator("#phaseBanner").inner_text()
     if "Action selection" in phase:
-        # The selection controls now live inline under the active character
-        # (#198/#199); the active figure's block is the enabled one.
-        hold = page.locator("#roster .charctl.enabled").get_by_role(
-            "button", name="Do nothing (hold)", exact=True)
+        # The action list now lives inline under the active character (#202);
+        # the active figure's block is the enabled one, and Do nothing is one of
+        # its options (it submits immediately, lighting up the next figure).
+        hold = page.locator('#roster .charctl.enabled button[data-opt="do_nothing"]')
         if hold.count() and hold.first.is_enabled():
             hold.first.click()
             return True

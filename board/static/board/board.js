@@ -545,7 +545,12 @@ function drawControls() {
     // action buttons themselves now live inline under each character in the
     // roster (drawRoster / figControlsHtml, #198/#199) instead of pinned here at
     // the bottom, so #controls just carries the "what to do now" hint.
-    if (sel && chosenOption) { drawPlacement(c); return; }   // mid-placement keeps its UI
+    if (sel && chosenOption) {                               // mid-placement (inline, #202)
+      const placing = figByUid(sel);
+      setHint(`Placing <b>${escapeHtml(placing ? placing.name : "")}</b> — click a green`
+              + ` hex on the board, then press <b>Set action</b> under its card.`);
+      return;
+    }
     const active = S.active_uid ? figByUid(S.active_uid) : null;
     if (!active) { setHint("Resolving the action pass…"); return; }
     if (!myControlled(active)) {
@@ -648,34 +653,6 @@ function drawForceRetreat(c) {
     row.appendChild(adv);
     c.appendChild(row);
   }
-}
-
-// Placement: a move option that needs a destination hex + facing, then "Set action".
-function drawPlacement(c) {
-  const f = figByUid(sel);
-  if (!f) { chosenOption = null; return; }
-  const needHex = NEEDS_DEST.has(chosenOption);
-  const swap = WEAPON_CHANGE.has(chosenOption) && (f.weapons || []).length > 1;
-  if (swap && pendingReady == null) pendingReady = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
-  const wrap = document.createElement("div"); wrap.style.marginTop = "8px";
-  let html = `<div class="muted">Placing <b>${f.name}</b>: ${optLabel(chosenOption)}`
-    + (needHex ? ` · dest ${pendingDest || "—"}` : "")
-    + ` · facing ${pendingFacing === "auto" ? "→ enemy" : pendingFacing}</div>`;
-  if (swap) html += `<div style="margin-top:6px">Ready: <select id="readySel">`
-    + (f.weapons || []).map(w => `<option ${w === pendingReady ? "selected" : ""}>${w}</option>`).join("")
-    + `</select></div>`;
-  if (needHex && !pendingDest) html += `<div class="hint">Click a green hex to set the destination.</div>`;
-  wrap.innerHTML = html; c.appendChild(wrap);
-  if (swap) wrap.querySelector("#readySel").addEventListener("change", e => { pendingReady = e.target.value; });
-  const facingNow = () => pendingFacing === "auto" ? f.facing : pendingFacing;
-  addBtn(c, "⟲ turn", () => { pendingFacing = (facingNow() + 5) % 6; render(); });
-  addBtn(c, "⟳ turn", () => { pendingFacing = (facingNow() + 1) % 6; render(); });
-  addBtn(c, "Set action", () => {
-    // Selection phase: placement complete -> submit the move immediately (#192).
-    submitMove(f, chosenOption,
-               {dest: pendingDest, facing: pendingFacing, ready: swap ? pendingReady : null});
-  }, true, needHex && !pendingDest);
-  addBtn(c, "Cancel", () => { chosenOption = null; pendingDest = null; pendingReady = null; render(); });
 }
 
 // ---- per-character pop-up options menu --------------------------------------
@@ -1084,13 +1061,13 @@ function figActionHtml(f) {
   return `<span class="action idle">—</span>`;
 }
 // The inline per-character action controls shown UNDER each character row during
-// the selection phase (#198/#199 — moves the controls off the bottom of the
-// column and puts a copy beside every character). The active, controllable
-// figure's block is ENABLED, and its "Choose action" opens exactly the same board
-// action menu (openMenu) as clicking the token; every other not-yet-acted figure
-// shows the SAME block DISABLED, as a preview of the control that becomes theirs
-// on their turn. A figure that has already acted, passed, or is dead shows no
-// block (its chosen action / "Passed — waiting" badge stands instead).
+// the selection phase (#198/#199/#202). Instead of a "Choose action → popup"
+// indirection, the FULL list of this figure's actions is listed inline: the
+// active, controllable figure's valid options are live (clicking one specifies
+// it directly), and its invalid options are greyed with the server's reason.
+// Every other not-yet-acted figure shows a greyed preview list of the control
+// that becomes theirs on their turn. A figure that has already acted, passed, or
+// is dead shows no block (its chosen action / "Passed — waiting" badge stands).
 function figControlsHtml(f) {
   if (S.phase !== "select") return "";
   if (f.dead || f.collapsed || f.acted) return "";
@@ -1099,15 +1076,103 @@ function figControlsHtml(f) {
   // enabled block again (with Pass disabled -- it's already deferred).
   if (hasPassed(f) && !isActive(f)) return "";
   const enabled = isActive(f) && myControlled(f);
-  const dis = enabled ? "" : " disabled";
-  const passDis = (enabled && canPass(f)) ? "" : " disabled";
+  // Mid-placement: the active figure that chose a destination-requiring option
+  // shows its placement confirm right here, under its own row -- reach hexes light
+  // up on the board and Set action sits inches from the counter, not in a distant
+  // panel (the #200 regression that made destination options look inert, #202).
+  if (enabled && chosenOption && sel === f.uid)
+    return `<div class="charctl enabled placing" data-ctl="${escapeHtml(f.uid)}">`
+      + placementInnerHtml(f) + `</div>`;
+  const info = enabled ? optCache[f.uid] : null;
   return `<div class="charctl ${enabled ? "enabled" : "disabled"}" data-ctl="${escapeHtml(f.uid)}">`
-    + `<button class="ctl-choose primary" data-act="choose"${dis}>`
-    + `Choose ${escapeHtml(f.name)}'s action →</button>`
-    + `<div class="ctl-secondary">`
-    + `<button data-act="nothing"${dis}>Do nothing (hold)</button>`
-    + `<button data-act="pass"${passDis}>Pass — choose last</button>`
-    + `</div></div>`;
+    + optionListHtml(f, info, enabled) + `</div>`;
+}
+// The greyed preview list shown under figures whose turn hasn't come up yet: we
+// don't fetch every figure's live availability, so the block is a disabled
+// stand-in. do_nothing/pass always tail the real list too (they ride in the
+// server's option_availability, so an enabled list already carries them).
+const PREVIEW_OPTIONS = ["move", "half_move", "charge_attack", "dodge",
+  "ready_weapon", "missile_attack", "stand_up", "do_nothing", "pass"];
+function optionListHtml(f, info, enabled) {
+  let opts;
+  if (enabled && info && info.options) {
+    opts = info.options.map(o => ({option: o.option, available: o.available,
+      reason: o.reason, attack: o.is_attack}));
+  } else if (enabled) {                       // active but options still loading
+    return `<div class="place-hint">Loading actions…</div>`;
+  } else {                                    // greyed preview of the coming turn
+    opts = PREVIEW_OPTIONS.map(o => ({option: o, available: false, reason: null, attack: false}));
+  }
+  return `<div class="opt-list">` + opts.map(o => {
+    const dis = (!enabled || o.available === false) ? " disabled" : "";
+    const why = (enabled && o.available === false && o.reason)
+      ? `<span class="why">${escapeHtml(o.reason)}</span>` : "";
+    return `<button class="opt${o.attack ? " attack" : ""}" data-opt="${escapeHtml(o.option)}"${dis}>`
+      + `<span>${escapeHtml(optLabel(o.option))}</span>${why}</button>`;
+  }).join("") + `</div>`;
+}
+// The inline placement confirm for a destination-requiring option: destination +
+// facing summary, turn controls, and a Set action button gated until a reach hex
+// is picked (a weapon-change instead offers a Ready-weapon selector). Mirrors the
+// submit path the board popup used, kept inline so it is where the player is.
+function placementInnerHtml(f) {
+  const needHex = NEEDS_DEST.has(chosenOption);
+  const swap = WEAPON_CHANGE.has(chosenOption) && (f.weapons || []).length > 1;
+  if (swap && pendingReady == null)
+    pendingReady = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
+  const facingTxt = pendingFacing === "auto" ? "→ enemy" : pendingFacing;
+  let html = `<div class="place-head">Placing <b>${escapeHtml(optLabel(chosenOption))}</b>`
+    + (needHex ? ` · dest ${escapeHtml(pendingDest || "—")}` : "")
+    + ` · facing ${escapeHtml(String(facingTxt))}</div>`;
+  if (swap) html += `<div style="margin:2px 0">Ready: <select data-ready>`
+    + (f.weapons || []).map(w =>
+        `<option ${w === pendingReady ? "selected" : ""}>${escapeHtml(w)}</option>`).join("")
+    + `</select></div>`;
+  if (needHex && !pendingDest)
+    html += `<div class="place-hint">Click a green hex on the board to set the destination.</div>`;
+  const setDis = (needHex && !pendingDest) ? " disabled" : "";
+  return html + `<div class="place-btns">`
+    + `<button data-act="turnccw">⟲ turn</button>`
+    + `<button data-act="turncw">⟳ turn</button>`
+    + `<button class="primary" data-act="setaction"${setDis}>Set action</button>`
+    + `<button data-act="cancel">Cancel</button></div>`;
+}
+// A click on an inline option under the active character. Simple options submit at
+// once (like the board popup's do_nothing/pass did); destination-requiring ones
+// enter the inline placement step (reach hexes on the board + Set action here).
+function onInlineOption(f, option) {
+  if (!isActive(f) || !myControlled(f)) return;
+  optInfo = optCache[f.uid] || optInfo;      // reach data for placement + drawArena
+  sel = f.uid;
+  if (option === "do_nothing") selectDoNothing(f);
+  else if (option === "pass") selectPass(f);
+  else chooseMoveOption(f, option);
+}
+function onPlacementAct(f, action) {
+  const facingNow = () => pendingFacing === "auto" ? f.facing : pendingFacing;
+  if (action === "turnccw") { pendingFacing = (facingNow() + 5) % 6; render(); }
+  else if (action === "turncw") { pendingFacing = (facingNow() + 1) % 6; render(); }
+  else if (action === "cancel") { chosenOption = null; pendingDest = null; pendingReady = null; render(); }
+  else if (action === "setaction") {
+    const swap = WEAPON_CHANGE.has(chosenOption) && (f.weapons || []).length > 1;
+    submitMove(f, chosenOption,
+               {dest: pendingDest, facing: pendingFacing, ready: swap ? pendingReady : null});
+  }
+}
+// Ensure the active, controllable figure's options (availability + reach) are
+// loaded so its inline list shows real enabled/disabled state; the load is async
+// (options are cached for the life of the state, cleared on every act/refresh),
+// so re-draw the roster once it arrives.
+let activeOptsBusy = null;
+async function ensureActiveOptions() {
+  if (!S || S.phase !== "select" || S.victory) return;
+  const active = S.active_uid ? figByUid(S.active_uid) : null;
+  if (!active || active.dead || !myControlled(active)) return;
+  if (optCache[active.uid] || activeOptsBusy === active.uid) return;
+  activeOptsBusy = active.uid;
+  await loadOptions(active);
+  activeOptsBusy = null;
+  if (S && S.active_uid === active.uid) drawRoster();   // state may have moved on
 }
 function drawRoster() {
   const r = $("roster"); if (!r || !S) return;
@@ -1139,24 +1204,28 @@ function drawRoster() {
     const f = figByUid(row.dataset.uid);
     if (f) row.addEventListener("click", () => onFigureClick(f));
   });
-  // Wire the inline per-character action controls (#198/#199). Disabled buttons
-  // (every non-active figure's preview) carry the `disabled` attribute and get no
-  // handler; the active figure's Choose opens the same menu as its token, and Do
-  // nothing / Pass submit immediately, exactly like the old bottom controls.
+  // Wire the inline per-character action list (#202). Disabled buttons (invalid
+  // options and every non-active figure's greyed preview) carry the `disabled`
+  // attribute and get no handler. An enabled option specifies the action directly
+  // (simple -> submit now; destination -> inline placement); the placement block's
+  // data-act buttons turn/confirm/cancel it, and its weapon selector sets Ready.
   r.querySelectorAll(".charctl[data-ctl]").forEach(block => {
     const f = figByUid(block.dataset.ctl);
     if (!f) return;
+    block.querySelectorAll("button[data-opt]").forEach(btn => {
+      if (btn.disabled) return;
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation(); onInlineOption(f, btn.dataset.opt); });
+    });
     block.querySelectorAll("button[data-act]").forEach(btn => {
       if (btn.disabled) return;
       btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        const kind = btn.dataset.act;
-        if (kind === "choose") onFigureClick(f);
-        else if (kind === "nothing") selectDoNothing(f);
-        else if (kind === "pass") selectPass(f);
-      });
+        ev.stopPropagation(); onPlacementAct(f, btn.dataset.act); });
     });
+    const readySel = block.querySelector("select[data-ready]");
+    if (readySel) readySel.addEventListener("change", (e) => { pendingReady = e.target.value; });
   });
+  ensureActiveOptions();   // load the active figure's real options, then re-draw
 }
 
 function drawLog() {
