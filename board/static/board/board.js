@@ -1134,15 +1134,17 @@ function addBtn(parent, text, fn, primary, disabled) {
 // ---- pre-match fighter editor ----------------------------------------------
 const ED_TEAMS = ["red", "blue", "green", "gold", "violet"];
 const ARCHETYPES = {
+  // A generated fighter starts with a hand weapon AND a missile weapon, matching
+  // the engine archetypes (scenario.py) and best_weapons — not two hand weapons.
   "Classic Melee": [
-    {name:"Knight", strength:13, dexterity:11, weapon:"Broadsword", weapon2:"Mace", armor:"Plate", shield:"Large shield"},
-    {name:"Swordsman", strength:12, dexterity:12, weapon:"Shortsword", weapon2:"Mace", armor:"Chainmail", shield:"Small shield"},
-    {name:"Spearman", strength:13, dexterity:11, weapon:"Spear", weapon2:"Shortsword", armor:"Leather", shield:"None"},
+    {name:"Knight", strength:13, dexterity:11, weapon:"Broadsword", weapon2:"Light crossbow", armor:"Plate", shield:"Large shield"},
+    {name:"Swordsman", strength:12, dexterity:12, weapon:"Shortsword", weapon2:"Longbow", armor:"Chainmail", shield:"Small shield"},
+    {name:"Spearman", strength:13, dexterity:11, weapon:"Spear", weapon2:"Longbow", armor:"Leather", shield:"None"},
   ],
   "Tarmar": [
-    {name:"Knight", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Broadsword", weapon2:"Mace", armor:"Plate", shield:"Large shield", skill:3, skill2:1},
-    {name:"Swordsman", strength:12, dexterity:12, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Shortsword", weapon2:"Mace", armor:"Chainmail", shield:"Small shield", skill:3, skill2:1},
-    {name:"Spearman", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Spear", weapon2:"Shortsword", armor:"Leather", shield:"None", skill:2, skill2:1},
+    {name:"Knight", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Broadsword", weapon2:"Light crossbow", armor:"Plate", shield:"Large shield", skill:3, skill2:1},
+    {name:"Swordsman", strength:12, dexterity:12, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Shortsword", weapon2:"Longbow", armor:"Chainmail", shield:"Small shield", skill:3, skill2:1},
+    {name:"Spearman", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Spear", weapon2:"Longbow", armor:"Leather", shield:"None", skill:2, skill2:1},
   ],
 };
 let CAT = null, RULES = null;
