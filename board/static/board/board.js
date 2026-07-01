@@ -189,10 +189,12 @@ function adminTagHtml() {
     ? `<div style="margin-bottom:5px;color:#e6b800"><b>★ Admin</b> <span class="muted">— you control every figure and can edit them outside the rules.</span></div>`
     : "";
 }
-function inviteHtml() {   // no one to invite in a vs-computer game (#165)
-  const vsComputer = S.controllers && Object.values(S.controllers).includes("computer");
-  return vsComputer ? "" :
-    `<button style="margin-top:8px;padding:1px 7px;cursor:pointer" onclick="copyLink()">Copy invite link</button>`;
+function inviteHtml() {   // show when another *human* seat needs filling, even in a
+  // mixed human+computer game (#165 hid it whenever any computer was present, which
+  // wrongly suppressed the invite the second human needs — #192).
+  const humanSeats = Object.values(S.controllers || {}).filter(c => c === "human").length;
+  return humanSeats > 1 ?
+    `<button style="margin-top:8px;padding:1px 7px;cursor:pointer" onclick="copyLink()">Copy invite link</button>` : "";
 }
 async function seatAction(action, side) {
   const data = await postJSON(`/api/game/${GID}/seat`, {action, side});
@@ -317,8 +319,14 @@ function render() {
   drawSelInfo();
   drawRoster();
   drawLog();
-  const vsComputer = S.controllers && Object.values(S.controllers).includes("computer");
-  $("turnInfo").textContent = (PROFILE || "") + (vsComputer ? " · vs Computer" : " · same screen");
+  const seatKinds = Object.values(S.controllers || {});
+  const humans = seatKinds.filter(c => c === "human").length;
+  const computers = seatKinds.filter(c => c === "computer").length;
+  let seatLabel = "";
+  if (humans && computers) seatLabel = ` · ${humans} human vs ${computers} computer`;
+  else if (computers) seatLabel = " · vs Computer";
+  else if (humans > 1) seatLabel = " · same screen";
+  $("turnInfo").textContent = (PROFILE || "") + seatLabel;
 }
 
 function drawArena() {

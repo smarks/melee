@@ -166,6 +166,19 @@ def test_no_invite_link_in_a_vs_computer_game(live_server, page: Page) -> None:
 
 
 @pytest.mark.django_db
+def test_invite_link_shows_in_a_mixed_human_and_computer_game(live_server, page: Page) -> None:
+    # #192: a game with a second human seat needs the invite link for that player,
+    # even when a computer is also in the game. #165 wrongly hid it whenever ANY
+    # computer was present, suppressing the invite the second human needs.
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add human player").click()   # a 2nd human seat
+    page.get_by_role("button", name="Add AI player").click()       # + a computer
+    page.get_by_role("button", name="New Game").click()
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    expect(page.get_by_role("button", name="Copy invite link")).to_have_count(1)
+
+
+@pytest.mark.django_db
 def test_live_fighter_editor_opens_in_a_modal(live_server, page: Page) -> None:
     # #181: editing a fighter mid-game happens in a first-class modal whose Apply
     # button is always reachable -- not crammed into the bottom corner panel where
