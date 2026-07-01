@@ -26,7 +26,10 @@ def test_admin_panel_lists_and_creates_users(live_server, context, page: Page,
     }])
 
     page.goto(live_server.url)
-    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    # No auto-boot (#192): the page lands in the editable pre-game state. The
+    # admin panel doesn't need a running game, so just wait for the board SPA to
+    # finish booting (Game Control reaches its pre-game banner).
+    expect(page.locator("#phaseBanner")).to_contain_text("No game", timeout=20_000)
 
     # The staff-only Admin button is present; open the panel.
     page.get_by_role("button", name="⚙ Admin").click()

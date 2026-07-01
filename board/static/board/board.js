@@ -1,5 +1,6 @@
 const SVG = "http://www.w3.org/2000/svg";
 let GID = null, S = null, LAYOUT = null, PROFILE = null;
+let GAME_ACTIVE = false;  // a match is running -> Game Control settings lock (#192)
 let sel = null;          // figure being placed (movement), if any
 let optInfo = null;      // options payload for the active figure
 let chosenOption = null; // move option mid-placement (needs a destination hex)
@@ -49,17 +50,60 @@ async function startGame(query) {
   captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
   optCache = {};
   resetSelection(); ensureGameCatalog(); render();
+  GAME_ACTIVE = true; syncGameControl();
 }
-function bootGame() { startGame("teams=2&per_team=2&mode=pxai"); }  // default on load
-function openSetup() { $("setup").style.display = "flex"; }
-function closeSetup() { $("setup").style.display = "none"; }
+// The setup controls are now an always-visible inline "Game Control" panel, so
+// open/close are no-ops kept only for the callers that still reference them (the
+// post-login ?setup deep link, the editor's Back button).
+function openSetup() { const gc = $("gameControl"); if (gc) gc.scrollIntoView({block: "nearest"}); }
+function closeSetup() {}
 async function startSetup() {
   const p = encodeURIComponent($("profile").value);
   const practice = $("practiceMode") && $("practiceMode").checked ? 1 : 0;
   const q = `profile=${p}&mode=${$("mode").value}&teams=${$("teams").value}`
     + `&per_team=${$("perTeam").value}&practice=${practice}`;
   await startGame(q);
-  closeSetup();
+}
+// Opponent type maps onto the engine's two-side model: the local player is side
+// one; the opponent is side two -- either a same-screen human (pxp) or the AI
+// (pxai). The two buttons set the hidden #mode the rest of the flow reads.
+function setOpponent(mode) {
+  if (GAME_ACTIVE) return;                 // settings are locked while a game runs
+  $("mode").value = mode;
+  $("oppComputer").classList.toggle("primary", mode === "pxai");
+  $("oppHuman").classList.toggle("primary", mode === "pxp");
+}
+// New Game starts a match through the existing setup flow, then locks the panel.
+async function newGame() { if (GAME_ACTIVE) return; await startSetup(); }
+// The editable pre-game state: no game tracked, Game Control unlocked with New
+// Game live, the Map blank, and the Characters tracker empty. This is what a
+// fresh load (no deep-link) shows, and where End Game returns to. (#192)
+function showPreGame() {
+  GID = null; S = null; LAYOUT = null; GAME_ACTIVE = false;
+  _lastStateJSON = ""; resetAll(); closeMenu();
+  $("svg").innerHTML = "";
+  $("phaseBanner").textContent = "No game — set up the players and press New Game.";
+  $("hint").textContent = "";
+  $("controls").innerHTML = "";
+  $("roster").innerHTML = `<span class="muted">No game in progress.</span>`;
+  $("log").innerHTML = "";
+  $("selInfo").innerHTML = `<span class="muted">No figure selected.</span>`;
+  $("turnInfo").textContent = "";
+  syncGameControl();
+}
+// End Game abandons the running match client-side (no backend endpoint needed)
+// and drops back to the editable pre-game state. (#192)
+function endGame() { history.replaceState({}, "", "/"); showPreGame(); }
+// Reflect the lock state: while a game runs every setting is read-only, New Game
+// is disabled, and End Game is live; before/after a game the reverse holds. (#192)
+function syncGameControl() {
+  const locked = GAME_ACTIVE;
+  ["profile", "mode", "teams", "perTeam", "practiceMode",
+   "oppComputer", "oppHuman", "editCharBtn", "newGameBtn"].forEach(id => {
+    const el = $(id); if (el) el.disabled = locked;
+  });
+  const end = $("endGameBtn"); if (end) end.disabled = !locked;
+  const gc = $("gameControl"); if (gc) gc.classList.toggle("locked", locked);
 }
 async function refresh() {
   const data = await api(`/api/game/${GID}`);
@@ -68,7 +112,8 @@ async function refresh() {
     flash("This game is no longer available.");
     return;
   }
-  LAYOUT = data.layout; S = data.state; captureOwnership(data); optCache = {}; render();
+  LAYOUT = data.layout; S = data.state; captureOwnership(data); optCache = {};
+  GAME_ACTIVE = true; syncGameControl(); render();
 }
 async function act(body) {
   const data = await api(`/api/game/${GID}/action`, {
@@ -80,28 +125,31 @@ async function act(body) {
   return data;
 }
 function flash(msg) { $("hint").textContent = msg; }
-function drawSeats() {
-  const el = $("seats"); if (!el || !S) return;
+// Per-side seat state + claim/open controls, folded into the Characters tracker's
+// group headers (the standalone Players panel was merged in here, #192).
+function seatBtn(side, action, label) {
+  return `<button style="margin-left:6px;padding:1px 7px;cursor:pointer" `
+    + `onclick="seatAction('${action}','${side}')">${label}</button>`;
+}
+function seatTag(side) {
   const controllers = S.controllers || {};
-  const b = (side, a, t) =>
-    `<button style="margin-left:6px;padding:1px 7px;cursor:pointer" onclick="seatAction('${a}','${side}')">${t}</button>`;
-  const rows = Object.keys(controllers).map(side => {
-    const computer = controllers[side] === "computer";
-    const mine = YOU_CONTROL.includes(side), open = OPEN_SEATS.includes(side);
-    let tag = "taken", btn = "";
-    if (computer) tag = "computer";
-    else if (mine) { tag = "you"; if (YOU_CONTROL.length > 1) btn = b(side, "open", "Open"); }
-    else if (open) { tag = "open"; btn = b(side, "claim", "Claim"); }
-    return `<div style="margin:2px 0"><b style="text-transform:capitalize">${side}</b> <span class="muted">— ${tag}</span>${btn}</div>`;
-  }).join("");
-  // No one to invite in a vs-computer game (#165): the AI side isn't joinable.
-  const vsComputer = Object.values(controllers).includes("computer");
-  const copy = vsComputer ? "" :
-    `<button style="margin-top:6px;padding:1px 7px;cursor:pointer" onclick="copyLink()">Copy invite link</button>`;
-  const adminTag = IS_ADMIN
+  const computer = controllers[side] === "computer";
+  const mine = YOU_CONTROL.includes(side), open = OPEN_SEATS.includes(side);
+  let tag = "taken", btn = "";
+  if (computer) tag = "computer";
+  else if (mine) { tag = "you"; if (YOU_CONTROL.length > 1) btn = seatBtn(side, "open", "Open"); }
+  else if (open) { tag = "open"; btn = seatBtn(side, "claim", "Claim"); }
+  return `<span class="muted">— ${tag}</span>${btn}`;
+}
+function adminTagHtml() {
+  return IS_ADMIN
     ? `<div style="margin-bottom:5px;color:#e6b800"><b>★ Admin</b> <span class="muted">— you control every figure and can edit them outside the rules.</span></div>`
     : "";
-  el.innerHTML = adminTag + rows + copy;
+}
+function inviteHtml() {   // no one to invite in a vs-computer game (#165)
+  const vsComputer = S.controllers && Object.values(S.controllers).includes("computer");
+  return vsComputer ? "" :
+    `<button style="margin-top:8px;padding:1px 7px;cursor:pointer" onclick="copyLink()">Copy invite link</button>`;
 }
 async function seatAction(action, side) {
   const data = await postJSON(`/api/game/${GID}/seat`, {action, side});
@@ -221,7 +269,6 @@ function render() {
     lastPhase = S.phase; PLAN = {}; warnKind = null; resetSelection(); closeMenu();
   }
   drawArena();
-  drawSeats();
   drawControls();
   drawSelInfo();
   drawRoster();
@@ -916,18 +963,50 @@ function planLine(f) {
   return "";
 }
 
+// The Characters tracker: every figure grouped by side (player), each row
+// showing its name, condition, and the action it has chosen this phase. Sides
+// list in initiative order when the engine exposes a winner/mover this phase,
+// otherwise in their stable order (PR 1 reflects today's flow -- no reordering
+// of the engine itself; that is PR 2). (#192)
+function orderedSides() {
+  const sides = (S.sides && S.sides.length)
+    ? S.sides.slice() : Object.keys(S.controllers || {});
+  const lead = S.winner && sides.includes(S.winner) ? S.winner
+    : (S.moving_side && sides.includes(S.moving_side) ? S.moving_side : null);
+  return lead ? [lead, ...sides.filter(s => s !== lead)] : sides;
+}
+function figActionHtml(f) {
+  const plan = PLAN[f.uid];
+  if (plan) return `<span class="action">${escapeHtml(plan.label)}`
+    + `${plan.dest ? " → " + escapeHtml(plan.dest) : ""}</span>`;
+  const canMove = S.phase === "move" && f.side === S.moving_side && f.can_act;
+  const canFight = S.phase === "combat" && myControlled(f) && f.can_act;
+  if ((canMove || canFight) && !f.dead) return `<span class="action todo">choose action</span>`;
+  return `<span class="action idle">—</span>`;
+}
 function drawRoster() {
-  const r = $("roster"); r.innerHTML = `<div class="muted">Roster</div>`;
-  for (const f of S.figures) {
-    const row = document.createElement("div");
-    row.className = "row" + (f.dead || f.collapsed ? " dead" : "");
-    const state = f.dead ? "dead" : f.collapsed ? "down"
-      : `${hpCur(f)}/${hpMax(f)}` + (f.posture !== "standing" ? " · " + f.posture : "");
-    row.innerHTML = `${tokenBadge(f)} ${f.name}` +
-      `<span class="muted">${state}</span>`;
-    row.addEventListener("click", () => onFigureClick(f));
-    r.appendChild(row);
+  const r = $("roster"); if (!r || !S) return;
+  const byside = {};
+  for (const f of S.figures) (byside[f.side] = byside[f.side] || []).push(f);
+  let html = adminTagHtml();
+  for (const side of orderedSides()) {
+    html += `<div class="grouphd"><span class="chip ${side}">${escapeHtml(sideName(side))}</span>`
+      + ` ${seatTag(side)}</div>`;
+    for (const f of (byside[side] || [])) {
+      const dead = f.dead || f.collapsed;
+      const state = f.dead ? "dead" : f.collapsed ? "down"
+        : `${hpCur(f)}/${hpMax(f)}` + (f.posture !== "standing" ? " · " + f.posture : "");
+      html += `<div class="row${dead ? " dead" : ""}" data-uid="${escapeHtml(f.uid)}">`
+        + `<span>${tokenBadge(f)} ${escapeHtml(f.name)} <span class="muted">${state}</span></span>`
+        + figActionHtml(f) + `</div>`;
+    }
   }
+  html += inviteHtml();
+  r.innerHTML = html;
+  r.querySelectorAll(".row[data-uid]").forEach(row => {
+    const f = figByUid(row.dataset.uid);
+    if (f) row.addEventListener("click", () => onFigureClick(f));
+  });
 }
 
 function drawLog() {
@@ -1281,12 +1360,15 @@ function resetTheme() {
 }
 
 applyTheme();
-// Deep link: /game/<gid> joins or spectates an existing game; otherwise start fresh.
-const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
-if (urlGid) { GID = urlGid; refresh(); } else { bootGame(); }
 // Shared view: poll so every browser on this game sees moves as they happen.
 // Re-render only when the server state actually changed, to avoid flicker.
+// (Declared before the boot dispatch below, which calls showPreGame() ->
+// _lastStateJSON, so the reference isn't in the temporal dead zone.)
 let _lastStateJSON = "";
+// Deep link: /game/<gid> joins or spectates an existing game; a fresh load shows
+// the editable pre-game Game Control (no auto-boot -- New Game starts a match).
+const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
+if (urlGid) { GID = urlGid; refresh(); } else { showPreGame(); }
 const POLL = setInterval(async () => {
   if (!GID) return;
   const data = await api(`/api/game/${GID}`);
@@ -1309,6 +1391,7 @@ if (new URLSearchParams(location.search).has("setup")) openSetup();
 // markup keeps working unchanged.
 Object.assign(window, {
   openSetup, closeSetup, startSetup,
+  newGame, endGame, setOpponent,
   openAdmin, closeAdmin, adminCreateUser, adminSelectUser, adminDeleteUser,
   adminDeleteChar, adminCreateCharFor,
   openEditor, closeEditor, startCustom,
