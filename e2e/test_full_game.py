@@ -81,9 +81,9 @@ def test_full_game_plays_out(live_server, page: Page) -> None:
     run, so requiring victory would flake -- but damage and turn progression are
     guaranteed once the sides engage."""
     page.goto(live_server.url)
-    # No auto-boot any more (#192): start the default Player-vs-Computer match
-    # from the inline Game Control (computer opponent, 2 fighters per side).
-    page.get_by_role("button", name="Add computer opponent").click()
+    # No auto-boot any more (#192): start a Player-vs-Computer match from the
+    # inline Game Control by adding one AI player (2 fighters per side).
+    page.get_by_role("button", name="Add AI player").click()
     page.get_by_role("button", name="New Game").click()
     banner = page.locator("#phaseBanner")
     expect(banner).to_contain_text("Turn", timeout=20_000)

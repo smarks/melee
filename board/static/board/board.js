@@ -1,6 +1,12 @@
 const SVG = "http://www.w3.org/2000/svg";
 let GID = null, S = null, LAYOUT = null, PROFILE = null;
 let GAME_ACTIVE = false;  // a match is running -> Game Control settings lock (#192)
+// The Game Control players roster (#192 follow-up). Player 0 is always the local
+// human and can't be removed; the rest are added, freely mixing "human" (same-
+// screen) and "ai", up to MAX_PLAYERS. Each player maps to a side by index
+// (ED_TEAMS[i]); the AI players' side ids become the game's `computer` list.
+const MAX_PLAYERS = 5;
+let PLAYERS = [{type: "human"}];
 let sel = null;          // figure being placed (movement), if any
 let optInfo = null;      // options payload for the active figure
 let chosenOption = null; // move option mid-placement (needs a destination hex)
@@ -57,29 +63,66 @@ async function startGame(query) {
 // post-login ?setup deep link, the editor's Back button).
 function openSetup() { const gc = $("gameControl"); if (gc) gc.scrollIntoView({block: "nearest"}); }
 function closeSetup() {}
+// The AI players' side ids (player i -> ED_TEAMS[i]), as the engine's comma-
+// separated `computer` list.
+function computerSides() {
+  return PLAYERS.map((pl, index) => pl.type === "ai" ? ED_TEAMS[index] : null)
+    .filter(Boolean).join(",");
+}
 async function startSetup() {
   const p = encodeURIComponent($("profile").value);
   const practice = $("practiceMode") && $("practiceMode").checked ? 1 : 0;
-  const q = `profile=${p}&mode=${$("mode").value}&teams=${$("teams").value}`
-    + `&per_team=${$("perTeam").value}&practice=${practice}`;
+  // teams = player count, per_team = characters per player (uniform), and the AI
+  // players' sides drive the explicit `computer` list the endpoint now honours.
+  const q = `profile=${p}&teams=${PLAYERS.length}&per_team=${$("perTeam").value}`
+    + `&computer=${encodeURIComponent(computerSides())}&practice=${practice}`;
   await startGame(q);
 }
-// Opponent type maps onto the engine's two-side model: the local player is side
-// one; the opponent is side two -- either a same-screen human (pxp) or the AI
-// (pxai). The two buttons set the hidden #mode the rest of the flow reads.
-function setOpponent(mode) {
-  if (GAME_ACTIVE) return;                 // settings are locked while a game runs
-  $("mode").value = mode;
-  $("oppComputer").classList.toggle("primary", mode === "pxai");
-  $("oppHuman").classList.toggle("primary", mode === "pxp");
+// Add a player of the given type ("human" | "ai") to the roster, up to the cap.
+function addPlayer(type) {
+  if (GAME_ACTIVE || PLAYERS.length >= MAX_PLAYERS) return;
+  PLAYERS.push({type: type === "ai" ? "ai" : "human"});
+  renderPlayers();
+}
+// Remove a player. The local human (index 0) is never removable.
+function removePlayer(index) {
+  if (GAME_ACTIVE || index <= 0 || index >= PLAYERS.length) return;
+  PLAYERS.splice(index, 1);
+  renderPlayers();
+}
+// Draw the roster rows and drive the state-based enablement of the add-player
+// buttons (disabled at the 5-player cap or while locked) and New Game (live only
+// with >= 2 players, with a short reason shown when it can't start). (#192)
+function renderPlayers() {
+  const locked = GAME_ACTIVE;
+  const wrap = $("playerRoster");
+  if (wrap) wrap.innerHTML = PLAYERS.map((pl, index) => {
+    const local = index === 0;
+    const kind = local ? "You (human)" : pl.type === "ai" ? "AI" : "Human";
+    const side = ED_TEAMS[index];
+    const remove = (local || locked) ? ""
+      : `<button class="pl-remove" onclick="removePlayer(${index})" title="Remove player">✕</button>`;
+    return `<div class="pl-row"><span class="chip ${side}">${escapeHtml(sideName(side))}</span>`
+      + `<span class="pl-type">${kind}</span>${remove}</div>`;
+  }).join("");
+  const count = PLAYERS.length;
+  const countEl = $("playerCount"); if (countEl) countEl.textContent = count;
+  const full = count >= MAX_PLAYERS;
+  const addHuman = $("addHumanBtn"); if (addHuman) addHuman.disabled = locked || full;
+  const addAi = $("addAiBtn"); if (addAi) addAi.disabled = locked || full;
+  const enoughPlayers = count >= 2;
+  const newBtn = $("newGameBtn"); if (newBtn) newBtn.disabled = locked || !enoughPlayers;
+  const reason = $("newGameReason");
+  if (reason) reason.textContent = (locked || enoughPlayers) ? "" : "Add at least 2 players to start.";
 }
 // New Game starts a match through the existing setup flow, then locks the panel.
-async function newGame() { if (GAME_ACTIVE) return; await startSetup(); }
+async function newGame() { if (GAME_ACTIVE || PLAYERS.length < 2) return; await startSetup(); }
 // The editable pre-game state: no game tracked, Game Control unlocked with New
 // Game live, the Map blank, and the Characters tracker empty. This is what a
 // fresh load (no deep-link) shows, and where End Game returns to. (#192)
 function showPreGame() {
   GID = null; S = null; LAYOUT = null; GAME_ACTIVE = false;
+  PLAYERS = [{type: "human"}];         // fresh roster: just the local human (#192)
   _lastStateJSON = ""; resetAll(); closeMenu();
   $("svg").innerHTML = "";
   $("phaseBanner").textContent = "No game — set up the players and press New Game.";
@@ -98,12 +141,13 @@ function endGame() { history.replaceState({}, "", "/"); showPreGame(); }
 // is disabled, and End Game is live; before/after a game the reverse holds. (#192)
 function syncGameControl() {
   const locked = GAME_ACTIVE;
-  ["profile", "mode", "teams", "perTeam", "practiceMode",
-   "oppComputer", "oppHuman", "editCharBtn", "newGameBtn"].forEach(id => {
+  ["profile", "perTeam", "practiceMode", "editCharBtn"].forEach(id => {
     const el = $(id); if (el) el.disabled = locked;
   });
   const end = $("endGameBtn"); if (end) end.disabled = !locked;
   const gc = $("gameControl"); if (gc) gc.classList.toggle("locked", locked);
+  // The players roster owns the add-player + New Game enablement (#192).
+  renderPlayers();
 }
 async function refresh() {
   const data = await api(`/api/game/${GID}`);
@@ -1094,7 +1138,7 @@ async function openEditor() {
   if (LOGGED_IN) {
     SAVED = (await api(`/api/characters?profile=${encodeURIComponent(profile)}`)).characters || [];
   }
-  const teams = parseInt($("teams").value, 10), perTeam = parseInt($("perTeam").value, 10);
+  const teams = PLAYERS.length, perTeam = parseInt($("perTeam").value, 10);
   const wrap = $("editorRoster"); wrap.innerHTML = "";
   buildRoster(profile, teams, perTeam).forEach((f, i) => wrap.appendChild(fighterCard(f, i)));
   $("editorErr").textContent = LOGGED_IN ? "" : "Log in to save and reuse characters.";
@@ -1290,8 +1334,7 @@ function refreshCard(card) {
 
 async function startCustom() {
   const fighters = Array.from($("editorRoster").children).map(readCard);
-  const teams = [...new Set(fighters.map(f => f.side))];   // one AI team = the last
-  const computer = ($("mode") && $("mode").value === "pxai") ? teams[teams.length - 1] : "";
+  const computer = computerSides();   // the AI players' sides, from the roster (#192)
   const practice = $("practiceMode") && $("practiceMode").checked;
   const body = {profile: $("profile").value, computer, fighters, practice};
   const data = await api("/api/game/new_custom", {
@@ -1391,7 +1434,7 @@ if (new URLSearchParams(location.search).has("setup")) openSetup();
 // markup keeps working unchanged.
 Object.assign(window, {
   openSetup, closeSetup, startSetup,
-  newGame, endGame, setOpponent,
+  newGame, endGame, addPlayer, removePlayer,
   openAdmin, closeAdmin, adminCreateUser, adminSelectUser, adminDeleteUser,
   adminDeleteChar, adminCreateCharFor,
   openEditor, closeEditor, startCustom,

@@ -544,6 +544,38 @@ def test_new_custom_multi_team_one_ai(client: Client) -> None:
     assert ctrl["red"] == "human" and ctrl["blue"] == "human"
 
 
+def test_explicit_computer_list_seats_exactly_those_sides_as_ai(client: Client) -> None:
+    # #192 follow-up: the mixed players roster passes an explicit `computer=` list;
+    # exactly the named sides become AI, any subset (here the 1st and 3rd of 3).
+    data = client.get("/api/game/new?teams=3&per_team=1&computer=red,green").json()
+    ctrl = data["state"]["controllers"]
+    assert ctrl == {"red": "computer", "blue": "human", "green": "computer"}
+
+
+def test_explicit_computer_list_overrides_the_mode_shorthand(client: Client) -> None:
+    # When both are present, the explicit list wins over `mode` (mode=pxai would
+    # otherwise make only the last side, green, the AI).
+    data = client.get("/api/game/new?teams=3&per_team=1&mode=pxai&computer=blue").json()
+    ctrl = data["state"]["controllers"]
+    assert ctrl["blue"] == "computer"
+    assert sum(c == "computer" for c in ctrl.values()) == 1
+
+
+def test_empty_computer_list_is_an_all_human_same_screen_game(client: Client) -> None:
+    # A roster of only human players sends `computer=` (empty) -> everyone human,
+    # even without mode=pxp.
+    data = client.get("/api/game/new?teams=2&per_team=1&computer=").json()
+    ctrl = data["state"]["controllers"]
+    assert set(ctrl.values()) == {"human"}
+
+
+def test_mode_still_drives_ai_when_no_computer_param(client: Client) -> None:
+    # Backward-compat: absent an explicit list, the `mode` shorthand still applies.
+    data = client.get("/api/game/new?teams=2&per_team=1&mode=pxai").json()
+    ctrl = data["state"]["controllers"]
+    assert ctrl["blue"] == "computer" and ctrl["red"] == "human"
+
+
 def test_choose_first_is_rejected_outside_the_initiative_phase(client: Client) -> None:
     """choose_first must guard its phase like every sibling action (#79)."""
     data = _new(client)

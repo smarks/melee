@@ -18,10 +18,14 @@ from playwright.sync_api import Page, expect
 
 
 def _start_inline_game(page: Page, *, human: bool = False, practice: bool = False) -> None:
-    """Configure Game Control on a fresh (editable) load and start a new game."""
+    """Configure Game Control on a fresh (editable) load and start a new game.
+
+    A fresh roster holds just the local human; adding one more player (a human
+    same-screen seat, or an AI opponent) reaches the 2-player minimum to start.
+    """
     expect(page.locator("#profile")).to_be_enabled()           # editable pre-game state
-    opponent = "Add human opponent" if human else "Add computer opponent"
-    page.get_by_role("button", name=opponent).click()
+    add = "Add human player" if human else "Add AI player"
+    page.get_by_role("button", name=add).click()
     if practice:
         page.locator("#practiceMode").check()
     page.get_by_role("button", name="New Game").click()
@@ -30,12 +34,15 @@ def _start_inline_game(page: Page, *, human: bool = False, practice: bool = Fals
 @pytest.mark.django_db
 def test_fresh_load_shows_editable_game_control(live_server, page: Page) -> None:
     # #192: no auto-boot. A fresh page comes up in the editable pre-game state --
-    # settings unlocked, New Game live, End Game disabled, no game on the board.
+    # settings unlocked, End Game disabled, no game on the board. The roster holds
+    # just the local human, so New Game is gated off until a 2nd player is added
+    # (#192 follow-up: a game needs >= 2 players).
     page.goto(live_server.url)
     expect(page.locator("#gameControl")).to_be_visible()
     expect(page.locator("#phaseBanner")).to_contain_text("No game", timeout=20_000)
     expect(page.locator("#profile")).to_be_enabled()
-    expect(page.get_by_role("button", name="New Game")).to_be_enabled()
+    expect(page.get_by_role("button", name="New Game")).to_be_disabled()
+    expect(page.locator("#newGameReason")).to_contain_text("at least 2 players")
     expect(page.get_by_role("button", name="End Game")).to_be_disabled()
     expect(page.locator(".gc-lock")).to_be_hidden()            # the lock note is hidden
     expect(page.locator("#svg circle")).to_have_count(0)       # no figures on the map yet
@@ -76,8 +83,11 @@ def test_end_game_returns_controls_to_editable(live_server, page: Page) -> None:
 
     page.get_by_role("button", name="End Game").click()
 
+    # Back to the editable pre-game state: settings unlocked, End Game disabled,
+    # the roster reset to just the local human -> New Game gated off again.
     expect(page.locator("#profile")).to_be_enabled()
-    expect(page.get_by_role("button", name="New Game")).to_be_enabled()
+    expect(page.locator("#playerCount")).to_have_text("1")
+    expect(page.get_by_role("button", name="New Game")).to_be_disabled()
     expect(page.get_by_role("button", name="End Game")).to_be_disabled()
     expect(page.locator("#phaseBanner")).to_contain_text("No game")
 
@@ -175,3 +185,64 @@ def test_live_fighter_editor_opens_in_a_modal(live_server, page: Page) -> None:
     # Applying the edit closes the modal, returning the player to the board.
     apply.click()
     expect(modal).to_be_hidden()
+
+
+@pytest.mark.django_db
+def test_new_game_is_disabled_until_two_players(live_server, page: Page) -> None:
+    # #192 follow-up: a fresh roster has just the local human, so New Game is
+    # disabled with a reason; adding a second player enables it.
+    page.goto(live_server.url)
+    new_game = page.get_by_role("button", name="New Game")
+    expect(page.locator("#playerCount")).to_have_text("1")
+    expect(new_game).to_be_disabled()
+    expect(page.locator("#newGameReason")).to_contain_text("at least 2 players")
+
+    page.get_by_role("button", name="Add AI player").click()
+    expect(page.locator("#playerCount")).to_have_text("2")
+    expect(new_game).to_be_enabled()
+    expect(page.locator("#newGameReason")).to_have_text("")
+
+
+@pytest.mark.django_db
+def test_add_player_buttons_disable_at_the_five_player_cap(live_server, page: Page) -> None:
+    # #192 follow-up: both Add-player buttons disable once the roster hits 5.
+    page.goto(live_server.url)
+    add_human = page.get_by_role("button", name="Add human player")
+    add_ai = page.get_by_role("button", name="Add AI player")
+    # Start at 1 (the local human); add four more, mixing types, to reach the cap.
+    add_ai.click()
+    add_human.click()
+    add_ai.click()
+    add_human.click()
+    expect(page.locator("#playerCount")).to_have_text("5")
+    expect(page.locator("#playerRoster .pl-row")).to_have_count(5)
+    expect(add_human).to_be_disabled()
+    expect(add_ai).to_be_disabled()
+
+    # Removing one re-enables both add buttons.
+    page.locator("#playerRoster .pl-remove").first.click()
+    expect(page.locator("#playerCount")).to_have_text("4")
+    expect(add_human).to_be_enabled()
+    expect(add_ai).to_be_enabled()
+
+
+@pytest.mark.django_db
+def test_mixed_roster_starts_and_runs(live_server, page: Page) -> None:
+    # #192 follow-up: a mix of a same-screen human plus an AI opponent starts and
+    # plays; the started game's controllers reflect the mix (blue = AI).
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add human player").click()   # player 2 (blue) = human
+    page.get_by_role("button", name="Add AI player").click()       # player 3 (green) = AI
+    expect(page.locator("#playerCount")).to_have_text("3")
+    page.get_by_role("button", name="New Game").click()
+
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    # Three sides on the board -> three tracker group headers.
+    expect(page.locator("#roster .grouphd")).to_have_count(3)
+
+    match = re.search(r"/game/([0-9a-f]+)", page.url)
+    assert match, f"expected a /game/<gid> URL, got {page.url}"
+    ctrl = page.request.get(
+        f"{live_server.url}/api/game/{match.group(1)}").json()["state"]["controllers"]
+    # Players: [you=human red, human blue, AI green] -> only green is AI.
+    assert ctrl == {"red": "human", "blue": "human", "green": "computer"}
