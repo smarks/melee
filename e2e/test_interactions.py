@@ -184,13 +184,15 @@ def test_invite_link_shows_in_a_mixed_human_and_computer_game(live_server, page:
 @pytest.mark.django_db
 def test_generated_fighter_starts_with_a_missile_weapon(live_server, page: Page) -> None:
     # regression: a generated fighter must start with a hand weapon AND a missile
-    # weapon (bow/crossbow), not two hand weapons. The editor ARCHETYPES defaulted
-    # weapon2 to a melee weapon (Mace/Shortsword), out of step with the engine
-    # archetypes and best_weapons, which pair each melee weapon with a bow.
+    # weapon (bow/crossbow), not two hand weapons. The missile weapon is now the
+    # primary (readied) one so the fighter can fire on turn 1 (#204); the melee
+    # weapon rides as weapon2.
     page.goto(live_server.url)
     page.locator("#editCharBtn").click()
+    weapon = page.locator('[data-eq="weapon"]').first
+    expect(weapon).to_have_value(re.compile(r"bow", re.IGNORECASE), timeout=15_000)
     weapon2 = page.locator('[data-eq="weapon2"]').first
-    expect(weapon2).to_have_value(re.compile(r"bow", re.IGNORECASE), timeout=15_000)
+    expect(weapon2).not_to_have_value(re.compile(r"bow", re.IGNORECASE))
 
 
 @pytest.mark.django_db

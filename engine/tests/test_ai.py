@@ -192,3 +192,46 @@ def test_ai_focus_fires_the_wounded() -> None:
     state = GameState(arena, [me, healthy, hurt])
 
     assert ai._best_target(state, me, [healthy, hurt]) is hurt
+
+
+def test_ai_engaged_with_a_reloading_bow_swaps_to_its_blade() -> None:
+    # Regression (#204): when figures start with a missile weapon readied, an AI
+    # fighter can be engaged in melee while its bow is still reloading. It can
+    # neither shift-attack nor parry with a missile weapon (both illegal, p.13/#79),
+    # so the old AI chose the illegal SHIFT_DEFEND and crashed mid-turn. It must
+    # instead drop the bow for a carried melee weapon (Change Weapons) -- legally.
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    shooter = create_human("Shooter", 12, 12, "red",
+                           weapons=[SMALL_BOW, BROADSWORD], ready_weapon=SMALL_BOW,
+                           armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    shooter.position, shooter.facing = Hex(3, 3), 0
+    foe.position = layout.neighbor(shooter.position, 0)   # directly in front -> engaged
+    foe.facing = 3
+    shooter.missile_cooldown = 1                          # bow is still reloading
+    state = GameState(arena, [shooter, foe], dice=Dice(seed=1))
+
+    assert state.engaged(shooter) and shooter.missile_cooldown > 0
+    ai.take_action(state, shooter)                        # must not raise IllegalAction
+    assert shooter.current_option == Option.CHANGE_WEAPONS
+    assert shooter.ready_weapon is not None
+    assert shooter.ready_weapon.name == "Broadsword"      # swapped off the bow
+
+
+def test_ai_engaged_with_a_reloading_bow_and_no_blade_holds() -> None:
+    # The same corner, but the shooter carries no melee weapon to swap to: it must
+    # still set a legal action (a no-op hold) rather than crash.
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    shooter = create_human("Shooter", 12, 12, "red",
+                           weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    shooter.position, shooter.facing = Hex(3, 3), 0
+    foe.position = layout.neighbor(shooter.position, 0)
+    foe.facing = 3
+    shooter.missile_cooldown = 1
+    state = GameState(arena, [shooter, foe], dice=Dice(seed=1))
+
+    ai.take_action(state, shooter)                        # must not raise
+    assert shooter.current_option == Option.DO_NOTHING

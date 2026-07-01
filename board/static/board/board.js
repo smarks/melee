@@ -213,9 +213,9 @@ function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 const PHASE_LABEL = {select: "Action selection", combat: "Combat"};
 const OPTION_LABEL = {
   move: "Full move", half_move: "Half move", charge_attack: "⚔ Charge & Attack", dodge: "Dodge",
-  ready_weapon: "Ready Weapon", missile_attack: "⚔ Missile Attack", stand_up: "Stand Up", crawl: "Crawl 2",
+  ready_weapon: "Ready Weapon", missile_attack: "🏹 Missile Attack", stand_up: "Stand Up", crawl: "Crawl 2",
   shift_attack: "⚔ Attack (may shift 1)", shift_defend: "Shift & Defend",
-  one_last_shot: "⚔ One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
+  one_last_shot: "🏹 One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
   hth_attack: "🤼 Grapple", pick_up: "Pick up weapon",
   go_prone: "Drop prone", kneel: "Kneel",
   do_nothing: "Do nothing", pass: "Pass (choose last)",
@@ -223,6 +223,12 @@ const OPTION_LABEL = {
 // missile_attack is here so its optional 1-hex move (option f: "move up to 1 hex
 // and/or fire") gets a destination picker, not forced to hold position (#117).
 const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "disengage", "crawl", "missile_attack"]);
+// Options whose move is OPTIONAL: the destination picker is offered, but "Set
+// action" is enabled even with no hex chosen, so the figure can fire from where
+// it stands (option f is "move up to 1 hex AND/OR fire" — moving is optional).
+// Without this, a missile attacker could never fire without first stepping a hex,
+// which read as a movement placement that couldn't be completed (#204).
+const DEST_OPTIONAL = new Set(["missile_attack"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
 const TEAM_FILL = {red: "#d0524f", blue: "#4f86d0", green: "#57b894", gold: "#e0b13c", violet: "#b07ad8"};
 const fillFor = side => TEAM_FILL[side] || "#888";
@@ -343,6 +349,7 @@ function drawArena() {
     const h = LAYOUT.hexes[label];
     const poly = document.createElementNS(SVG, "polygon");
     poly.setAttribute("points", h.points.map(p => p.join(",")).join(" "));
+    poly.setAttribute("data-label", label);   // hex id, for hit-testing (and tests)
     poly.setAttribute("class", "hex" + (reach.has(label) ? " reach" : "")
       + (label === pendingDest ? " chosen" : ""));
     if (reach.has(label)) poly.addEventListener("click", () => onReachClick(label));
@@ -680,9 +687,13 @@ function openMenu(f) {
     }
   } else if (S.phase === "combat") {
     const grappling = (f.hth_opponents || []).length > 0;
+    // A readied bow/crossbow shoots; anything else strikes. Label the target rows
+    // to match, so a missile attacker's combat step reads "🏹 Shoot <foe>" (#204).
+    const shooting = !!(f.weapon && missileReady(f, optInfo));
     for (const uid of (optInfo._targets || [])) {
       const e = figByUid(uid);
-      rows.push({label: `Attack ${e ? e.name : uid}`, act: () => setAttack(f, uid)});
+      rows.push({label: `${shooting ? "🏹 Shoot" : "⚔ Attack"} ${e ? e.name : uid}`,
+                 act: () => setAttack(f, uid)});
     }
     // #141: when there's no weapon target, show Attack disabled with the reason
     // (matching the grapple/break-free rows) instead of silently omitting it. A
@@ -1117,20 +1128,29 @@ function optionListHtml(f, info, enabled) {
 // submit path the board popup used, kept inline so it is where the player is.
 function placementInnerHtml(f) {
   const needHex = NEEDS_DEST.has(chosenOption);
+  const destOptional = DEST_OPTIONAL.has(chosenOption);
   const swap = WEAPON_CHANGE.has(chosenOption) && (f.weapons || []).length > 1;
   if (swap && pendingReady == null)
     pendingReady = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
   const facingTxt = pendingFacing === "auto" ? "→ enemy" : pendingFacing;
+  const destTxt = pendingDest || (destOptional ? "none (fire in place)" : "—");
   let html = `<div class="place-head">Placing <b>${escapeHtml(optLabel(chosenOption))}</b>`
-    + (needHex ? ` · dest ${escapeHtml(pendingDest || "—")}` : "")
+    + (needHex ? ` · dest ${escapeHtml(destTxt)}` : "")
     + ` · facing ${escapeHtml(String(facingTxt))}</div>`;
   if (swap) html += `<div style="margin:2px 0">Ready: <select data-ready>`
     + (f.weapons || []).map(w =>
         `<option ${w === pendingReady ? "selected" : ""}>${escapeHtml(w)}</option>`).join("")
     + `</select></div>`;
-  if (needHex && !pendingDest)
+  if (needHex && !pendingDest && destOptional)
+    // Option (f): the 1-hex step is optional, so make firing from here obvious.
+    html += `<div class="place-hint">Optionally click a green hex to move up to 1 hex`
+      + ` first, or press <b>Set action</b> to fire from where you stand. You'll pick`
+      + ` the target in the next (combat) step.</div>`;
+  else if (needHex && !pendingDest)
     html += `<div class="place-hint">Click a green hex on the board to set the destination.</div>`;
-  const setDis = (needHex && !pendingDest) ? " disabled" : "";
+  // A required-move option stays gated until a hex is picked; an optional-move one
+  // (missile fire) can be set straight away — firing without moving (#204).
+  const setDis = (needHex && !pendingDest && !destOptional) ? " disabled" : "";
   return html + `<div class="place-btns">`
     + `<button data-act="turnccw">⟲ turn</button>`
     + `<button data-act="turncw">⟳ turn</button>`
@@ -1253,15 +1273,18 @@ const ED_TEAMS = ["red", "blue", "green", "gold", "violet"];
 const ARCHETYPES = {
   // A generated fighter starts with a hand weapon AND a missile weapon, matching
   // the engine archetypes (scenario.py) and best_weapons — not two hand weapons.
+  // The MISSILE weapon is the primary (readied) one so the fighter can fire on
+  // turn 1 without first switching weapons (#204); the melee weapon rides as
+  // weapon2 and can be readied when the fight closes.
   "Classic Melee": [
-    {name:"Knight", strength:13, dexterity:11, weapon:"Broadsword", weapon2:"Light crossbow", armor:"Plate", shield:"Large shield"},
-    {name:"Swordsman", strength:12, dexterity:12, weapon:"Shortsword", weapon2:"Longbow", armor:"Chainmail", shield:"Small shield"},
-    {name:"Spearman", strength:13, dexterity:11, weapon:"Spear", weapon2:"Longbow", armor:"Leather", shield:"None"},
+    {name:"Knight", strength:13, dexterity:11, weapon:"Light crossbow", weapon2:"Broadsword", armor:"Plate", shield:"Large shield"},
+    {name:"Swordsman", strength:12, dexterity:12, weapon:"Longbow", weapon2:"Shortsword", armor:"Chainmail", shield:"Small shield"},
+    {name:"Spearman", strength:13, dexterity:11, weapon:"Longbow", weapon2:"Spear", armor:"Leather", shield:"None"},
   ],
   "Tarmar": [
-    {name:"Knight", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Broadsword", weapon2:"Light crossbow", armor:"Plate", shield:"Large shield", skill:3, skill2:1},
-    {name:"Swordsman", strength:12, dexterity:12, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Shortsword", weapon2:"Longbow", armor:"Chainmail", shield:"Small shield", skill:3, skill2:1},
-    {name:"Spearman", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Spear", weapon2:"Longbow", armor:"Leather", shield:"None", skill:2, skill2:1},
+    {name:"Knight", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Light crossbow", weapon2:"Broadsword", armor:"Plate", shield:"Large shield", skill:1, skill2:3},
+    {name:"Swordsman", strength:12, dexterity:12, intelligence:10, wisdom:10, constitution:11, charisma:10, weapon:"Longbow", weapon2:"Shortsword", armor:"Chainmail", shield:"Small shield", skill:1, skill2:3},
+    {name:"Spearman", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Longbow", weapon2:"Spear", armor:"Leather", shield:"None", skill:1, skill2:2},
   ],
 };
 let CAT = null, RULES = null;

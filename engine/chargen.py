@@ -136,7 +136,15 @@ def validate(profile_name: str, spec: dict) -> list[str]:
 
     weapon = WEAPONS.get(weapon_name)
     if weapon and weapon.two_handed and (spec.get("shield") or "None") != "None":
-        errors.append(f"{weapon.name} is two-handed and can't be used with a shield")
+        # A two-handed weapon can't be used *with* a shield -- but a fighter may
+        # still carry a shield for a one-handed second weapon it swaps to (the
+        # engine simply slings the shield while the two-hander is out, #204). Only
+        # reject a shield that has no one-handed weapon to pair with at all.
+        second = WEAPONS.get(second_name) if has_second else None
+        shield_has_a_one_handed_use = second is not None and not second.two_handed
+        if not shield_has_a_one_handed_use:
+            errors.append(
+                f"{weapon.name} is two-handed and can't be used with a shield")
 
     if profile_name == "Tarmar":
         for field in TARMAR_STATS:
