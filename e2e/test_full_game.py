@@ -151,10 +151,10 @@ def test_full_game_plays_out(live_server, page: Page) -> None:
 # ============================================================================
 
 # A fixed RNG seed makes the whole match deterministic (dice + AI), so this test
-# is reproducible rather than merely probable. Chosen because both a human
-# missile hit and a human melee hit land on the leather-armoured Spearman within
-# a bounded run.
-_SEED = 7
+# is reproducible rather than merely probable. Chosen (re-tuned for the smarter,
+# manoeuvring AI of #210) because both a human missile hit and a human melee hit
+# land on an AI figure within a bounded run.
+_SEED = 1
 
 
 def _fetch_json(page: Page, path: str):
@@ -272,7 +272,14 @@ def _drive_missileer_select(page: Page, gid: str, fig: dict, enemies: list) -> N
     close_enough = _hex_distance(fig["label"], target["label"]) <= 4
     can_fire = (not fig["reloading"] and fig["weapon"] in _BOWS
                 and fig["posture"] == "standing")
-    if close_enough and can_fire:
+    if can_fire and fig["engaged"]:
+        # The smarter AI (#210) closes fast and can engage the archer while its
+        # bow is still loaded. Engaged, it can't take the disengaged Missile Attack
+        # -- it takes its "one last shot" (option l, p.13) instead, still a missile.
+        # One Last Shot needs no placement, so clicking it submits immediately (no
+        # separate Set-action step, unlike Missile Attack's optional 1-hex move).
+        _click_opt(page, uid, "one_last_shot")
+    elif close_enough and can_fire:
         _click_opt(page, uid, "missile_attack")     # enters placement
         _click_set_action(page, uid)                # fire in place -- no hex picked
     elif not fig["engaged"] and _move_toward(page, gid, fig, target, "move"):

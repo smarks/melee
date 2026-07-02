@@ -105,7 +105,10 @@ def test_ai_fires_a_missile_in_movement() -> None:
     assert state.in_front_arc(archer, foe.position)   # it faced the lane first
 
 
-def test_ai_holds_and_faces_while_reloading() -> None:
+def test_ai_advances_while_reloading_instead_of_holding() -> None:
+    # #210: a reloading missile figure used to hold in place (a no-op MOVE). It
+    # must now ADVANCE toward the enemy -- a real move that closes the distance --
+    # since a crossbow reloads automatically while it marches (p.16).
     arena = Arena(cols=7, rows=9)
     layout = arena.layout
     archer = _archer("Archer", "red")
@@ -117,12 +120,15 @@ def test_ai_holds_and_faces_while_reloading() -> None:
     foe.facing = 3
     archer.missile_cooldown = 1              # mid-reload: cannot fire this turn
     state = GameState(arena, [archer, foe], dice=Dice(seed=1))
-    held = archer.position
+    start = archer.position
 
+    before = layout.distance(archer.position, foe.position)
     _drive(state, "red")
-    assert archer.current_option == Option.MOVE       # held, did not charge
-    assert archer.position == held                    # stayed put
-    assert state.in_front_arc(archer, foe.position)   # faced the foe
+    after = layout.distance(archer.position, foe.position)
+    assert archer.current_option == Option.MOVE       # a real move, not an attack
+    assert archer.position != start                    # it did NOT hold in place
+    assert after < before                              # it closed the distance
+    assert state.in_front_arc(archer, foe.position)   # still facing the foe
 
 
 def test_ai_hth_focus_fires_the_weaker_grappler() -> None:
@@ -192,6 +198,63 @@ def test_ai_focus_fires_the_wounded() -> None:
     state = GameState(arena, [me, healthy, hurt])
 
     assert ai._best_target(state, me, [healthy, hurt]) is hurt
+
+
+def test_ai_moves_and_fires_to_close_the_range() -> None:
+    # #210: a loaded missile figure out of contact should MOVE-AND-FIRE -- step a
+    # hex toward the target while shooting (p.16), so it closes as it looses --
+    # rather than firing from where it stands.
+    arena = Arena(cols=7, rows=9)
+    layout = arena.layout
+    archer = _archer("Archer", "red")
+    foe = _fighter("Foe", "blue")
+    archer.position = Hex(3, 4)
+    foe.position = archer.position
+    for _ in range(3):                       # foe three hexes down range
+        foe.position = layout.neighbor(foe.position, 0)
+    foe.facing = 3
+    archer.missile_cooldown = 0              # loaded
+    state = GameState(arena, [archer, foe], dice=Dice(seed=1))
+    start = archer.position
+
+    before = layout.distance(archer.position, foe.position)
+    _drive(state, "red")
+    after = layout.distance(archer.position, foe.position)
+    assert archer.current_option == Option.MISSILE_ATTACK  # still shooting
+    assert archer.position != start                        # but it stepped up
+    assert after < before                                  # closing while firing
+    assert state.in_front_arc(archer, foe.position)        # target still in front
+
+
+def test_ai_focus_fires_the_weakest_reachable_foe() -> None:
+    # #210: the AI should manoeuvre toward -- and shoot at -- the WEAKEST reachable
+    # enemy (focus-fire), not merely the nearest. Here a full-strength foe stands
+    # one hex nearer than a badly wounded one; the archer should close on the
+    # wounded one.
+    arena = Arena(cols=9, rows=11)
+    layout = arena.layout
+    archer = _archer("Archer", "red")
+    healthy = _fighter("Healthy", "blue")
+    wounded = _fighter("Wounded", "blue")
+    archer.position = Hex(4, 5)
+    healthy.position = layout.neighbor(layout.neighbor(archer.position, 0), 0)   # 2 away
+    wounded.position = archer.position
+    for _ in range(4):                       # wounded stands four hexes off
+        wounded.position = layout.neighbor(wounded.position, 0)
+    healthy.facing = wounded.facing = 3
+    wounded.damage_taken = 8                 # current_st 4 vs healthy's 12
+    archer.missile_cooldown = 0              # loaded
+    state = GameState(arena, [archer, healthy, wounded], dice=Dice(seed=1))
+
+    to_wounded_before = layout.distance(archer.position, wounded.position)
+    _drive(state, "red")
+    to_wounded_after = layout.distance(archer.position, wounded.position)
+    assert archer.current_option == Option.MISSILE_ATTACK
+    assert to_wounded_after < to_wounded_before        # closed on the WEAK foe
+    assert state.in_front_arc(archer, wounded.position)  # and aimed at it
+
+    ai.queue_attacks(state, "red")
+    assert state._pending and state._pending[-1].target is wounded  # shot the weak one
 
 
 def test_ai_engaged_with_a_reloading_bow_swaps_to_its_blade() -> None:

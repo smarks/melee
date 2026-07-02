@@ -2,22 +2,38 @@
 A heuristic computer opponent — no LLM, just rules-aware tactics.
 
 The AI drives one side through the same engine verbs a human would use. It is
-deliberately simple but not foolish:
+deliberately simple but not foolish, and above all it **manoeuvres** — it never
+stands and holds when it could close the range or act (#210):
 
-  * **Movement** — stand if prone; fire if it has a ready missile weapon; if
-    already engaged, attack; otherwise charge into contact when it can reach an
-    enemy this turn, else close the distance at a full run. It always faces the
-    nearest enemy so its target lands in a front hex.
-  * **Targeting** — focus-fire: attack the enemy with the lowest remaining hit
-    pool (nearest as a tie-break), so wounded foes get finished. This reads
-    ``current_st`` which both stat models expose (Melee ST or Tarmar Fatigue),
-    so the AI is profile-agnostic while the *resolution* (and thus the value of
-    a given weapon vs a given armour) stays profile-correct in the ruleset.
+  * **Posture** — a prone/kneeling figure stands up first.
+  * **Engaged (an adjacent enemy):** a loaded bow takes its one last shot
+    (option l); a blade in hand strikes (shift-attack); a bow still reloading —
+    which can neither strike nor parry (p.13/#79) — drops for a carried melee
+    weapon (change weapons) so it can fight, or holds if it carries none.
+  * **Missile weapon, not yet in contact:**
+      - *Loaded* — **move-and-fire**: it steps up to one hex toward the target
+        while it shoots (a missile attack allows a 1-hex step, p.16), so it
+        closes as it looses. It only fires in place when it cannot legally close.
+      - *Reloading / no shot* — it **advances at a full run** toward the target
+        (a crossbow reloads automatically while it moves), rather than the old
+        no-op "hold". Only a boxed-in figure that cannot close just faces the foe.
+  * **Melee weapon:** charge into contact when it can reach an enemy this turn,
+    else close the distance at a full run.
+  * **Targeting** — focus-fire: it manoeuvres toward, and attacks, the enemy
+    with the lowest remaining hit pool (nearest as a tie-break), so wounded foes
+    get finished. This reads ``current_st`` which both stat models expose (Melee
+    ST or Tarmar Fatigue), so the AI is profile-agnostic while the *resolution*
+    (the value of a given weapon vs a given armour) stays profile-correct in the
+    ruleset.
+
+Every action is chosen from the engine's own legality (:meth:`legal_options` /
+:meth:`reach_for`), so the AI can never pick an illegal option, and it respects
+the multi-hex rule that a giant translates without turning in one move (#153).
 
 The board calls :func:`take_action` for each computer-controlled figure as its
 turn comes up in the per-character initiative order (#192), and
 :func:`queue_attacks` when the combat phase opens. The AI never PASSes — it always
-sets a real action (or holds when boxed in).
+sets a real action (or holds when truly boxed in).
 """
 from __future__ import annotations
 
@@ -41,19 +57,52 @@ def _facing_toward(layout, from_hex, to_hex) -> int:
     return best_dir
 
 
-def _nearest_enemy(state: GameState, figure: Figure) -> Figure | None:
-    enemies = [e for e in state.enemies_of(figure) if e.position is not None]
-    if not enemies or figure.position is None:
-        return None
-    return min(enemies, key=lambda e: state.arena.layout.distance(figure.position, e.position))
-
-
 def _best_target(state: GameState, figure: Figure, candidates: list[Figure]) -> Figure:
     """Focus-fire: lowest remaining pool, nearest as a tie-break."""
     return min(
         candidates,
         key=lambda e: (e.current_st, state.arena.layout.distance(figure.position, e.position)),
     )
+
+
+def _pick_target(state: GameState, figure: Figure) -> Figure | None:
+    """The foe to manoeuvre toward and attack: the weakest reachable enemy on
+    the field (lowest remaining ST, nearest as a tie-break, via
+    :func:`_best_target`), so the AI focus-fires rather than chasing whoever
+    happens to be nearest."""
+    enemies = [e for e in state.enemies_of(figure) if e.position is not None]
+    if not enemies or figure.position is None:
+        return None
+    return _best_target(state, figure, enemies)
+
+
+def _travel_facing(layout, figure: Figure, dest, target: Figure) -> int | None:
+    """Facing to set when ``figure`` moves along a path ending on ``dest``.
+
+    A multi-hex figure may translate OR turn-in-place, but not both in one move
+    (the engine defers combined rotation+translation, #153), so when it moves it
+    keeps its facing (``None``). A single-hex figure turns to face its target.
+    """
+    return None if figure.size > 1 else _facing_toward(layout, dest, target.position)
+
+
+def _closing_move(state: GameState, figure: Figure, target: Figure, option: Option):
+    """The reachable destination (with its path) under ``option`` that most
+    reduces the distance to ``target``, or ``None`` when nothing closes the gap.
+
+    Reachability comes straight from the engine (:meth:`reach_for`), so every
+    destination is legal and multi-hex footprints are already honoured.
+    """
+    reach = state.reach_for(figure, option)
+    hexes = reach.reachable_hexes()
+    if not hexes:
+        return None
+    layout = state.arena.layout
+    here = layout.distance(figure.position, target.position)
+    dest = min(hexes, key=lambda h: layout.distance(h, target.position))
+    if layout.distance(dest, target.position) >= here:
+        return None                          # boxed in — nothing gets it closer
+    return dest, reach.path_to(dest)
 
 
 def take_action(state: GameState, figure: Figure) -> None:
@@ -75,7 +124,7 @@ def take_action(state: GameState, figure: Figure) -> None:
     if figure.posture != Posture.STANDING:
         state.move(figure, Option.STAND_UP)
         return
-    target = _nearest_enemy(state, figure)
+    target = _pick_target(state, figure)
     if target is None:
         state.set_do_nothing(figure)
         return
@@ -103,14 +152,32 @@ def take_action(state: GameState, figure: Figure) -> None:
             state.set_do_nothing(figure)
         return
 
-    if can_fire:
-        # Hold position and fire down the lane.
-        state.move(figure, Option.MISSILE_ATTACK, facing=facing)
-        return
-
     if has_missile:
-        # Reloading: hold and face the enemy; the weapon reloads automatically.
-        state.move(figure, Option.MOVE, facing=facing)
+        if can_fire:
+            # Loaded and not in contact: MOVE-AND-FIRE. Step up to one hex toward
+            # the target while shooting (p.16) so the archer closes as it looses.
+            # A single-hex figure turns to keep the target in its front arc after
+            # the step; a giant can't turn while moving, so only close when it can
+            # do so without a turn — otherwise it fires in place. Fire in place
+            # too when nothing gets it closer (already in contact reach / boxed).
+            step = _closing_move(state, figure, target, Option.MISSILE_ATTACK)
+            if step is not None and figure.size == 1:
+                dest, path = step
+                state.move(figure, Option.MISSILE_ATTACK, path=path,
+                           facing=_facing_toward(layout, dest, target.position))
+            else:
+                state.move(figure, Option.MISSILE_ATTACK, facing=facing)
+            return
+        # Reloading (a crossbow) or no shot worth taking: ADVANCE at a full run
+        # toward the target instead of holding — the weapon reloads on its own
+        # while it moves (p.16). Only a boxed-in figure just faces the foe.
+        advance = _closing_move(state, figure, target, Option.MOVE)
+        if advance is not None:
+            dest, path = advance
+            state.move(figure, Option.MOVE, path=path,
+                       facing=_travel_facing(layout, figure, dest, target))
+        else:
+            state.move(figure, Option.MOVE, facing=facing)  # boxed in; face the foe
         return
 
     # Melee: charge into contact if reachable this turn, else close distance.
@@ -119,25 +186,17 @@ def take_action(state: GameState, figure: Figure) -> None:
         h for h in charge.reachable_hexes()
         if layout.distance(h, target.position) == 1
     ]
-    # A multi-hex figure may translate OR turn-in-place, but not both in one
-    # move (the engine defers combined rotation+translation, #153). So when it
-    # moves along a path it keeps its facing; a single-hex figure still turns
-    # to face its target.
-    def _move_facing(dest):
-        return None if figure.size > 1 else _facing_toward(layout, dest, target.position)
-
     if contact:
         dest = min(contact, key=lambda h: layout.distance(h, target.position))
         state.move(figure, Option.CHARGE_ATTACK, path=charge.path_to(dest),
-                   facing=_move_facing(dest))
+                   facing=_travel_facing(layout, figure, dest, target))
         return
 
-    run = state.reach_for(figure, Option.MOVE)
-    approach = run.reachable_hexes()
-    if approach:
-        dest = min(approach, key=lambda h: layout.distance(h, target.position))
-        state.move(figure, Option.MOVE, path=run.path_to(dest),
-                   facing=_move_facing(dest))
+    advance = _closing_move(state, figure, target, Option.MOVE)
+    if advance is not None:
+        dest, path = advance
+        state.move(figure, Option.MOVE, path=path,
+                   facing=_travel_facing(layout, figure, dest, target))
     else:
         state.move(figure, Option.MOVE, facing=facing)  # boxed in; just face the foe
 
