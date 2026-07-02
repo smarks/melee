@@ -885,20 +885,31 @@ async function loadOptions(f) {
 
 async function onFigureClick(f) {
   flash("");
+  // Selecting a figure to INSPECT it (its read-only sheet in the Selected panel)
+  // is always allowed -- theirs or an enemy's (#214). ACTING stays gated: the
+  // action menu only opens for your own actionable figure. So a figure you can't
+  // command is simply inspected, not flashed away.
   if (S.phase === "select") {
-    if (!isActive(f)) { flash(`It is not ${f.name}'s turn to act yet.`); return; }
-    if (!myControlled(f)) { flash(`${f.name} isn't yours to command.`); return; }
+    if (!isActive(f) || !myControlled(f)) { inspectFigure(f); return; }
     sel = f.uid; chosenOption = null; pendingDest = null; pendingFacing = f.facing; pendingReady = null;
     optInfo = await loadOptions(f);
     render(); openMenu(f);
   } else if (S.phase === "combat") {
-    if (!myControlled(f)) { flash(`${f.name} isn't yours to command.`); return; }
+    if (!myControlled(f)) { inspectFigure(f); return; }
     sel = f.uid; pendingFacing = f.facing;
     optInfo = await loadOptions(f);
     render(); openMenu(f);
   } else {
     sel = f.uid; render();
   }
+}
+
+// Select a figure purely to view its sheet: no action menu, no placement flow.
+// Clears any in-progress placement so the arena doesn't try to draw reach hexes
+// for a figure that isn't the one you're acting with (#214).
+function inspectFigure(f) {
+  sel = f.uid; chosenOption = null; pendingDest = null; pendingReady = null;
+  render();
 }
 
 // ---- hover popup (issue #72) -----------------------------------------------
@@ -955,8 +966,10 @@ function drawSelInfo() {
   const box = $("selInfo");
   const f = sel ? figByUid(sel) : null;
   if (!f) { box.innerHTML = `<span class="muted">No figure selected.</span>`; return; }
-  box.innerHTML = statusHeader(f) + planLine(f);
-  if (!f.edit_spec) return;
+  box.innerHTML = statusHeader(f) + charSheetHtml(f) + planLine(f);
+  // The live editor is owner/admin-only: a figure you don't command shows the
+  // read-only sheet above but gets no Edit button (#214).
+  if (!myControlled(f) || !f.edit_spec) return;
   if (!CAT || !RULES || CAT.profile !== PROFILE) { ensureGameCatalog(); return; }
   // The full editor opens in its own modal so the stats, gear, and Apply button
   // get a first-class, always-reachable surface instead of being crammed into
@@ -1001,6 +1014,39 @@ function statusHeader(f) {
     `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}` +
     `${(f.hth_opponents && f.hth_opponents.length) ? " · 🤼 grappling" : ""}</div>` +
     weaponsLine(f);
+}
+
+// The read-only character sheet shown for ANY selected figure (#214): ST/DX, the
+// full carried kit with the readied weapon marked, armor, and shield. Every field
+// here is in the state sent to all clients, so it works for enemies too -- it never
+// reads edit_spec (the owner/admin-only editable spec).
+function shieldState(f) {
+  // The wire format sends the shield name only while it's up; slung or absent
+  // both come through as null, so that's as fine as we can distinguish read-only.
+  return f.shield ? `${escapeHtml(f.shield)} (up)` : "none / slung";
+}
+function charSheetHtml(f) {
+  const readied = f.weapon || null;
+  const carried = f.weapons || [];
+  // Readied weapon first and clearly marked, then the rest of the kit (Dagger etc.).
+  const ordered = readied
+    ? [readied, ...carried.filter(w => w !== readied)]
+    : carried.slice();
+  const weaponItems = ordered.length
+    ? ordered.map(w => `<li>${escapeHtml(w)}`
+        + (readied && w === readied ? ` <span class="readied">— readied</span>` : "")
+        + `</li>`).join("")
+    : `<li class="muted">unarmed</li>`;
+  const vitals = f.model === "tarmar"
+    ? `Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · DX ${f.dx}`
+    : `ST ${f.st}/${f.max_st} · DX ${f.dx}`;
+  const armor = (f.armor && f.armor !== "None") ? escapeHtml(f.armor) : "none";
+  return `<div class="charsheet">`
+    + `<div class="sheet-vitals">${vitals}</div>`
+    + `<div class="sheet-sub">Weapons</div>`
+    + `<ul class="sheet-weapons">${weaponItems}</ul>`
+    + `<div class="sheet-gear">Armor: <b>${armor}</b> · Shield: <b>${shieldState(f)}</b></div>`
+    + `</div>`;
 }
 
 // Catalog for the *running* game's profile (the editor may have loaded another).
@@ -1227,8 +1273,12 @@ function drawRoster() {
       const cls = "row" + (dead ? " dead" : "") + (active ? " active" : "")
         + (waiting ? " waiting" : "")
         + (S.phase === "select" && !active && !f.acted && !dead ? " disabled" : "");
+      // At-a-glance kit (#214): each row shows its readied weapon and DX so every
+      // character can be scanned without clicking. Compact -- wraps under the name.
+      const kit = `<span class="kit muted">⚔ ${escapeHtml(f.weapon || "unarmed")} · DX ${f.dx}</span>`;
       html += `<div class="${cls}" data-uid="${escapeHtml(f.uid)}">`
-        + `<span>${tokenBadge(f)} ${escapeHtml(f.name)} <span class="muted">${state}</span></span>`
+        + `<span class="rowmain">${tokenBadge(f)} ${escapeHtml(f.name)} `
+        + `<span class="muted">${state}</span>${kit}</span>`
         + figActionHtml(f) + `</div>`
         + figControlsHtml(f);
     }
