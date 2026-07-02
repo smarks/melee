@@ -498,3 +498,80 @@ def test_human_drives_missile_and_melee(live_server, page: Page) -> None:
     final = _by_uid(_state(page, gid))
     assert victim_uid and final[victim_uid]["st"] < final[victim_uid]["max_st"], (
         "the tracked enemy's ST did not end below its maximum")
+
+
+@pytest.mark.django_db
+def test_committed_shooter_must_be_targeted_before_resolve(
+        live_server, page: Page) -> None:
+    """#212: a human figure that commits **Missile Attack** in the select phase
+    must be given a target in combat before Resolve is allowed -- otherwise its
+    shot is silently wasted (``resolve_combat`` only fires *queued* attacks).
+
+    Reproduces the bug and pins the fix: after the red Archer aims a missile,
+    combat opens with Resolve **disabled** and a prompt naming the Archer, until
+    the Archer is given a target; targeting it enables Resolve, and resolving
+    actually fires the shot (the log records it). On pre-fix code Resolve is
+    always enabled, so the first ``to_be_disabled`` assertion fails."""
+    page.goto(live_server.url)
+    created = _fetch_json(page, f"/api/game/new?computer=blue&seed={_SEED}")
+    gid = created["gid"]
+    page.goto(f"{live_server.url}/game/{gid}")
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+
+    red = [f for f in created["state"]["figures"] if f["side"] == "red"]
+    archer_uid = next(f["uid"] for f in red if f["name"] == "Archer")
+
+    # Drive the select pass: the Archer aims a Missile Attack from where it stands
+    # (fire-in-place, no hex picked); every other human figure just holds; the AI
+    # plays blue server-side.
+    committed = False
+    for _ in range(60):
+        state = _state(page, gid)
+        if state["phase"] != "select":
+            break
+        active = state.get("active_uid")
+        if not active or _by_uid(state).get(active, {}).get("side") != "red":
+            page.wait_for_timeout(150)
+            continue
+        if active == archer_uid and not committed:
+            _click_opt(page, archer_uid, "missile_attack")   # enters placement
+            _click_set_action(page, archer_uid)              # fire in place
+            committed = True
+        else:
+            _click_opt(page, active, "do_nothing")
+        _await_select_progress(page, gid, active)
+
+    assert committed, "the Archer never became active to commit its Missile Attack"
+    assert _poll(lambda: _state(page, gid)["phase"] == "combat"), \
+        "combat never opened after the select pass"
+
+    state = _state(page, gid)
+    assert archer_uid in set(state.get("must_attack") or []), (
+        "the committed shooter is missing from the server's must_attack set; "
+        f"must_attack={state.get('must_attack')!r}")
+
+    controls = page.locator("#controls")
+    resolve = controls.get_by_role("button", name=re.compile(r"^Resolve"))
+    # Pre-fix: always enabled. Post-fix: disabled until the shooter is targeted.
+    expect(resolve).to_be_disabled()
+    archer_name = _by_uid(state)[archer_uid]["name"]
+    expect(controls).to_contain_text(f"Pick a target for {archer_name}")
+
+    # Give the Archer a target via its token menu -> Resolve enables.
+    info = _options(page, gid, archer_uid)
+    targets = info["missile_targets"]
+    assert targets, "the committed Archer has no missile target to aim at"
+    target_name = _by_uid(state)[targets[0]]["name"]
+    _open_menu(page, archer_uid)
+    assert _click_menu_row(page, f"🏹 Shoot {target_name}"), \
+        "the Shoot action was not offered in the Archer's token menu"
+    expect(resolve).to_be_enabled()
+
+    # Resolving now actually fires the shot -- the combat log records it.
+    turn = state["turn"]
+    resolve.first.click()
+    _poll(lambda: _state(page, gid)["turn"] != turn
+          or _state(page, gid)["phase"] != "combat"
+          or bool(_state(page, gid).get("victory")))
+    log = "\n".join(_state(page, gid).get("log", [])).lower()
+    assert "shoots" in log, f"the shot never fired; combat log was:\n{log}"

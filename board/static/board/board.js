@@ -577,12 +577,27 @@ function drawControls() {
     if (combatResolvedTurn !== S.turn) {
       setHint("Choose each figure's attack, then resolve.");
       figureChecklist(c, actors);
-      const idle = actors.filter(f => !PLAN[f.uid]).length;
+      // #212: a figure that committed to an attack option AND has a valid target
+      // (server's must_attack) would silently waste its shot if combat resolved
+      // without a queued attack for it. Force those to be targeted first: gate
+      // Resolve on your own must-attack figures until each has a PLAN entry, and
+      // name the ones still needing a target. Figures that did NOT commit to an
+      // attack stay under the soft "will do nothing" warning, not this gate.
+      const mustAttack = new Set(S.must_attack || []);
+      const untargeted = actors.filter(f => mustAttack.has(f.uid) && !PLAN[f.uid]);
+      const idle = actors.filter(f => !PLAN[f.uid] && !mustAttack.has(f.uid)).length;
       if (idle) warnLine(c, `${idle} figure${idle > 1 ? "s" : ""} will do nothing.`);
-      bigPrimary(c, actors.length ? "Resolve attacks" : "Resolve combat", () => {
+      for (const f of untargeted) {
+        const aimed = (f.option === "missile_attack" || f.option === "one_last_shot");
+        const weapon = f.weapon ? ` ${f.weapon}` : "";
+        warnLine(c, `Pick a target for ${f.name} — it ${aimed ? "aimed" : "committed to attack with"}`
+                    + `${aimed ? " a" + weapon : weapon}.`);
+      }
+      const resolveBtn = bigPrimary(c, actors.length ? "Resolve attacks" : "Resolve combat", () => {
         combatResolvedTurn = S.turn;       // next render offers "End turn"
         executePlans("combat");
       });
+      if (untargeted.length) resolveBtn.disabled = true;
     } else {
       setHint("Attacks resolved — push back any beaten foes, then end the turn.");
       drawForceRetreat(c);                 // post-combat shoves, if any

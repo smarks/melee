@@ -187,7 +187,28 @@ def _meta(game: dict) -> dict:
         "queued": len(state._pending),
         "force_retreat_options": retreat_options,
         "combat_actionable": _combat_actionable(state) if game["phase"] == "combat" else [],
+        "must_attack": _must_attack(state) if game["phase"] == "combat" else [],
     }
+
+
+def _must_attack(state: GameState) -> list:
+    """uids of figures that committed to an *attack* option this turn AND have a
+    real target to hit this combat phase (#212).
+
+    Such a figure spent its action on an attack (missile/charge/shift/HtH, …),
+    so if the player resolved combat without queuing its attack the shot would be
+    silently wasted. These must be targeted before Resolve is allowed. A figure
+    that committed to an attack but has **no** valid target (out of range/arc,
+    still reloading) legitimately can't fire, so it is left out and never blocks."""
+    uids = []
+    for figure in state.figures:
+        option = figure.current_option
+        if option is None or not spec(option).is_attack:
+            continue
+        targets = _attack_targets(state, figure)
+        if targets.melee or targets.ranged or targets.hth:
+            uids.append(figure.uid)
+    return uids
 
 
 def _combat_actionable(state: GameState) -> list:
