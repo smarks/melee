@@ -345,7 +345,15 @@ class _MovementMixin:
                 # A crossbow (prone) or any bow (kneeling) may still fire (#152).
                 if option == Option.MISSILE_ATTACK and self._can_fire_from_posture(figure):
                     reason = None
+                elif option == Option.GO_PRONE and figure.posture == Posture.PRONE:
+                    # Can't drop into a posture you're already in (#206).
+                    reason = "already prone"
+                elif option == Option.KNEEL and figure.posture == Posture.KNEELING:
+                    reason = "already kneeling"
                 else:
+                    # From prone you stand or crawl (p.16); everything else — Full
+                    # move, Charge, Dodge, Grapple, Pick up, Ready, and a bow that
+                    # can't fire from this posture — needs standing up first.
                     reason = "must stand up first"
             elif spec(option).is_missile and not can_fire:
                 if self.practice:
