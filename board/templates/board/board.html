@@ -130,6 +130,18 @@
                       letter-spacing: .2px; }
   .roster .row { display: flex; justify-content: space-between; padding: 4px 0;
                  border-bottom: 1px solid #2a2733; cursor: pointer; }
+  /* At-a-glance kit under each roster name: readied weapon + DX (#214). */
+  .roster .row .rowmain { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .roster .row .kit { font-size: 12px; }
+  /* Read-only character sheet in the Selected-character panel (#214). */
+  .charsheet { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .charsheet .sheet-vitals { font-size: 13px; }
+  .charsheet .sheet-sub { margin-top: 6px; color: var(--muted); font-size: 11px;
+                          text-transform: uppercase; letter-spacing: .5px; }
+  .charsheet .sheet-weapons { margin: 2px 0 0; padding-left: 18px; font-size: 13px; }
+  .charsheet .sheet-weapons li { padding: 1px 0; }
+  .charsheet .sheet-weapons .readied { color: var(--gold); font-weight: 600; }
+  .charsheet .sheet-gear { margin-top: 6px; font-size: 13px; }
   .roster .row:hover { color: #fff; }
   .roster .row.dead { opacity: .4; text-decoration: line-through; }
   /* Per-character selection (#192): the figure with initiative is highlighted;
