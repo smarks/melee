@@ -205,7 +205,14 @@ def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figur
         weapons.append(second)
     if DAGGER not in weapons:
         weapons.append(DAGGER)
-    gear = dict(armor=armor, shield=shield, weapons=weapons, ready_weapon=weapon)
+    # ``weapon`` is the readied weapon: at setup the player picks which carried
+    # weapon starts in hand (#207), so the spec's ``weapon`` drives
+    # ``ready_weapon``. ``shield_ready`` lets the player start with the shield up
+    # (the default) or slung; the Figure forces it down anyway for a two-handed
+    # ready weapon (Section III).
+    shield_ready = bool(spec.get("shield_ready", True))
+    gear = dict(armor=armor, shield=shield, weapons=weapons,
+                ready_weapon=weapon, shield_ready=shield_ready)
 
     if profile_name == "Tarmar":
         skills = {weapon.name: spec.get("skill", 0)}
