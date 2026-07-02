@@ -196,6 +196,40 @@ def test_generated_fighter_starts_with_a_missile_weapon(live_server, page: Page)
 
 
 @pytest.mark.django_db
+def test_editor_readied_weapon_choice_starts_that_weapon_in_hand(
+        live_server, page: Page) -> None:
+    # #207: the player picks which carried weapon starts readied (in hand). The
+    # default readied weapon is the missile (#205); overriding it to the carried
+    # melee weapon must make that figure start wielding the melee weapon in the
+    # served state (ready_weapon == the chosen weapon).
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add AI player").click()   # a 2nd team so a game can start
+    page.locator("#editCharBtn").click()
+
+    card = page.locator("#editorRoster .card").first
+    card.locator("[data-name]").fill("ReadyPick")
+
+    readied = card.locator("[data-readied]")
+    # The default readied weapon is a bow/crossbow (the missile); switch it to the
+    # carried melee weapon instead.
+    expect(readied).to_have_value(re.compile(r"bow", re.IGNORECASE), timeout=15_000)
+    melee_weapon = card.locator('[data-eq="weapon2"]').input_value()
+    assert not re.search(r"bow", melee_weapon, re.IGNORECASE)   # weapon2 is the melee weapon
+    readied.select_option(melee_weapon)
+    assert readied.input_value() == melee_weapon
+
+    page.get_by_role("button", name="Start match").click()
+    page.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
+    gid = page.url.rstrip("/").rsplit("/", 1)[-1]
+
+    state = page.evaluate(
+        "async (g) => (await (await fetch(`/api/game/${g}`)).json()).state", gid)
+    picked = next(f for f in state["figures"] if f["name"] == "ReadyPick")
+    # The chosen melee weapon is the one in hand at the start, not the missile.
+    assert picked["weapon"] == melee_weapon
+
+
+@pytest.mark.django_db
 def test_live_fighter_editor_opens_in_a_modal(live_server, page: Page) -> None:
     # #181: editing a fighter mid-game happens in a first-class modal whose Apply
     # button is always reachable -- not crammed into the bottom corner panel where

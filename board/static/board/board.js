@@ -1425,6 +1425,8 @@ function applySpecToCard(card, spec) {        // fill a card from a saved spec (
   card.querySelectorAll("[data-stat]").forEach(i => { if (spec[i.dataset.stat] != null) i.value = spec[i.dataset.stat]; });
   card.querySelectorAll("[data-eq]").forEach(s => { if (spec[s.dataset.eq] != null) s.value = spec[s.dataset.eq]; });
   card.querySelectorAll("[data-skillkey]").forEach(i => { if (spec[i.dataset.skillkey] != null) i.value = spec[i.dataset.skillkey]; });
+  const shieldReady = card.querySelector("[data-shieldready]");
+  if (shieldReady && spec.shield_ready != null) shieldReady.checked = spec.shield_ready;
   refreshCard(card);
 }
 async function saveCharacter(card) {
@@ -1459,10 +1461,15 @@ function cardInner(f) {     // the editable fields shared by the editor and the 
   return `<div><span class="chip ${f.side}">${f.side}</span> `
     + `<input data-name value="${f.name}" style="width:130px"></div>`
     + `<div style="margin-top:6px">${stats} <span class="muted" data-budget></span></div>`
-    + `<div style="margin-top:6px">Weapon <select data-eq="weapon">${optionTags(CAT.weapons, f.weapon)}</select> ${skillInput("skill", f.skill)}</div>`
-    + `<div style="margin-top:6px">Weapon 2 <select data-eq="weapon2"><option ${!f.weapon2 || f.weapon2 === "None" ? "selected" : ""}>None</option>${optionTags(CAT.weapons, f.weapon2)}</select> ${skillInput("skill2", f.skill2)}</div>`
+    + `<div style="margin-top:6px">Carried weapon <select data-eq="weapon">${optionTags(CAT.weapons, f.weapon)}</select> ${skillInput("skill", f.skill)}</div>`
+    + `<div style="margin-top:6px">Carried weapon 2 <select data-eq="weapon2"><option ${!f.weapon2 || f.weapon2 === "None" ? "selected" : ""}>None</option>${optionTags(CAT.weapons, f.weapon2)}</select> ${skillInput("skill2", f.skill2)}</div>`
+    + `<div style="margin-top:6px">Readied weapon <select data-readied></select> `
+    + `<span class="muted">— starts in hand</span></div>`
     + `<div style="margin-top:6px">Armour <select data-eq="armor">${optionTags(CAT.armors, f.armor || "None")}</select> `
     + `Shield <select data-eq="shield">${optionTags(CAT.shields, f.shield || "None")}</select></div>`
+    + `<div style="margin-top:6px" data-shieldready-row>`
+    + `<label><input type="checkbox" data-shieldready ${f.shield_ready === false ? "" : "checked"}> Shield readied</label> `
+    + `<span class="muted" data-shieldready-note></span></div>`
     + `<div class="hint" data-err></div>`;
 }
 function fighterCard(f, side_i) {
@@ -1499,6 +1506,16 @@ function readCard(card) {
   card.querySelectorAll("[data-stat]").forEach(i => f[i.dataset.stat] = parseInt(i.value || "0", 10));
   card.querySelectorAll("[data-eq]").forEach(s => f[s.dataset.eq] = s.value);
   card.querySelectorAll("[data-skillkey]").forEach(i => f[i.dataset.skillkey] = parseInt(i.value || "0", 10));
+  // The spec's `weapon` is the readied weapon (== ready_weapon). The player picks
+  // which carried weapon starts in hand (#207); when that's the second carried
+  // weapon, swap the two slots (and their skills) so `weapon` is the readied one.
+  const readied = card.querySelector("[data-readied]");
+  if (readied && readied.value && readied.value === f.weapon2 && f.weapon2 !== "None") {
+    [f.weapon, f.weapon2] = [f.weapon2, f.weapon];
+    [f.skill, f.skill2] = [f.skill2, f.skill];
+  }
+  const shieldReady = card.querySelector("[data-shieldready]");
+  if (shieldReady) f.shield_ready = shieldReady.checked;
   return f;
 }
 
@@ -1509,7 +1526,46 @@ function disableByStrength(select, strength, offset) {
   });
 }
 
+function syncEquipControls(card) {
+  // Keep the "Readied weapon" dropdown in step with the two carried-weapon
+  // selects, and show "Shield readied" only when it's meaningful (#207).
+  const readiedSel = card.querySelector("[data-readied]");
+  if (!readiedSel) return;
+  const primary = card.querySelector('[data-eq="weapon"]');
+  const secondary = card.querySelector('[data-eq="weapon2"]');
+  const carried = primary ? [primary.value] : [];
+  if (secondary && secondary.value && secondary.value !== "None"
+      && secondary.value !== (primary && primary.value)) {
+    carried.push(secondary.value);
+  }
+  // Default the readied weapon to the primary carried one (the current default);
+  // keep the player's pick when it's still a carried weapon.
+  const want = carried.includes(readiedSel.value) ? readiedSel.value : carried[0];
+  readiedSel.innerHTML = carried.map(
+    name => `<option ${name === want ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
+
+  const shieldSel = card.querySelector('[data-eq="shield"]');
+  const row = card.querySelector("[data-shieldready-row]");
+  const box = card.querySelector("[data-shieldready]");
+  const shieldNote = card.querySelector("[data-shieldready-note]");
+  if (row && box) {
+    const hasShield = !!(shieldSel && shieldSel.value && shieldSel.value !== "None");
+    row.style.display = hasShield ? "" : "none";
+    const readiedWeapon = CAT.weapons.find(w => w.name === want);
+    const twoHanded = !!(readiedWeapon && readiedWeapon.two_handed);
+    // A two-handed weapon in hand needs both hands, so the shield can't be up.
+    if (twoHanded) {
+      box.checked = false; box.disabled = true;
+      if (shieldNote) shieldNote.textContent = "two-handed weapon — shield slung";
+    } else {
+      box.disabled = false;
+      if (shieldNote) shieldNote.textContent = "";
+    }
+  }
+}
+
 function refreshCard(card) {
+  syncEquipControls(card);
   const f = readCard(card);
   let note = "", err = "";
   if (RULES.model === "tarmar") {

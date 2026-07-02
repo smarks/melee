@@ -127,3 +127,36 @@ def test_second_weapon_gets_its_own_tarmar_skill():
         weapon="Broadsword", weapon2="Mace", skill=3, skill2=2))
     assert fighter.weapon_skill["Broadsword"] == 3
     assert fighter.weapon_skill["Mace"] == 2
+
+
+def test_readied_weapon_is_the_spec_weapon():
+    # The player chooses which carried weapon starts in hand (#207): the spec's
+    # `weapon` is the readied one, whichever slot it came from in the UI.
+    melee_readied = chargen.build("Classic Melee", _melee(
+        weapon="Broadsword", weapon2="Mace"))
+    assert melee_readied.ready_weapon.name == "Broadsword"
+    # Same carried pair, but the second weapon chosen as readied -> it's now `weapon`.
+    other_readied = chargen.build("Classic Melee", _melee(
+        weapon="Mace", weapon2="Broadsword"))
+    assert other_readied.ready_weapon.name == "Mace"
+    assert {w.name for w in other_readied.weapons} == {"Mace", "Broadsword", "Dagger"}
+
+
+def test_shield_ready_defaults_true_and_is_overridable():
+    up = chargen.build("Classic Melee", _melee(
+        weapon="Broadsword", shield="Large shield"))
+    assert up.shield_ready is True          # default: shield up
+    slung = chargen.build("Classic Melee", _melee(
+        weapon="Broadsword", shield="Large shield", shield_ready=False))
+    assert slung.shield_ready is False      # player chose to start it slung
+
+
+def test_two_handed_readied_weapon_forces_the_shield_down():
+    # A two-handed weapon in hand needs both hands, so even if the spec asks for a
+    # readied shield the Figure keeps it slung (Section III). A one-handed second
+    # weapon justifies carrying the shield at all (see validate()).
+    fighter = chargen.build("Classic Melee", _melee(
+        strength=14, dexterity=10, weapon="Two-handed sword", weapon2="Broadsword",
+        shield="Small shield", shield_ready=True))
+    assert fighter.ready_weapon.name == "Two-handed sword"
+    assert fighter.shield_ready is False

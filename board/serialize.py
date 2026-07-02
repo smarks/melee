@@ -30,6 +30,7 @@ def _edit_spec(figure: Figure) -> dict:
         "dexterity": figure.dexterity - figure.added_dx,
         "weapon": ready_name, "weapon2": second.name if second else "None",
         "armor": figure.armor.name, "shield": figure.shield.name,
+        "shield_ready": figure.shield_ready,
     }
     if isinstance(figure, TarmarFigure):
         spec.update(
