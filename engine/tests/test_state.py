@@ -132,6 +132,70 @@ def test_a_grounded_figure_may_still_fire_a_missile() -> None:
     assert Option.MISSILE_ATTACK in state.legal_options(kneel_bow)       # any bow, kneeling
 
 
+def test_prone_figure_option_availability() -> None:
+    # #206: a prone figure may stand, crawl, hold, or pass; it must NOT be told to
+    # "stand up first" before dropping into a posture it is already in.
+    arena = Arena(cols=21, rows=21)
+    prone = create_human("Prone", 12, 12, "a",
+                         weapons=[SHORTSWORD], ready_weapon=SHORTSWORD, armor=NO_ARMOR)
+    prone.position = Hex(5, 5)
+    prone.posture = Posture.PRONE
+    state = GameState(arena, [prone])
+    reasons = dict(state.option_availability(prone))
+    legal = state.legal_options(prone)
+    # Enabled from prone: get up, crawl, deliberate no-op, defer.
+    assert Option.STAND_UP in legal
+    assert Option.CRAWL in legal
+    assert Option.DO_NOTHING in legal
+    assert Option.PASS in legal
+    # The bug: GO_PRONE is offered "must stand up first" though it's already prone.
+    assert reasons[Option.GO_PRONE] == "already prone"
+    assert Option.GO_PRONE not in legal
+    # KNEEL isn't reachable directly from prone (p.16) — stays "must stand up first".
+    assert reasons[Option.KNEEL] == "must stand up first"
+    # Everything that genuinely needs standing keeps a sensible reason.
+    assert reasons[Option.MOVE] == "must stand up first"
+    assert reasons[Option.CHARGE_ATTACK] == "must stand up first"
+
+
+def test_prone_crossbow_can_fire_but_prone_bow_cannot() -> None:
+    # #152/#206: a crossbow fires from prone; a plain bow may not.
+    from engine.rules_data import LIGHT_CROSSBOW, SMALL_BOW
+    arena = Arena(cols=21, rows=21)
+    prone_xbow = create_human("X", 12, 12, "a", weapons=[LIGHT_CROSSBOW],
+                              ready_weapon=LIGHT_CROSSBOW, armor=NO_ARMOR)
+    prone_xbow.position = Hex(5, 5)
+    prone_xbow.posture = Posture.PRONE
+    prone_bow = create_human("B", 12, 12, "b", weapons=[SMALL_BOW],
+                             ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    prone_bow.position = Hex(15, 5)
+    prone_bow.posture = Posture.PRONE
+    state = GameState(arena, [prone_xbow, prone_bow])
+    xbow_reasons = dict(state.option_availability(prone_xbow))
+    bow_reasons = dict(state.option_availability(prone_bow))
+    assert xbow_reasons[Option.MISSILE_ATTACK] is None            # crossbow fires prone
+    assert Option.MISSILE_ATTACK in state.legal_options(prone_xbow)
+    assert bow_reasons[Option.MISSILE_ATTACK] == "must stand up first"  # bow can't
+    assert Option.MISSILE_ATTACK not in state.legal_options(prone_bow)
+
+
+def test_kneeling_figure_option_availability() -> None:
+    # #206: a kneeling figure is told "already kneeling", not "must stand up first",
+    # for KNEEL; and any bow may fire from kneeling.
+    from engine.rules_data import SMALL_BOW
+    arena = Arena(cols=21, rows=21)
+    kneel_bow = create_human("K", 12, 12, "a", weapons=[SMALL_BOW],
+                             ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    kneel_bow.position = Hex(5, 5)
+    kneel_bow.posture = Posture.KNEELING
+    state = GameState(arena, [kneel_bow])
+    reasons = dict(state.option_availability(kneel_bow))
+    assert reasons[Option.KNEEL] == "already kneeling"
+    assert Option.KNEEL not in state.legal_options(kneel_bow)
+    assert reasons[Option.MISSILE_ATTACK] is None                 # any bow fires kneeling
+    assert Option.MISSILE_ATTACK in state.legal_options(kneel_bow)
+
+
 def test_kneeling_figure_has_no_front() -> None:
     from engine.facing import REAR, attack_zone
     arena = Arena(cols=9, rows=15)
@@ -864,10 +928,13 @@ def test_option_availability_surfaces_full_set_with_reasons() -> None:
     # of posture — excluded from the "must stand up first" gating below.
     assert prone[Option.DO_NOTHING] is None
     assert prone[Option.PASS] is None
+    # GO_PRONE reads "already prone", not "must stand up first" (#206): you can't
+    # drop into a posture you already hold.
+    assert prone[Option.GO_PRONE] == "already prone"
     assert all(reason == "must stand up first"
                for opt, reason in prone.items()
                if opt not in (Option.STAND_UP, Option.CRAWL,
-                              Option.DO_NOTHING, Option.PASS))
+                              Option.DO_NOTHING, Option.PASS, Option.GO_PRONE))
 
 
 def test_attack_ordering_is_highest_adjdx_first() -> None:
