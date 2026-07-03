@@ -118,6 +118,10 @@ class Figure:
     ready_weapon: Weapon | None = None
     shield_ready: bool = True
     race: Race = Race.HUMAN
+    # The fighter's archetype/class (Knight, Swordsman, …). It drives the loadout
+    # at creation and then survives as a secondary label; the fun ``name`` is the
+    # identity. Empty for a figure with no archetype (e.g. a monster).
+    char_class: str = ""
     # ---- nonhuman quirks (Section VIII) ----
     all_front: bool = False    # every facing is "front" (giant snake: no flank/rear)
     hard_to_hit: int = 0       # DX penalty it imposes on attackers (snake: 3)

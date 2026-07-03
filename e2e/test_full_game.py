@@ -342,20 +342,25 @@ _MELEE_VERBS = {"swings", "lunges"}
 def _human_hits_in_log(log_lines: list) -> dict:
     """Scan the combat log for blows a RED (human) figure landed for real damage.
 
-    A hit line reads ``The <side> <name> <verb> <weapon> at the <side> <name> —
-    and connects for N`` (or ``a crushing blow for N``). It starts with the
-    attacker, so ``the red <name> <verb> …`` means a human dealt it, and the verb
-    (token 3) names the kind. Only ``connects``/``crushing`` lines count -- a
-    missed or armour-stopped blow deals no ST."""
+    A hit line reads ``<name> (<side>) <verb> <weapon> at <name> (<side>) — and
+    connects for N`` (or ``a crushing blow for N``). The attacker's side is the
+    first ``(side)`` on the line, and the verb is the word right after it, so a
+    line whose first parenthetical is ``(red)`` was dealt by a human. Only
+    ``connects``/``crushing`` lines count -- a miss or armour-stopped blow deals
+    no ST."""
     hit = {"missile": False, "melee": False}
     for line in log_lines:
         low = line.lower()
-        if not low.startswith("the red "):
-            continue
         if "connects for" not in low and "crushing blow" not in low:
             continue
-        tokens = low.split()
-        verb = tokens[3] if len(tokens) > 3 else ""
+        red_at = low.find("(red)")
+        blue_at = low.find("(blue)")
+        # The attacker is whichever side appears first; skip lines a blue (AI)
+        # figure dealt (its "(blue)" comes before any "(red)").
+        if red_at == -1 or (blue_at != -1 and blue_at < red_at):
+            continue
+        after_attacker = low.split("(red)", 1)[1].split()
+        verb = after_attacker[0] if after_attacker else ""
         if verb in _MISSILE_VERBS:
             hit["missile"] = True
         elif verb in _MELEE_VERBS:
@@ -440,8 +445,8 @@ def test_human_drives_missile_and_melee(live_server, page: Page) -> None:
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
 
     red = [f for f in created["state"]["figures"] if f["side"] == "red"]
-    missile_uid = next(f["uid"] for f in red if f["name"] == "Archer")
-    melee_uid = next(f["uid"] for f in red if f["name"] == "Swordsman")
+    missile_uid = next(f["uid"] for f in red if f["char_class"] == "Archer")
+    melee_uid = next(f["uid"] for f in red if f["char_class"] == "Swordsman")
 
     saw_missile_damage = False
     saw_melee_damage = False
@@ -469,7 +474,7 @@ def test_human_drives_missile_and_melee(live_server, page: Page) -> None:
                 continue
             stalls = 0
             figure = by_uid[active]
-            spearman = next((e for e in enemies if e["name"] == "Spearman"), None)
+            spearman = next((e for e in enemies if e["char_class"] == "Spearman"), None)
             if active == missile_uid:
                 _drive_missileer_select(page, gid, figure, enemies)
             elif active == melee_uid:
@@ -519,7 +524,7 @@ def test_committed_shooter_must_be_targeted_before_resolve(
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
 
     red = [f for f in created["state"]["figures"] if f["side"] == "red"]
-    archer_uid = next(f["uid"] for f in red if f["name"] == "Archer")
+    archer_uid = next(f["uid"] for f in red if f["char_class"] == "Archer")
 
     # Drive the select pass: the Archer aims a Missile Attack from where it stands
     # (fire-in-place, no hex picked); every other human figure just holds; the AI
@@ -702,7 +707,7 @@ def test_bow_shooter_targeted_by_clicking_the_foe(
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
 
     red = [f for f in created["state"]["figures"] if f["side"] == "red"]
-    swordsman_uid = next(f["uid"] for f in red if f["name"] == "Swordsman")
+    swordsman_uid = next(f["uid"] for f in red if f["char_class"] == "Swordsman")
 
     # Drive select: ONLY the Swordsman aims a Missile Attack (with its Longbow), in
     # place; every other human figure holds, so it is the sole pending shooter.

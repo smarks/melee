@@ -883,7 +883,9 @@ function openMenu(f) {
   const plan = PLAN[f.uid];
   // Header reflects commit state for this phase (issue #72): committed shows what
   // it committed to (+ Clear); uncommitted invites a choice from the options.
-  let html = `<div class="head">${f.name} <span class="chip ${f.side}">${f.side}</span></div>`;
+  let html = `<div class="head">${f.name}`
+    + (f.char_class ? ` <span class="muted">— ${escapeHtml(f.char_class)}</span>` : "")
+    + ` <span class="chip ${f.side}">${f.side}</span></div>`;
   // A figure with no real choice (only "Do nothing" / disabled rows) is already
   // doing nothing — don't nag it as "uncommitted" (issue #117).
   const hasRealAction = rows.some(r => r.act && r.label !== "Do nothing");
@@ -1192,7 +1194,10 @@ function weaponsLine(f) {
     + (reserve.length ? ` · ready to switch: ${reserve.join(", ")}` : "") + `</div>`;
 }
 function statusHeader(f) {
+  const classLine = f.char_class
+    ? `<div class="muted">${escapeHtml(f.char_class)}</div>` : "";
   return `<div>${tokenBadge(f)} <b>${f.name}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
+    classLine +
     (f.model === "tarmar"
       ? `<div class="muted">Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · adjDX ${f.dx}</div>`
       : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx}</div>`) +
@@ -1461,8 +1466,10 @@ function drawRoster() {
       // At-a-glance kit (#214): each row shows its readied weapon and DX so every
       // character can be scanned without clicking. Compact -- wraps under the name.
       const kit = `<span class="kit muted">⚔ ${escapeHtml(f.weapon || "unarmed")} · DX ${f.dx}</span>`;
+      const classTag = f.char_class
+        ? `<span class="muted">— ${escapeHtml(f.char_class)}</span> ` : "";
       html += `<div class="${cls}" data-uid="${escapeHtml(f.uid)}">`
-        + `<span class="rowmain">${tokenBadge(f)} ${escapeHtml(f.name)} `
+        + `<span class="rowmain">${tokenBadge(f)} ${escapeHtml(f.name)} ${classTag}`
         + `<span class="muted">${state}</span>${kit}</span>`
         + figActionHtml(f) + `</div>`
         + figControlsHtml(f);

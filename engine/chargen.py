@@ -218,13 +218,19 @@ def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figur
         skills = {weapon.name: spec.get("skill", 0)}
         if second is not None and second is not weapon:
             skills[second.name] = spec.get("skill2", 0)
-        return create_tarmar_fighter(
+        figure: Figure = create_tarmar_fighter(
             _required(spec, "name"), side=_required(spec, "side"),
             strength=_required(spec, "strength"), dexterity=_required(spec, "dexterity"),
             intelligence=_required(spec, "intelligence"), wisdom=_required(spec, "wisdom"),
             constitution=_required(spec, "constitution"), charisma=_required(spec, "charisma"),
             weapon_skill=skills, **gear)
-    race, _ = _race_from_spec(spec)
-    return create_fighter(_required(spec, "name"), _required(spec, "strength"),
-                          _required(spec, "dexterity"), _required(spec, "side"),
-                          race=race or Race.HUMAN, validate=validate_spec, **gear)
+    else:
+        race, _ = _race_from_spec(spec)
+        figure = create_fighter(
+            _required(spec, "name"), _required(spec, "strength"),
+            _required(spec, "dexterity"), _required(spec, "side"),
+            race=race or Race.HUMAN, validate=validate_spec, **gear)
+    # The archetype/class is a label, not part of the rules; carry it through
+    # unchanged so an edited or custom fighter keeps its "— Knight" subtitle.
+    figure.char_class = (spec.get("char_class") or "").strip()
+    return figure
