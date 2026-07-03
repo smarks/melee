@@ -23,8 +23,10 @@ from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS
 
 
 def _name(figure: Figure) -> str:
-    """A figure as "the red Knight"."""
-    return f"the {figure.side} {figure.name}"
+    """A figure by its characterful name, with its side in parens for clarity:
+    "Baylor the Bashful (red)". The side keeps the two teams distinguishable at a
+    glance now that the name no longer carries the class."""
+    return f"{figure.name} ({figure.side})"
 
 
 def _article(word: str) -> str:
@@ -43,11 +45,13 @@ def _approach(attacker: Figure, target: Figure, weapon, zone: str | None = None,
     verb = ("hurls" if thrown
             else "shoots" if weapon.kind == WeaponKind.MISSILE else "swings")
     # A melee blow from the side/rear is easier to land (the facing bonus); call
-    # it out so the higher to-hit number reads as deliberate, not a glitch.
+    # it out so the higher to-hit number reads as deliberate, not a glitch. Phrased
+    # "at the flank of <name>" so it ends on the target and a ", who …" clause
+    # still follows cleanly (a possessive after "(red)" would read awkwardly).
     spot = ""
     if weapon.kind != WeaponKind.MISSILE and not thrown:
-        spot = "'s flank" if zone == SIDE else "'s rear" if zone == REAR else ""
-    return f"{_name(attacker)} {verb} {_article(weapon.name)} at {_name(target)}{spot}"
+        spot = "the flank of " if zone == SIDE else "the rear of " if zone == REAR else ""
+    return f"{_name(attacker)} {verb} {_article(weapon.name)} at {spot}{_name(target)}"
 
 
 def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> str:

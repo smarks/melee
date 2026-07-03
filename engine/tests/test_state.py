@@ -339,7 +339,7 @@ def test_standing_attacker_misses_into_a_pile_and_cascades() -> None:
     assert g1.damage_taken == 0                          # the declared goblin was missed
     assert g2.damage_taken == 0                          # the other goblin too
     assert ragnar.damage_taken > 0                       # the friend caught the blow
-    assert any("Ragnar instead" in line for line in state.log)
+    assert any("strikes Ragnar" in line and "instead" in line for line in state.log)
 
 
 def test_missile_into_an_hth_pile_strikes_a_random_member() -> None:

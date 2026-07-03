@@ -25,7 +25,7 @@ def _edit_spec(figure: Figure) -> dict:
     # editor and chargen.build still see ST+DX summing to the race total. The
     # added points are re-applied when the rebuilt figure is swapped back in.
     spec = {
-        "name": figure.name, "side": figure.side,
+        "name": figure.name, "side": figure.side, "char_class": figure.char_class,
         "strength": figure.strength - figure.added_st,
         "dexterity": figure.dexterity - figure.added_dx,
         "weapon": ready_name, "weapon2": second.name if second else "None",
@@ -55,6 +55,7 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "uid": figure.uid,
         "side": figure.side,
         "name": figure.name,
+        "char_class": figure.char_class,
         "label": label_of(figure.position.col, figure.position.row)
         if figure.position else None,
         "facing": figure.facing,

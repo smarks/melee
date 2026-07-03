@@ -82,6 +82,7 @@ def _figure_to_json(figure: Figure) -> dict:
     data: dict = {
         "type": "tarmar" if isinstance(figure, TarmarFigure) else "melee",
         "name": figure.name,
+        "char_class": figure.char_class,
         "side": figure.side,
         "uid": figure.uid,
         "strength": figure.strength,
@@ -141,6 +142,7 @@ def _figure_from_json(data: dict) -> Figure:
         ready_weapon=ready,
         shield_ready=data["shield_ready"],
         race=Race(data["race"]),
+        char_class=data.get("char_class", ""),
     )
     if data["type"] == "tarmar":
         figure: Figure = TarmarFigure(

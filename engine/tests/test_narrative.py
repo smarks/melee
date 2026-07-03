@@ -37,7 +37,7 @@ def _result(weapon, **kw) -> AttackResult:
 def test_a_clean_hit_reads_as_a_swing_that_connects():
     red, blue = _duo()
     line = narrate_attack(red, blue, _result(BROADSWORD, hit=True, damage=7, rolled=9))
-    assert line == ("The red Knight swings a Broadsword at the blue Knight "
+    assert line == ("Knight (red) swings a Broadsword at Knight (blue) "
                     "— and connects for 7 (needed 12 or less, rolled 9).")
 
 
@@ -45,7 +45,7 @@ def test_a_defended_miss_reads_as_a_dodge():
     red, blue = _duo()
     blue.dodging = True
     line = narrate_attack(red, blue, _result(BROADSWORD, hit=False, rolled=16))
-    assert "who dodges clear" in line and line.startswith("The red Knight swings")
+    assert "who dodges clear" in line and line.startswith("Knight (red) swings")
 
 
 def test_a_crit_is_a_crushing_blow():
@@ -63,7 +63,7 @@ def test_armour_can_turn_a_hit_aside():
 def test_a_missile_is_shot_not_swung():
     red, blue = _duo(LONGBOW)
     line = narrate_attack(red, blue, _result(LONGBOW, hit=True, damage=4))
-    assert line.startswith("The red Knight shoots a Longbow at the blue Knight")
+    assert line.startswith("Knight (red) shoots a Longbow at Knight (blue)")
 
 
 def test_to_hit_breakdown_is_appended_to_the_line():
@@ -103,7 +103,7 @@ def test_move_line_records_who_a_figure_ends_up_facing():
     from engine.narrative import narrate_victory
 
     red, blue = _duo()
-    assert "now facing the blue Knight" in narrate_move(red, Option.CHARGE_ATTACK, True, blue)
+    assert "now facing Knight (blue)" in narrate_move(red, Option.CHARGE_ATTACK, True, blue)
     assert "facing" not in narrate_move(red, Option.MOVE, True)
     assert "victory" in narrate_victory("red").lower()
 
@@ -113,9 +113,9 @@ def test_a_flank_or_rear_melee_blow_is_called_out():
 
     red, blue = _duo()
     flank = narrate_attack(red, blue, _result(BROADSWORD, hit=True, damage=7, zone=SIDE))
-    assert "blue Knight's flank" in flank
+    assert "the flank of Knight (blue)" in flank
     rear = narrate_attack(red, blue, _result(BROADSWORD, hit=True, damage=7, zone=REAR))
-    assert "blue Knight's rear" in rear
+    assert "the rear of Knight (blue)" in rear
     # missiles never get a facing bonus, so no flank/rear wording even with a zone
     rb, bl = _duo(LONGBOW)
     shot = narrate_attack(rb, bl, _result(LONGBOW, hit=True, damage=4, zone=SIDE))
@@ -125,28 +125,28 @@ def test_a_flank_or_rear_melee_blow_is_called_out():
 def test_fumble_and_status_lines():
     red, blue = _duo()
     assert narrate_fumble(red, BROADSWORD, broke=False) == \
-        "The red Knight fumbles and drops a Broadsword!"
+        "Knight (red) fumbles and drops a Broadsword!"
     assert narrate_fumble(red, BROADSWORD, broke=True) == \
-        "The red Knight's Broadsword shatters with the blow!"
-    assert narrate_status(blue, DEAD) == "The blue Knight falls, slain!"
-    assert narrate_status(blue, UNCONSCIOUS) == "The blue Knight crumples, unconscious."
-    assert narrate_status(blue, KNOCKDOWN) == "The blue Knight is knocked sprawling."
+        "Knight (red)'s Broadsword shatters with the blow!"
+    assert narrate_status(blue, DEAD) == "Knight (blue) falls, slain!"
+    assert narrate_status(blue, UNCONSCIOUS) == "Knight (blue) crumples, unconscious."
+    assert narrate_status(blue, KNOCKDOWN) == "Knight (blue) is knocked sprawling."
     assert narrate_status(blue, None) is None
 
 
 def test_movement_narration():
     red, _ = _duo()
-    assert narrate_move(red, Option.MOVE, True) == "The red Knight advances."
-    assert narrate_move(red, Option.MOVE, False) == "The red Knight holds position."
-    assert narrate_move(red, Option.CHARGE_ATTACK, True) == "The red Knight charges in."
-    assert narrate_move(red, Option.STAND_UP, False) == "The red Knight rises to their feet."
+    assert narrate_move(red, Option.MOVE, True) == "Knight (red) advances."
+    assert narrate_move(red, Option.MOVE, False) == "Knight (red) holds position."
+    assert narrate_move(red, Option.CHARGE_ATTACK, True) == "Knight (red) charges in."
+    assert narrate_move(red, Option.STAND_UP, False) == "Knight (red) rises to their feet."
     # weapon-change options are narrated by narrate_ready, not narrate_move
     assert narrate_move(red, Option.READY_WEAPON, False) is None
 
 
 def test_other_operation_narration():
     red, blue = _duo()
-    assert narrate_ready(red, BROADSWORD) == "The red Knight readies a Broadsword."
+    assert narrate_ready(red, BROADSWORD) == "Knight (red) readies a Broadsword."
     assert narrate_initiative({"red": 4, "blue": 2}, "red").startswith("Initiative")
     assert narrate_move_order("blue") == "Blue will move first."
     assert narrate_retreat(red, blue, True).endswith("advancing into the gap.")

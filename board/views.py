@@ -1435,6 +1435,9 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
 
     # Identity and where it stands on the board.
     rebuilt.uid = figure.uid
+    # The archetype label is identity, not a rules field the editor touches, so an
+    # edit never drops it (the "— Knight" subtitle survives a mid-game re-spec).
+    rebuilt.char_class = figure.char_class
     # Section IX progression (#10): keep banked XP and re-apply bought points. The
     # edit spec carries the *basic* spread, so fold the added points back in.
     rebuilt.experience = figure.experience

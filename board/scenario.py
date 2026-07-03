@@ -7,11 +7,14 @@ enter from the starred entrance hexes at opposite ends of the arena (Section V).
 """
 from __future__ import annotations
 
+import random
+
 from hexarena.hex import Hex
 
 from engine import chargen
 from engine.arena import Arena
 from engine.figure import Figure, create_human
+from engine.names import generate_distinct_names
 from engine.rules_data import (
     BROADSWORD,
     CHAINMAIL,
@@ -34,7 +37,7 @@ def _archetypes(side: str) -> dict[str, Figure]:
     # Each fighter starts with its MISSILE weapon readied so it can fire on turn 1
     # without first switching weapons (#204); the melee weapon is still carried and
     # can be readied when the fight closes.
-    return {
+    roster = {
         "Knight": create_human(
             "Knight", 13, 11, side, armor=PLATE, shield=LARGE_SHIELD,
             weapons=[BROADSWORD, LIGHT_CROSSBOW, DAGGER], ready_weapon=LIGHT_CROSSBOW),
@@ -48,12 +51,15 @@ def _archetypes(side: str) -> dict[str, Figure]:
             "Archer", 14, 10, side, armor=NO_ARMOR,
             weapons=[LONGBOW, SHORTSWORD, DAGGER], ready_weapon=LONGBOW),
     }
+    for label, figure in roster.items():
+        figure.char_class = label
+    return roster
 
 
 def _tarmar_archetypes(side: str) -> dict[str, Figure]:
     """Tarmar-shaped versions of the archetypes: six attributes + starting
     weapon skill (fighters begin with skills; they don't gain them mid-match)."""
-    return {
+    roster = {
         "Knight": create_tarmar_fighter(
             "Knight", strength=13, dexterity=11, constitution=12, side=side,
             armor=PLATE, shield=LARGE_SHIELD, weapons=[BROADSWORD, LIGHT_CROSSBOW, DAGGER],
@@ -73,9 +79,28 @@ def _tarmar_archetypes(side: str) -> dict[str, Figure]:
             armor=NO_ARMOR, weapons=[LONGBOW, SHORTSWORD, DAGGER],
             ready_weapon=LONGBOW, weapon_skill={"Longbow": 3, "Shortsword": 1}),
     }
+    for label, figure in roster.items():
+        figure.char_class = label
+    return roster
 
 
 ARCHETYPE_NAMES = ["Knight", "Swordsman", "Spearman", "Archer"]
+
+
+def _assign_generated_names(figures: list[Figure], rng: random.Random | None = None) -> None:
+    """Give every figure a distinct, characterful name (in place).
+
+    Uses its OWN RNG — an independent :class:`random.Random`, never the combat
+    ``Dice`` — so switching names on leaves a seeded fight's dice byte-identical
+    (see :mod:`engine.names`). Each figure keeps its class as ``char_class``; the
+    generated name becomes its identity for the tracker, sheet, and log.
+    """
+    rng = rng or random.Random()
+    names = generate_distinct_names(rng, len(figures))
+    for figure, generated in zip(figures, names):
+        if not figure.char_class:
+            figure.char_class = figure.name   # preserve the archetype label
+        figure.name = generated
 
 
 def _place(arena: Arena, red_team: list[Figure], blue_team: list[Figure]) -> list[Figure]:
@@ -98,6 +123,7 @@ def default_skirmish() -> tuple[Arena, list[Figure]]:
     red, blue = _archetypes("red"), _archetypes("blue")
     figures = _place(arena, [red["Swordsman"], red["Archer"]],
                      [blue["Knight"], blue["Spearman"]])
+    _assign_generated_names(figures)
     return arena, figures
 
 
@@ -107,6 +133,7 @@ def tarmar_skirmish() -> tuple[Arena, list[Figure]]:
     red, blue = _tarmar_archetypes("red"), _tarmar_archetypes("blue")
     figures = _place(arena, [red["Swordsman"], red["Archer"]],
                      [blue["Knight"], blue["Spearman"]])
+    _assign_generated_names(figures)
     return arena, figures
 
 
@@ -184,6 +211,7 @@ def build_game(
             figure.position = hex_position
             figure.facing = facing
             figures.append(figure)
+    _assign_generated_names(figures)
     return arena, figures
 
 

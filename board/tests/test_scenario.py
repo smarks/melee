@@ -35,6 +35,28 @@ def test_build_game_clamps_to_caps():
     assert len(figures) == scenario.MAX_TEAMS * scenario.MAX_PER_TEAM
 
 
+def test_build_game_gives_distinct_fun_names_and_keeps_the_class():
+    _, figures = scenario.build_game("Classic Melee", 3, 3)
+    names = [f.name for f in figures]
+    assert len(set(names)) == len(names)                 # every fighter distinct
+    # Each keeps its archetype as a label, and the name is NOT just the class.
+    assert all(f.char_class in scenario.ARCHETYPE_NAMES for f in figures)
+    assert all(f.name not in scenario.ARCHETYPE_NAMES for f in figures)
+
+
+def test_char_class_is_serialized_alongside_the_fun_name():
+    from hexarena.dice import Dice
+
+    from board.serialize import dump_game
+    from engine.state import GameState
+
+    arena, figures = scenario.build_game("Classic Melee", 2, 2)
+    payload = dump_game(GameState(arena, figures, dice=Dice(seed=1)))
+    for figure in payload["figures"]:
+        assert figure["char_class"] in scenario.ARCHETYPE_NAMES
+        assert figure["name"] != figure["char_class"]    # the identity is the fun name
+
+
 def test_custom_build_places_any_number_of_teams():
     specs = []
     for side in ("red", "blue", "green"):

@@ -507,7 +507,7 @@ def test_move_can_switch_the_ready_weapon(client: Client) -> None:
     # figure and may set its action right away. (Every fighter now starts with its
     # bow readied (#204), so select the Archer by name, not by ready weapon.)
     archer = next(f for f in data["state"]["figures"]
-                  if f["side"] == "red" and f["name"] == "Archer")
+                  if f["side"] == "red" and f["char_class"] == "Archer")
     assert data["state"]["active_uid"] == archer["uid"]
     assert archer["weapon"] == "Longbow" and "Shortsword" in archer["weapons"]
     out = _post(client, gid, {"type": "move", "uid": archer["uid"],
