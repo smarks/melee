@@ -45,6 +45,11 @@
   .col { width: 340px; flex: 0 0 340px; border-left: 1px solid var(--line);
          background: var(--panel); display: flex; flex-direction: column;
          overflow: hidden; min-height: 0; }
+  /* The Game-status log column (#227): a touch narrower than the control columns
+     so the Map keeps its room. Its seclabel is pinned; #log fills the rest and
+     scrolls internally (see #log rule below) so the log is always visible without
+     scrolling the page. */
+  .logcol { width: 300px; flex: 0 0 300px; }
   #gameControl { overflow: auto; }
   .trackerScroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
   @media (max-width: 1100px) {
@@ -137,7 +142,10 @@
   .chip.green { color: var(--green); border-color: var(--green); }
   .chip.gold { color: var(--gold); border-color: var(--gold); }
   .chip.violet { color: var(--violet); border-color: var(--violet); }
-  #log { padding: 6px 16px 10px; font-size: 15px; }
+  /* #log is the scroll region of its column: it fills the space under the pinned
+     seclabel and scrolls internally for long histories. min-height:0 lets the flex
+     child actually shrink so its own overflow engages (rather than the page). */
+  #log { flex: 1 1 auto; overflow: auto; min-height: 0; padding: 6px 16px 10px; font-size: 15px; }
   #log div { padding: 2px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
   /* A blow that actually lands stands out from misses, dodges, and movement. */
   #log div.log-hit { color: var(--ink); font-weight: 600; font-size: 16.5px; }
@@ -382,6 +390,15 @@
     <button id="resetColors" title="Reset colours to default" onclick="resetTheme()">⟲ reset</button>
     <svg id="svg"></svg>
   </div>
+  <!-- Dedicated Game-status log column (#227): the narrative log used to sit at
+       the bottom of the Characters column, so you had to scroll to read it. It now
+       gets its own always-visible column between the Map and Game Control. The
+       seclabel is pinned at the top and #log fills the rest, scrolling internally
+       for long histories (min-height:0 so the inner scroll engages, not the page). -->
+  <aside class="col logcol">
+    <div class="seclabel">Game status</div>
+    <div id="log"></div>
+  </aside>
   <!-- Middle column: Game Control (the former New-game modal, now always inline).
        Before a game it is editable with New Game enabled; once a game is running
        every setting locks read-only and End Game takes over. -->
@@ -442,8 +459,6 @@
       <div class="pad roster" id="roster"></div>
       <div class="seclabel">Selected character</div>
       <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
-      <div class="seclabel">Game status</div>
-      <div id="log"></div>
     </div>
     <div class="pad" id="controls"></div>
   </aside>

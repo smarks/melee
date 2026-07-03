@@ -1954,7 +1954,13 @@ const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
 if (urlGid) { GID = urlGid; refresh(); } else { showPreGame(); }
 const POLL = setInterval(async () => {
   if (!GID) return;
+  const polledGid = GID;                             // pin the game we're polling for
   const data = await api(`/api/game/${GID}`);
+  // The game we polled may have ended (End Game -> showPreGame nulls GID) or been
+  // replaced (New Game) while this request was in flight. Its now-stale response
+  // must NOT repopulate S/board/banner over the reset -- that clobbered End Game's
+  // return to the pre-game state (#226). Drop the result unless it's still current.
+  if (polledGid !== GID) return;
   if (data.error) { clearInterval(POLL); return; }   // game gone — stop polling
   // Include the seat/ownership fields: opening or claiming a seat changes these
   // but NOT data.state, so a state-only signature would miss seat updates (#85).
