@@ -675,3 +675,89 @@ def test_committed_thrower_can_be_targeted_and_resolve_enables(
     after = _by_uid(after_state)[foe.uid]["st"]
     assert after < before, (
         f"the thrown attack dealt no damage (foe ST {before} -> {after})")
+
+
+@pytest.mark.django_db
+def test_bow_shooter_targeted_by_clicking_the_foe(
+        live_server, page: Page) -> None:
+    """#220: a committed **Longbow** shooter's must-attack gate can be cleared by
+    the natural 'click the foe' gesture, not just by hunting for the shooter's own
+    counter menu.
+
+    A Swordsman with a readied Longbow aims a Missile Attack in select; combat
+    opens with Resolve disabled and 'Pick a target for Swordsman'. The server's
+    ``must_attack`` and the shooter's ``missile_targets`` agree and the token menu
+    *does* offer the shot (that path is #212) -- but after #215 clicking the FOE
+    only inspected it, so a player who clicks the target they're told to pick never
+    queues the shot and Resolve stays stuck (the #220 deadlock, distinct from the
+    thrown-weapon #217 data bug). The fix makes a foe click queue the pending
+    shooter's shot: Resolve enables and resolving fires the bow.
+
+    Pre-fix this fails at the first ``to_be_enabled`` -- clicking the foe leaves
+    Resolve disabled. Post-fix the shot is queued and the Longbow fires."""
+    page.goto(live_server.url)
+    created = _fetch_json(page, f"/api/game/new?computer=blue&seed={_SEED}")
+    gid = created["gid"]
+    page.goto(f"{live_server.url}/game/{gid}")
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+
+    red = [f for f in created["state"]["figures"] if f["side"] == "red"]
+    swordsman_uid = next(f["uid"] for f in red if f["name"] == "Swordsman")
+
+    # Drive select: ONLY the Swordsman aims a Missile Attack (with its Longbow), in
+    # place; every other human figure holds, so it is the sole pending shooter.
+    committed = False
+    for _ in range(60):
+        state = _state(page, gid)
+        if state["phase"] != "select":
+            break
+        active = state.get("active_uid")
+        if not active or _by_uid(state).get(active, {}).get("side") != "red":
+            page.wait_for_timeout(150)
+            continue
+        if active == swordsman_uid and not committed:
+            _click_opt(page, swordsman_uid, "missile_attack")   # enters placement
+            _click_set_action(page, swordsman_uid)              # fire in place
+            committed = True
+        else:
+            _click_opt(page, active, "do_nothing")
+        _await_select_progress(page, gid, active)
+
+    assert committed, "the Swordsman never became active to aim its Missile Attack"
+    assert _poll(lambda: _state(page, gid)["phase"] == "combat"), \
+        "combat never opened after the select pass"
+
+    state = _state(page, gid)
+    by_uid = _by_uid(state)
+    assert by_uid[swordsman_uid]["weapon"] == "Longbow", \
+        "the Swordsman is not carrying the readied Longbow this repro needs"
+    assert swordsman_uid in set(state.get("must_attack") or []), (
+        "the committed Longbow shooter is missing from must_attack; "
+        f"must_attack={state.get('must_attack')!r}")
+
+    controls = page.locator("#controls")
+    resolve = controls.get_by_role("button", name=re.compile(r"^Resolve"))
+    expect(resolve).to_be_disabled()
+    expect(controls).to_contain_text(
+        f"Pick a target for {by_uid[swordsman_uid]['name']}")
+
+    # THE FIX under test: click the FOE itself (the natural 'pick a target'
+    # gesture) to queue the pending shooter's shot -- no token-menu hunt needed.
+    info = _options(page, gid, swordsman_uid)
+    assert info["missile_targets"], "the committed shooter has no missile target"
+    target_uid = info["missile_targets"][0]
+    target_name = by_uid[target_uid]["name"]
+    page.locator(f'#roster .row[data-uid="{target_uid}"]').first.click()
+
+    # Pre-#220 the foe click only inspected it, so Resolve stayed disabled here.
+    expect(resolve).to_be_enabled()
+    expect(controls).to_contain_text(f"Attack {target_name}")
+
+    # Resolving now actually fires the Longbow -- the combat log records the shot.
+    turn = state["turn"]
+    resolve.first.click()
+    _poll(lambda: _state(page, gid)["turn"] != turn
+          or _state(page, gid)["phase"] != "combat"
+          or bool(_state(page, gid).get("victory")))
+    log = "\n".join(_state(page, gid).get("log", [])).lower()
+    assert "shoots" in log, f"the Longbow shot never fired; combat log was:\n{log}"

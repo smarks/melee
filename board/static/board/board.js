@@ -590,8 +590,14 @@ function drawControls() {
       for (const f of untargeted) {
         const aimed = (f.option === "missile_attack" || f.option === "one_last_shot");
         const weapon = f.weapon ? ` ${f.weapon}` : "";
-        warnLine(c, `Pick a target for ${f.name} — it ${aimed ? "aimed" : "committed to attack with"}`
+        const line = warnLine(c, `Pick a target for ${f.name} — it ${aimed ? "aimed" : "committed to attack with"}`
                     + `${aimed ? " a" + weapon : weapon}.`);
+        // #220: the prompt names the *shooter*, so clicking it selects that
+        // figure and opens its targeting menu — the player no longer has to hunt
+        // for their own counter to clear the gate.
+        line.classList.add("clickable");
+        line.title = `Click to target ${f.name}`;
+        line.addEventListener("click", () => onFigureClick(f));
       }
       const resolveBtn = bigPrimary(c, actors.length ? "Resolve attacks" : "Resolve combat", () => {
         combatResolvedTurn = S.turn;       // next render offers "End turn"
@@ -624,6 +630,7 @@ function warnLine(c, text) {
   w.className = "warnline";
   w.textContent = "⚠ " + text;
   c.appendChild(w);
+  return w;
 }
 
 // A per-figure status list: which of the active side's figures are set, and
@@ -903,13 +910,42 @@ async function onFigureClick(f) {
     optInfo = await loadOptions(f);
     render(); openMenu(f);
   } else if (S.phase === "combat") {
-    if (!myControlled(f)) { inspectFigure(f); return; }
+    if (!myControlled(f)) {
+      // #220: a foe click is the natural "pick the target" gesture. If you have a
+      // committed shooter still awaiting a target (the must-attack gate), aim its
+      // shot at this foe so Resolve can clear — otherwise just inspect the foe.
+      if (await queuePendingShotAt(f)) return;
+      inspectFigure(f); return;
+    }
     sel = f.uid; pendingFacing = f.facing;
     optInfo = await loadOptions(f);
     render(); openMenu(f);
   } else {
     sel = f.uid; render();
   }
+}
+
+// #220: queue a committed-but-untargeted shooter's attack at ``enemy`` when the
+// player clicks that foe. Mirrors the Resolve gate's own "untargeted" set: a
+// figure I control that the server flagged in must_attack and that has no PLAN
+// yet. The first such shooter that can actually reach this foe (its combat
+// _targets list includes it) takes the shot, so clicking a foe repeatedly assigns
+// each pending shooter in turn. Returns true if a shot was queued (so the caller
+// skips plain inspection), false if none applied (fall back to inspecting).
+async function queuePendingShotAt(enemy) {
+  if (!S || S.phase !== "combat" || combatResolvedTurn === S.turn) return false;
+  const mustAttack = new Set(S.must_attack || []);
+  const pending = S.figures.filter(
+    f => myControlled(f) && mustAttack.has(f.uid) && !PLAN[f.uid]);
+  for (const shooter of pending) {
+    const info = await loadOptions(shooter);
+    if ((info._targets || []).includes(enemy.uid)) {
+      optInfo = info; sel = shooter.uid;
+      setAttack(shooter, enemy.uid);   // sets PLAN[shooter] + re-renders the gate
+      return true;
+    }
+  }
+  return false;
 }
 
 // Select a figure purely to view its sheet: no action menu, no placement flow.
