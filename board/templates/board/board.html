@@ -243,6 +243,8 @@
   #controls .checklist .done { color: var(--green); }
   #controls .checklist .todo { color: var(--accent); font-weight: 600; }
   #controls .warnline { color: var(--target); font-size: 12.5px; margin-top: 8px; }
+  #controls .warnline.clickable { cursor: pointer; text-decoration: underline dotted; }
+  #controls .warnline.clickable:hover { filter: brightness(1.25); }
   #editor, #setup, #admin, #liveEdit { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
             flex-direction: column; align-items: center; overflow: auto; }
   #editor, #admin, #liveEdit { z-index: 55; }   /* opens on top of the setup panel */
