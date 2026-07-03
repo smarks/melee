@@ -222,6 +222,7 @@ class Ruleset:
             to_hit_breakdown=self.to_hit_breakdown(
                 attacker, zone=zone, ignore_facing=ignore_facing,
                 range_penalty=range_penalty, situational_note=situational_note),
+            auto_hit=force_hit,
         )
 
     # ---- injury / status ----------------------------------------------------

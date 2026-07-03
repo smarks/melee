@@ -75,6 +75,12 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
     if result.hit and result.damage > 0 and stopped > 0:
         body += f" ({stopped} stopped by armour)"
     detail = f" — {result.to_hit_breakdown}" if result.to_hit_breakdown else ""
+    # An auto-hit (a flying weapon that struck a figure mid-flight, an HTH free
+    # hit) is not decided by the to-hit roll, so `needed`/`rolled` are NOT a
+    # hit/miss test — narrating them as one prints "connects (needed 5, rolled
+    # 11)". Say plainly that it was unavoidable instead (#229).
+    if getattr(result, "auto_hit", False):
+        return _cap(f"{body} (an unavoidable hit{detail}).")
     threshold = "or less" if result.roll_under else "or more"
     return _cap(f"{body} (needed {result.needed} {threshold}, "
                 f"rolled {result.rolled}{detail}).")

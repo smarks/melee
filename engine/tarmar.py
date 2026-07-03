@@ -224,6 +224,7 @@ class TarmarRuleset(Ruleset):
             body_hit=outcome["critical"],  # crit reaches Body (carried on the result, not the target)
             note=outcome["outcome"],
             roll_under=False,
+            auto_hit=force_hit,
             to_hit_breakdown=self._breakdown(
                 attacker, weapon, weapon_class, tier, shield, defends,
                 target_number, skill, zone, ignore_facing, range_penalty, bonus,

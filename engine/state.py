@@ -611,6 +611,8 @@ class _MovementMixin:
             blocker = held.get(hex_pos)
             if blocker is None or blocker is target:
                 continue
+            if blocker.side == attacker.side:
+                continue                        # never shoot your own side (#229)
             dist = layout.distance(attacker.position, hex_pos)
             if self.dice.total(3) <= adjdx - dist:
                 continue                                  # flew past this one
@@ -679,6 +681,8 @@ class _MovementMixin:
             figure = held.get(current)
             if figure is None:
                 continue
+            if figure.side == attacker.side:
+                continue                        # never shoot your own side (#229)
             dist = layout.distance(attacker.position, current)
             if self.dice.total(3) <= adjdx - dist:        # the stray weapon strikes
                 self._flight_strike(pending, figure, dist, results)
@@ -934,6 +938,10 @@ class _HthMixin:
         Strikes if already grappling; joins a brawl in progress without a roll
         (p.18); otherwise initiates with the defender's 1d6 defense roll (p.17).
         """
+        if defender.side == attacker.side:
+            raise IllegalAction(
+                f"{attacker.name} cannot grapple {defender.name} — same side"
+            )
         if defender.uid in attacker.hth_opponents:     # already grappling — just strike
             self._queue_hth_strike(attacker, defender)
             return "grappled"
@@ -1037,6 +1045,10 @@ class _ShieldRushMixin:
         ``"queued"`` (the hit/save/knockdown land later in :meth:`resolve_combat`,
         which logs the ``miss``/``fall``/``stand`` story).
         """
+        if target.side == attacker.side:
+            raise IllegalAction(
+                f"{attacker.name} cannot shield-rush {target.name} — same side"
+            )
         if not self._can_shield_rush(attacker):
             raise IllegalAction(f"{attacker.name} cannot shield-rush")
         layout = self.arena.layout
@@ -1460,6 +1472,12 @@ class _CombatMixin:
             raise IllegalAction(
                 f"{attacker.name} did not choose an attack option this turn"
             )
+        if target.side == attacker.side:
+            # No friendly fire: a figure can never target its own side, regardless
+            # of how the attack was queued (client, AI, or a side mixup) — #229.
+            raise IllegalAction(
+                f"{attacker.name} cannot attack {target.name} — same side"
+            )
         if not attacker.can_act():
             raise IllegalAction(f"{attacker.name} cannot attack")
         if attacker.flying:                       # a flyer lands to attack (p.21)
@@ -1513,6 +1531,10 @@ class _CombatMixin:
                 shots = 1     # the parting shot looses a single arrow (p.7 option
                               # l); two-shot fire belongs to option f
         if second_target is not None:
+            if second_target.side == attacker.side:
+                raise IllegalAction(
+                    f"{attacker.name} cannot aim a shot at {second_target.name} — same side"
+                )
             if not is_missile:
                 raise IllegalAction(
                     "only a missile weapon may split its two shots between targets"
