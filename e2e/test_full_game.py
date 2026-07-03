@@ -575,3 +575,103 @@ def test_committed_shooter_must_be_targeted_before_resolve(
           or bool(_state(page, gid).get("victory")))
     log = "\n".join(_state(page, gid).get("log", [])).lower()
     assert "shoots" in log, f"the shot never fired; combat log was:\n{log}"
+
+
+@pytest.mark.django_db
+def test_committed_thrower_can_be_targeted_and_resolve_enables(
+        live_server, page: Page) -> None:
+    """#217 regression: a committed attacker whose only shot is a THROWN weapon
+    (a throwable melee/pole weapon hurled at a foe out of reach) used to deadlock
+    the must-attack gate.
+
+    The server counts the thrown shot in ``_attack_targets.ranged`` and lists the
+    figure in ``must_attack`` (#212). But the board offered no clickable target for
+    it: the combat menu chose ``missile_targets`` *xor* ``melee_targets`` keyed on a
+    hard-coded bow-name check, and a spear/javelin is neither a bow (so the missile
+    list was dropped) nor within melee reach (so ``melee_targets`` was empty). With
+    no row to click, ``PLAN[uid]`` could never be set, so Resolve stayed disabled
+    forever. The fix offers the union of both target lists, so the thrown shot is
+    queueable and Resolve enables once it is queued.
+
+    Pre-fix this test fails: the Attack row is never offered, so the gate can't be
+    cleared. Post-fix the row appears, Resolve enables, and resolving hurls the
+    spear for real (the log records it and the foe's ST drops)."""
+    from board import views
+    from engine.options import Option
+    from engine.rules_data import NO_ARMOR, SPEAR
+    from hexarena.hex import Hex
+
+    # A game the browser owns (red = human, blue = the AI). Seeded for determinism.
+    # Load the origin first so the relative fetch resolves and the browser is
+    # issued its player-id cookie (which makes it the owner of the human red side).
+    page.goto(live_server.url)
+    created = _fetch_json(page, f"/api/game/new?computer=blue&seed={_SEED}")
+    gid = created["gid"]
+
+    # Craft the deadlock in the shared, in-process server state: arm a red figure
+    # with a Spear (throwable pole weapon, reach 2), stand it 3 hexes from a blue
+    # foe (out of melee reach -> its only attack is a thrown shot), and commit it to
+    # an attack so it lands in must_attack. Every other figure is taken off the
+    # board so the gate is solely about the thrower.
+    game = views.GAMES[gid]
+    state = game["state"]
+    thrower = next(f for f in state.figures if f.side == "red")
+    foe = next(f for f in state.figures if f.side == "blue")
+    if SPEAR not in thrower.weapons:
+        thrower.weapons.append(SPEAR)
+    thrower.ready_weapon = SPEAR
+    thrower.dexterity = 18        # high DX so the seeded to-hit roll lands the throw
+    thrower.shield_ready = False
+    thrower.position = Hex(6, 6)
+    thrower.facing = 0
+    thrower.current_option = Option.CHARGE_ATTACK
+    foe.position = Hex(9, 6)
+    foe.facing = 3
+    foe.armor = NO_ARMOR          # unarmoured so a landed throw reliably wounds it
+    for other in state.figures:
+        if other is thrower or other is foe:
+            continue
+        other.current_option = None
+        other.position = None
+    game["phase"] = "combat"
+    game["combat_prepared"] = True
+
+    page.goto(f"{live_server.url}/game/{gid}")
+    expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+
+    state_json = _state(page, gid)
+    assert thrower.uid in set(state_json.get("must_attack") or []), (
+        "the committed thrower is missing from the server's must_attack set; "
+        f"must_attack={state_json.get('must_attack')!r}")
+
+    controls = page.locator("#controls")
+    resolve = controls.get_by_role("button", name=re.compile(r"^Resolve"))
+    thrower_name = _by_uid(state_json)[thrower.uid]["name"]
+    foe_name = _by_uid(state_json)[foe.uid]["name"]
+    # The gate is engaged: Resolve disabled, the thrower named as needing a target.
+    expect(resolve).to_be_disabled()
+    expect(controls).to_contain_text(f"Pick a target for {thrower_name}")
+
+    # The thrower's token menu must offer its thrown shot as an Attack row. Pre-fix
+    # no such row exists (the deadlock), so this click fails and the test fails.
+    _open_menu(page, thrower.uid)
+    assert _click_menu_row(page, f"Attack {foe_name}"), (
+        "the committed thrower's token menu offered no target to attack -- the "
+        "#217 deadlock (its thrown shot was dropped from the target list)")
+
+    # Queuing the thrown shot clears the gate: Resolve enables.
+    expect(resolve).to_be_enabled()
+
+    # Resolving actually hurls the spear -- the log records it and the foe is hurt.
+    before = _by_uid(state_json)[foe.uid]["st"]
+    turn = state_json["turn"]
+    resolve.first.click()
+    _poll(lambda: _state(page, gid)["turn"] != turn
+          or _state(page, gid)["phase"] != "combat"
+          or bool(_state(page, gid).get("victory")))
+    after_state = _state(page, gid)
+    log = "\n".join(after_state.get("log", [])).lower()
+    assert "hurls" in log, f"the thrown attack never fired; combat log was:\n{log}"
+    after = _by_uid(after_state)[foe.uid]["st"]
+    assert after < before, (
+        f"the thrown attack dealt no damage (foe ST {before} -> {after})")

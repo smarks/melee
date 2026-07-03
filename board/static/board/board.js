@@ -876,9 +876,17 @@ let optCache = {};
 async function loadOptions(f) {
   if (optCache[f.uid]) return optCache[f.uid];
   const info = await api(`/api/game/${GID}/options?uid=${f.uid}`);
-  // In combat, the relevant ranged-vs-melee target list rides ._targets.
-  info._targets = (f.weapon && missileReady(f, info))
-    ? info.missile_targets : info.melee_targets;
+  // In combat, ._targets holds EVERY foe this figure can attack with its ready
+  // weapon: a bow/crossbow's missile targets, a throwable weapon's thrown targets
+  // (distant foes), AND its melee targets (adjacent foes) — the union. A throwable
+  // melee weapon (spear/javelin/axe…) can both strike up close and be hurled at
+  // range, so picking missile XOR melee dropped its thrown shot: a committed
+  // thrower then had NO clickable target, PLAN[uid] could never be set, and the
+  // must-attack gate left Resolve disabled forever (#217). The two lists are
+  // disjoint (thrown = foes out of melee reach), so the union is clean; for a pure
+  // bow melee_targets is empty and for a pure melee weapon missile_targets is.
+  info._targets = [...new Set([...(info.missile_targets || []),
+                               ...(info.melee_targets || [])])];
   optCache[f.uid] = info;
   return info;
 }
