@@ -41,6 +41,20 @@ def test_a_clean_hit_reads_as_a_swing_that_connects():
                     "— and connects for 7 (needed 12 or less, rolled 9).")
 
 
+def test_an_auto_hit_is_narrated_as_unavoidable_not_a_bogus_roll():
+    # A flying weapon that strikes a figure mid-flight is a forced hit (#229): the
+    # to-hit roll did not decide it, so a classic roll-under result can carry a
+    # `rolled` that is OVER `needed`. Narrating "(needed 5 or less, rolled 11)"
+    # prints an impossible "connects on a miss-roll"; an auto-hit must read plainly.
+    red, blue = _duo()
+    line = narrate_attack(
+        red, blue,
+        _result(BROADSWORD, hit=True, damage=2, auto_hit=True, rolled=11, needed=5))
+    assert "connects for 2" in line
+    assert "an unavoidable hit" in line
+    assert "rolled 11" not in line and "needed 5" not in line
+
+
 def test_a_defended_miss_reads_as_a_dodge():
     red, blue = _duo()
     blue.dodging = True

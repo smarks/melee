@@ -75,6 +75,10 @@ class AttackResult:
     body_hit: bool = False       # crit reaching the Body pool (Tarmar); read by apply_damage
     roll_under: bool = True       # True: hit by rolling <= needed (classic 3d6);
     #                              False: hit by rolling >= needed (Tarmar d20). Read by narration.
+    auto_hit: bool = False        # True: the hit was forced (a flying weapon that
+    #                              struck mid-flight, an HTH free hit) — the to-hit
+    #                              roll did NOT decide it, so `rolled`/`needed` are
+    #                              not a hit/miss test and must not be narrated as one.
 
 
 def classify_roll(

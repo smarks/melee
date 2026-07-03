@@ -1,6 +1,8 @@
 """Turn engine: options, combat ordering, force retreat, injury (Section IV)."""
 from __future__ import annotations
 
+import pytest
+
 from hexarena.dice import Dice
 from hexarena.hex import FLAT, Hex, HexLayout
 
@@ -228,6 +230,76 @@ def test_thrown_weapon_strikes_a_figure_in_its_flight_path() -> None:
     assert blocker.damage_taken > 0                       # the bystander took it
     assert target.damage_taken == 0                       # the intended target is untouched
     assert "Javelin" in [w.name for _, w in state.dropped]  # the javelin lies where it fell
+
+
+def test_missile_never_strikes_a_same_side_figure_in_the_flight_lane() -> None:
+    # Bug A (#229): Corin (red) shoots at an enemy, but teammate Varian (red)
+    # stands in the flight lane. A missile must never strike its own side — the
+    # shot passes over the teammate untouched, no friendly fire.
+    from engine.rules_data import LIGHT_CROSSBOW
+    arena = Arena(cols=9, rows=15)
+    corin = create_human("Corin", 12, 12, "red",
+                         weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    varian = create_human("Varian", 12, 12, "red",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "blue", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    corin.position = Hex(5, 5)
+    varian.position = Hex(5, 6)                           # teammate in the lane
+    foe.position = Hex(5, 8)                              # the intended enemy
+    _aim(corin, foe)
+    # Dice that (pre-fix) would fail the blocker roll-to-miss and hit Varian.
+    state = GameState(arena, [corin, varian, foe],
+                      dice=Dice(scripted=[6, 6, 6] + [3] * 20))
+    corin.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(corin, foe)
+    state.resolve_combat()
+    assert varian.damage_taken == 0                       # the teammate is untouched
+    assert not any("at Varian" in line for line in state.log)   # never narrated as fired-upon
+
+
+def test_queue_attack_rejects_a_same_side_target() -> None:
+    # Bug A (#229): the engine refuses a same-side target however it was queued.
+    # A missile at a teammate in the front arc passes every pre-existing guard
+    # (arc, reach), so only the explicit same-side rejection stops the friendly
+    # fire — matched on its message so a coincidental raise can't mask it.
+    from engine.rules_data import LIGHT_CROSSBOW
+    arena = Arena(cols=9, rows=15)
+    attacker = create_human("Atk", 12, 12, "red",
+                            weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    ally = create_human("Ally", 12, 12, "red", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    attacker.position = Hex(5, 5)
+    ally.position = Hex(5, 8)
+    _aim(attacker, ally)                                  # teammate squarely in the front arc
+    state = GameState(arena, [attacker, ally])
+    attacker.current_option = Option.MISSILE_ATTACK
+    with pytest.raises(IllegalAction, match="same side"):
+        state.queue_attack(attacker, ally)
+
+
+def test_classic_force_hit_strike_is_narrated_truthfully() -> None:
+    # Bug B (#229): a classic (3d6 roll-under) stray missile that force-hits an
+    # enemy blocker mid-flight is an auto-hit — its `rolled` can exceed `needed`.
+    # It must NOT read "connects (needed 5 or less, rolled 11)"; the log must be
+    # truthful about the unavoidable hit.
+    from engine.rules_data import LIGHT_CROSSBOW
+    arena = Arena(cols=9, rows=15)
+    shooter = create_human("Shooter", 12, 12, "red",
+                           weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    blocker = create_human("Blocker", 12, 12, "blue", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Foe", 12, 12, "blue", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    shooter.position = Hex(5, 5)
+    blocker.position = Hex(5, 6)                          # enemy in the lane
+    foe.position = Hex(5, 8)
+    _aim(shooter, foe)
+    # blocker roll-to-miss fails (18), then the forced strike rolls 14 (> needed).
+    state = GameState(arena, [shooter, blocker, foe],
+                      dice=Dice(scripted=[6, 6, 6, 6, 5, 3] + [3] * 20))
+    shooter.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(shooter, foe)
+    state.resolve_combat()
+    strike = next(line for line in state.log if "at Blocker" in line)
+    assert "an unavoidable hit" in strike
+    assert "rolled" not in strike                          # no contradictory roll shown
 
 
 def test_drop_and_pick_up_a_weapon() -> None:
