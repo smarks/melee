@@ -360,6 +360,9 @@
   {% if request.user.is_staff %}<button onclick="openAdmin()" title="Manage users and characters">⚙ Admin</button>{% endif %}
   <span class="sub">The Fantasy Trip — man-to-man combat</span>
   <span class="sub" id="turnInfo"></span>
+  <button id="debugLogBtn" onclick="downloadDebugLog()"
+          style="font-size:11px;padding:2px 7px;opacity:.75"
+          title="Download + copy the diagnostic event log (bug report)">🐞 Log</button>
   <span class="sub headright" style="margin-left:auto">
     <label class="themepick">Theme
       <select id="themePicker" title="Choose a colour theme"></select>

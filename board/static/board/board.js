@@ -49,6 +49,105 @@ function postJSON(path, body) {
     body: JSON.stringify(body)}).then(r => r.json());
 }
 
+// ---- diagnostic event log (#222) --------------------------------------------
+// A bounded in-memory ring buffer of structured events, SEPARATE from the
+// in-game narrative "Game status" log. Each entry pairs a category + message
+// with a compact snapshot of the client state that matters for reading bugs, so
+// after reproducing one you can grab the log and see exactly what happened and
+// why — no fresh instrumentation pass. The 🐞 Log button downloads + copies it;
+// ?debug=1 additionally mirrors every dbg() call to console.debug.
+const DBG_MAX = 500;              // ring-buffer cap: keep the last N events
+const DBG = [];
+const DBG_T0 = Date.now();        // base time so entries read as "+123ms"
+let dbgSeq = 0;
+const DBG_MIRROR = new URLSearchParams(location.search).get("debug") === "1";
+window.__MELEE_DBG__ = DBG;       // reachable from the console and e2e tests
+// The compact context snapshot captured with every entry (never throws — a bad
+// snapshot must not break the very logging meant to diagnose a bug).
+function dbgCtx() {
+  try {
+    return {
+      phase: S ? S.phase : null,
+      turn: S ? S.turn : null,
+      active_uid: S ? S.active_uid : null,
+      sel,
+      plan: Object.keys(PLAN),
+      must_attack: S ? (S.must_attack || []) : [],
+    };
+  } catch (err) { return {ctxError: String(err)}; }
+}
+function dbg(cat, msg, extra) {
+  const entry = {t: Date.now(), seq: ++dbgSeq, cat, msg, ctx: dbgCtx()};
+  if (extra !== undefined) entry.extra = extra;
+  DBG.push(entry);
+  if (DBG.length > DBG_MAX) DBG.shift();
+  if (DBG_MIRROR) console.debug(`[#${entry.seq}] ${cat}: ${msg}`, entry.ctx, extra ?? "");
+  return entry;
+}
+// Transition tracker: log phase / turn / active-figure changes exactly once,
+// when they actually change (called from render, so it never spams per-render).
+let _dbgPhase, _dbgTurn, _dbgActive;
+function dbgTransitions() {
+  if (!S) return;
+  if (S.phase !== _dbgPhase) { dbg("TRANSITION", `phase ${_dbgPhase} → ${S.phase}`); _dbgPhase = S.phase; }
+  if (S.turn !== _dbgTurn) { dbg("TRANSITION", `turn ${_dbgTurn} → ${S.turn}`); _dbgTurn = S.turn; }
+  if (S.active_uid !== _dbgActive) {
+    const active = S.active_uid ? figByUid(S.active_uid) : null;
+    dbg("TRANSITION", `active ${_dbgActive} → ${S.active_uid}` + (active ? ` (${active.name})` : ""));
+    _dbgActive = S.active_uid;
+  }
+}
+let _dbgGateKey = null;   // dedupe the combat Resolve-gate log to state changes
+
+// One entry -> one greppable line:
+//   [+123ms #7] CAT: msg | phase=… active=… plan=[…] must_attack=[…] | extra
+function dbgFormatEntry(entry) {
+  const ctx = entry.ctx || {};
+  const plan = (ctx.plan || []).join(",");
+  const mustAttack = (ctx.must_attack || []).join(",");
+  let line = `[+${entry.t - DBG_T0}ms #${entry.seq}] ${entry.cat}: ${entry.msg}`
+    + ` | phase=${ctx.phase} turn=${ctx.turn} active=${ctx.active_uid}`
+    + ` sel=${ctx.sel} plan=[${plan}] must_attack=[${mustAttack}]`;
+  if (entry.extra !== undefined) line += " | " + JSON.stringify(entry.extra);
+  return line;
+}
+function dbgText() {
+  const header = `Melee diagnostic log — gid=${GID} — ${new Date().toISOString()}`
+    + ` — ${DBG.length} entr${DBG.length === 1 ? "y" : "ies"}`;
+  const lines = DBG.map(dbgFormatEntry);
+  const snapshot = "\n\n---- current state snapshot ----\n" + JSON.stringify({
+    gid: GID, profile: PROFILE, you_control: YOU_CONTROL, open_seats: OPEN_SEATS,
+    is_admin: IS_ADMIN, plan: PLAN, combatResolvedTurn, sel, state: S,
+  }, null, 2);
+  return header + "\n" + lines.join("\n") + snapshot;
+}
+// 🐞 Log button: download the buffer as a readable, greppable text file (plus a
+// trailing full-state JSON snapshot) AND copy the same text to the clipboard.
+async function downloadDebugLog() {
+  const text = dbgText();
+  const blob = new Blob([text], {type: "text/plain"});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `melee-debug-${GID || "nogame"}-${Date.now()}.txt`;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  let copied = false;
+  if (navigator.clipboard) {
+    try { await navigator.clipboard.writeText(text); copied = true; } catch (err) { /* clipboard blocked */ }
+  }
+  flash(copied ? "🐞 Debug log downloaded + copied to clipboard."
+               : "🐞 Debug log downloaded.");
+}
+// Global JS error capture — a thrown error or a rejected promise lands in the
+// same log, so a crash is readable alongside the interactions that led to it.
+window.addEventListener("error", (event) =>
+  dbg("ERROR", "window.onerror: " + (event.message || event.error),
+      {filename: event.filename, lineno: event.lineno}));
+window.addEventListener("unhandledrejection", (event) =>
+  dbg("ERROR", "unhandledrejection: "
+      + ((event.reason && event.reason.message) || String(event.reason))));
+
 async function startGame(query) {
   const data = await api(`/api/game/new?${query}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
@@ -115,7 +214,11 @@ function renderPlayers() {
   if (reason) reason.textContent = (locked || enoughPlayers) ? "" : "Add at least 2 players to start.";
 }
 // New Game starts a match through the existing setup flow, then locks the panel.
-async function newGame() { if (GAME_ACTIVE || PLAYERS.length < 2) return; await startSetup(); }
+async function newGame() {
+  if (GAME_ACTIVE || PLAYERS.length < 2) return;
+  dbg("INTERACT", "New Game pressed", {players: PLAYERS.map(p => p.type)});
+  await startSetup();
+}
 // The editable pre-game state: no game tracked, Game Control unlocked with New
 // Game live, the Map blank, and the Characters tracker empty. This is what a
 // fresh load (no deep-link) shows, and where End Game returns to. (#192)
@@ -163,7 +266,7 @@ async function act(body) {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)
   });
-  if (data.error) { flash(data.error); return null; }
+  if (data.error) { dbg("ERROR", `act rejected: ${data.error}`, {sent: body}); flash(data.error); return null; }
   S = data.state; LAYOUT = data.layout; captureOwnership(data); optCache = {};
   return data;
 }
@@ -317,6 +420,7 @@ function drawMegahexBorders(svg) {
 // ---- rendering --------------------------------------------------------------
 function render() {
   if (!S) return;
+  dbgTransitions();                      // log phase / turn / active changes
   if (S.phase !== lastPhase) {           // new phase → fresh, empty plan
     lastPhase = S.phase; PLAN = {}; warnKind = null; resetSelection(); closeMenu();
   }
@@ -600,14 +704,40 @@ function drawControls() {
         line.addEventListener("click", () => onFigureClick(f));
       }
       const resolveBtn = bigPrimary(c, actors.length ? "Resolve attacks" : "Resolve combat", () => {
+        dbg("INTERACT", "Resolve pressed", {queued: Object.keys(PLAN).length, actors: actors.length});
         combatResolvedTurn = S.turn;       // next render offers "End turn"
         executePlans("combat");
       });
-      if (untargeted.length) resolveBtn.disabled = true;
+      if (untargeted.length) {
+        resolveBtn.disabled = true;
+        // GATE: why Resolve is disabled — which must_attack figures are still
+        // untargeted. Deduped to when the untargeted set actually changes so a
+        // stalled combat doesn't refill the log on every re-render.
+        const gateKey = untargeted.map(f => f.uid).sort().join(",");
+        if (gateKey !== _dbgGateKey) {
+          _dbgGateKey = gateKey;
+          dbg("GATE", `Resolve disabled — ${untargeted.length} must-attack figure(s) untargeted`,
+              {untargeted: untargeted.map(f => ({uid: f.uid, name: f.name, option: f.option}))});
+          // Anomaly self-check (#217/#221 signature): a must-attack figure with
+          // NO queueable target offered at all is the resolve-gate deadlock —
+          // Resolve can never clear. Cheap: only inspects already-cached options.
+          for (const f of untargeted) {
+            const info = optCache[f.uid];
+            if (info && !(info._targets || []).length && !(info.hth_targets || []).length)
+              dbg("WARN", `deadlock: ${f.name} must attack but has no queueable target offered`,
+                  {uid: f.uid, option: f.option, weapon: f.weapon});
+          }
+        }
+      } else {
+        _dbgGateKey = null;
+      }
     } else {
       setHint("Attacks resolved — push back any beaten foes, then end the turn.");
       drawForceRetreat(c);                 // post-combat shoves, if any
-      bigPrimary(c, "End turn →", () => { resetAll(); act({type: "end_turn"}).then(after); });
+      bigPrimary(c, "End turn →", () => {
+        dbg("INTERACT", "End turn pressed");
+        resetAll(); act({type: "end_turn"}).then(after);
+      });
     }
     return;
   }
@@ -784,6 +914,7 @@ function openMenu(f) {
 }
 
 function chooseMoveOption(f, option) {
+  dbg("INTERACT", `chose option ${option} for ${f.name}`, {uid: f.uid, option});
   sel = f.uid; pendingDest = null; pendingReady = null;
   // A weapon change with more than one carried weapon opens the placement panel so
   // the player explicitly picks which weapon to ready (#142) instead of auto-toggling.
@@ -800,6 +931,7 @@ function chooseMoveOption(f, option) {
 }
 function setHth(f, target) {
   const e = figByUid(target);
+  dbg("INTERACT", `queue grapple ${f.name} → ${e ? e.name : target}`, {attacker: f.uid, foe: target});
   PLAN[f.uid] = {uid: f.uid, phase: "combat", target, hth: true,
                  label: `🤼 Grapple ${e ? e.name : target}`};
   render();
@@ -821,6 +953,7 @@ function setDisengageMove(f, dest) {
 }
 function setAttack(f, target) {
   const e = figByUid(target);
+  dbg("INTERACT", `queue attack ${f.name} → ${e ? e.name : target}`, {attacker: f.uid, foe: target});
   PLAN[f.uid] = {uid: f.uid, phase: "combat", target, label: `Attack ${e ? e.name : target}`};
   render();
 }
@@ -835,14 +968,17 @@ function isActive(f) { return !!f && S.active_uid === f.uid; }
 function hasPassed(f) { return !!f && (S.passed || []).includes(f.uid); }
 function canPass(f) { return isActive(f) && !hasPassed(f); }
 function selectDoNothing(f) {
+  dbg("INTERACT", `do-nothing ${f.name}`, {uid: f.uid});
   closeMenu();
   act({type: "do_nothing", uid: f.uid}).then(after);
 }
 function selectPass(f) {
+  dbg("INTERACT", `pass ${f.name}`, {uid: f.uid});
   closeMenu();
   act({type: "pass", uid: f.uid}).then(after);
 }
 function submitMove(f, option, {dest = null, facing = "auto", ready = null} = {}) {
+  dbg("INTERACT", `submit move ${f.name}: ${option}`, {uid: f.uid, option, dest, facing, ready});
   closeMenu(); chosenOption = null; pendingDest = null; pendingReady = null;
   act({type: "move", uid: f.uid, option, dest, facing, ready}).then(after);
 }
@@ -904,8 +1040,10 @@ async function onFigureClick(f) {
   // is always allowed -- theirs or an enemy's (#214). ACTING stays gated: the
   // action menu only opens for your own actionable figure. So a figure you can't
   // command is simply inspected, not flashed away.
+  const tag = {uid: f.uid, name: f.name, side: f.side, myControlled: myControlled(f), phase: S.phase};
   if (S.phase === "select") {
-    if (!isActive(f) || !myControlled(f)) { inspectFigure(f); return; }
+    if (!isActive(f) || !myControlled(f)) { dbg("INTERACT", `figure click ${f.name} → inspect`, tag); inspectFigure(f); return; }
+    dbg("INTERACT", `figure click ${f.name} → open-menu`, tag);
     sel = f.uid; chosenOption = null; pendingDest = null; pendingFacing = f.facing; pendingReady = null;
     optInfo = await loadOptions(f);
     render(); openMenu(f);
@@ -914,13 +1052,16 @@ async function onFigureClick(f) {
       // #220: a foe click is the natural "pick the target" gesture. If you have a
       // committed shooter still awaiting a target (the must-attack gate), aim its
       // shot at this foe so Resolve can clear — otherwise just inspect the foe.
-      if (await queuePendingShotAt(f)) return;
+      if (await queuePendingShotAt(f)) { dbg("INTERACT", `figure click ${f.name} → queue-shot`, tag); return; }
+      dbg("INTERACT", `figure click ${f.name} → inspect`, tag);
       inspectFigure(f); return;
     }
+    dbg("INTERACT", `figure click ${f.name} → open-menu`, tag);
     sel = f.uid; pendingFacing = f.facing;
     optInfo = await loadOptions(f);
     render(); openMenu(f);
   } else {
+    dbg("INTERACT", `figure click ${f.name} → select`, tag);
     sel = f.uid; render();
   }
 }
@@ -1831,4 +1972,5 @@ Object.assign(window, {
   adminDeleteChar, adminCreateCharFor,
   openEditor, closeEditor, startCustom,
   copyLink, seatAction, closeLiveEdit, resetTheme,
+  downloadDebugLog,
 });
