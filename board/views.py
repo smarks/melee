@@ -257,11 +257,15 @@ def _advance_computer(game: dict) -> None:
             if controllers.get(active.side) != "computer":
                 return                       # a human must set this figure's action
             ai.take_action(state, active)    # one figure, then loop for the next
+            _debug_record(game, "computer", "ai_action",
+                          {"uid": active.uid, "side": active.side})
         elif phase == "combat":
             if not game.get("combat_prepared"):
                 for side, controller in controllers.items():
                     if controller == "computer":
                         ai.queue_attacks(state, side)
+                        _debug_record(game, "computer", "ai_queue_attacks",
+                                      {"side": side})
                 game["combat_prepared"] = True
             return                           # human resolves + ends the turn
         else:
@@ -440,6 +444,64 @@ def _payload(game: dict) -> dict:
         "layout": game["layout"],
         "state": dump_game(game["state"], meta=_meta(game)),
     }
+
+
+# ---- diagnostic trail (#222) ------------------------------------------------
+# A bounded per-game ring buffer of every dispatched action — the client's, the
+# computer's, and the system transitions the client never sees — each stamped
+# with the resulting phase and a one-line state summary (plus any IllegalAction
+# it raised). Read it back from GET /api/game/<gid>/debug to see exactly what
+# happened without a fresh instrumentation pass. Distinct from the in-game
+# narrative log (state.log).
+_DEBUG_TRAIL_CAP = 200
+_DEBUG_PARAM_KEYS = ("uid", "option", "dest", "target", "facing", "ready", "side")
+
+
+def _debug_params(body: dict) -> dict:
+    """The key params of a dispatched action, for the diagnostic trail."""
+    return {key: body[key] for key in _DEBUG_PARAM_KEYS if key in body}
+
+
+def _debug_summary(game: dict) -> str:
+    """A one-line snapshot of the game right now, for the diagnostic trail."""
+    state: GameState = game["state"]
+    phase = game["phase"]
+    parts = [f"turn {state.turn_number}", phase]
+    if phase == "select":
+        active = state.active_character()
+        parts.append(f"active={active.uid if active else None}")
+    elif phase == "combat":
+        parts.append(f"queued={len(state._pending)}")
+    victor = state.victor()
+    if victor:
+        parts.append(f"victory={victor}")
+    return " · ".join(parts)
+
+
+def _debug_record(game: dict, source: str, action: str | None, params: dict,
+                  *, error: str | None = None) -> None:
+    """Append one entry to the game's bounded diagnostic ring buffer (#222).
+
+    ``source`` is "client" (a browser action), "computer" (an AI move the
+    client never issued), or "system" (a server-driven transition such as an
+    auto-ended idle combat turn).
+    """
+    trail = game.setdefault("_debug", [])
+    seq = game.get("_debug_seq", 0) + 1
+    game["_debug_seq"] = seq
+    trail.append({
+        "seq": seq,
+        "t": int(time.time() * 1000),
+        "source": source,
+        "action": action,
+        "params": params,
+        "phase": game["phase"],
+        "turn": game["state"].turn_number,
+        "summary": _debug_summary(game),
+        "error": error,
+    })
+    if len(trail) > _DEBUG_TRAIL_CAP:
+        del trail[:-_DEBUG_TRAIL_CAP]
 
 
 # ---- persistence (save / load-on-demand, #12) -------------------------------
@@ -1083,6 +1145,7 @@ def api_action(request, gid):
     try:
         _authorize_action(game, request, body)
         result = _dispatch(game, body, is_admin=_is_admin(request))
+        _debug_record(game, "client", body.get("type"), _debug_params(body))
         # Drive the computer, then auto-end an idle combat turn -- and if that opens
         # a fresh select pass led by a computer figure, drive that too. Without the
         # re-drive, a combat turn that auto-ends into a computer-first initiative
@@ -1091,9 +1154,14 @@ def api_action(request, gid):
             _advance_computer(game)
             if not _auto_end_if_idle(game):
                 break
+            _debug_record(game, "system", "auto_end_turn", {})
     except IllegalAction as exc:
+        _debug_record(game, "client", body.get("type"), _debug_params(body),
+                      error=str(exc))
         return JsonResponse({"error": str(exc)}, status=400)
     except Forbidden as exc:
+        _debug_record(game, "client", body.get("type"), _debug_params(body),
+                      error=str(exc))
         return JsonResponse({"error": str(exc)}, status=403)
 
     payload = _payload(game)
@@ -1102,6 +1170,21 @@ def api_action(request, gid):
     if result is not None:
         payload["result"] = result
     return JsonResponse(payload)
+
+
+def api_debug(request, gid):
+    """The diagnostic action trail for a game (#222).
+
+    Returns the bounded per-game ring buffer of dispatched actions — client,
+    computer, and system transitions — each with the resulting phase, a
+    one-line state summary, and any IllegalAction it raised. Left open (a hobby
+    game) so the owner can grab it without an auth dance; it exposes only the
+    action shapes already visible in normal play, never secrets.
+    """
+    game = _resident_game(gid)
+    if not game:
+        return JsonResponse({"error": "unknown game"}, status=404)
+    return JsonResponse({"gid": gid, "trail": game.get("_debug", [])})
 
 
 @csrf_exempt

@@ -1275,3 +1275,93 @@ def test_seat_auth_blocks_do_nothing_and_pass_for_non_owners(client: Client) -> 
             data=json.dumps({"type": action, "uid": active}),
             content_type="application/json")
         assert blocked.status_code == 403
+
+
+# ---- diagnostic action trail (#222) -----------------------------------------
+def test_debug_endpoint_returns_the_client_action_trail(client: Client) -> None:
+    # A dispatched client action lands in the game's diagnostic ring buffer with
+    # its params, the resulting phase, a one-line summary, and a monotonic seq.
+    data = _new(client)
+    gid = data["gid"]
+    active = data["state"]["active_uid"]
+    _post(client, gid, {"type": "do_nothing", "uid": active})
+
+    body = client.get(f"/api/game/{gid}/debug").json()
+    assert body["gid"] == gid
+    trail = body["trail"]
+    assert trail, "expected at least the do_nothing action in the trail"
+    entry = next(e for e in trail if e["action"] == "do_nothing")
+    assert entry["source"] == "client"
+    assert entry["params"]["uid"] == active
+    assert entry["turn"] == 1
+    assert entry["error"] is None
+    assert "select" in entry["summary"]
+    seqs = [e["seq"] for e in trail]
+    assert seqs == sorted(seqs)          # monotonic, in dispatch order
+
+
+def test_debug_endpoint_records_illegal_actions(client: Client) -> None:
+    # A rejected action (acting out of turn) is recorded with its IllegalAction
+    # message, so the log shows *why* it failed -- not just that nothing happened.
+    data = _new(client)
+    gid = data["gid"]
+    order = data["state"]["initiative_order"]
+    active = data["state"]["active_uid"]
+    not_active = next(uid for uid in order if uid != active)
+    _post(client, gid, {"type": "move", "uid": not_active, "option": "move", "facing": 0})
+
+    trail = client.get(f"/api/game/{gid}/debug").json()["trail"]
+    rejected = next(e for e in trail if e["error"])
+    assert rejected["action"] == "move"
+    assert "turn to act" in rejected["error"]
+
+
+def test_debug_endpoint_records_computer_actions(client: Client) -> None:
+    # AI moves the client never issued are captured too, so a vs-computer bug can
+    # be read end to end (source == "computer").
+    data = client.get("/api/game/new?seed=3&computer=blue").json()
+    gid = data["gid"]
+    _drive_selection(client, gid)
+    trail = client.get(f"/api/game/{gid}/debug").json()["trail"]
+    assert any(e["source"] == "computer" for e in trail)
+
+
+def test_debug_endpoint_records_combat_targeting(client: Client) -> None:
+    import json
+
+    from board.views import GAMES
+
+    red, blue = _combat_duel()
+    try:
+        client.post("/api/game/duel-test/action",
+                    data=json.dumps({"type": "queue_attack", "uid": red.uid,
+                                     "target": blue.uid}),
+                    content_type="application/json")
+        trail = client.get("/api/game/duel-test/debug").json()["trail"]
+        queued = next(e for e in trail if e["action"] == "queue_attack")
+        assert queued["params"]["uid"] == red.uid
+        assert queued["params"]["target"] == blue.uid
+        assert queued["phase"] == "combat"
+    finally:
+        del GAMES["duel-test"]
+
+
+@pytest.mark.django_db
+def test_debug_endpoint_unknown_game_is_404(client: Client) -> None:
+    # An unknown gid falls through to the (empty) saved-game lookup -> 404.
+    assert client.get("/api/game/no-such-game/debug").status_code == 404
+
+
+def test_debug_trail_is_bounded(client: Client) -> None:
+    from board.views import GAMES, _DEBUG_TRAIL_CAP, _debug_record
+
+    data = _new(client)
+    game = GAMES[data["gid"]]
+    for _ in range(_DEBUG_TRAIL_CAP + 50):
+        _debug_record(game, "client", "do_nothing", {})
+    trail = client.get(f"/api/game/{data['gid']}/debug").json()["trail"]
+    assert len(trail) == _DEBUG_TRAIL_CAP
+    # The cap drops the OLDEST entries; seq keeps climbing (never reset).
+    seqs = [e["seq"] for e in trail]
+    assert seqs == sorted(seqs)
+    assert seqs[-1] > _DEBUG_TRAIL_CAP
