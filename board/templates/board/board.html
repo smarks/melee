@@ -6,11 +6,15 @@
 <title>Melee — The Fantasy Trip</title>
 <style>
   :root {
-    --bg: #34313f; --panel: #3f3c4c; --ink: #f1eff6; --muted: #c0b9cf;
-    --line: #5a546b; --hex: #4d4960; --hex-stroke: #6a6480; --hex-entrance: #262338;
-    --red: #d0524f; --blue: #4f86d0; --green: #57b894; --gold: #e0b13c; --violet: #b07ad8;
-    --reach: #3a6f4a; --reach2: #5fae74;
-    --target: #d8b54a; --accent: #8a78d0;
+    /* Defaults mirror the "Dark" preset below so the first paint (before the
+       theme script runs) already matches. --accent-ink is the text colour used
+       on an --accent-filled surface (primary buttons, menu hover) and is chosen
+       per theme for >= 4.5:1 contrast against that theme's accent. */
+    --bg: #23212e; --panel: #2d2a39; --ink: #f1eff7; --muted: #b9b2ca;
+    --line: #463f57; --hex: #3b3750; --hex-stroke: #5a5473; --hex-entrance: #191725;
+    --red: #e46b68; --blue: #6ea6e6; --green: #4fc298; --gold: #e6bb4a; --violet: #c295ee;
+    --reach: #34614a; --reach2: #5aa87a;
+    --target: #e0bd52; --accent: #9d8cf0; --accent-ink: #17141f;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
@@ -87,9 +91,11 @@
           border-radius: 8px; padding: 4px; min-width: 160px; box-shadow: 0 8px 22px #0008; }
   .menu .head { padding: 5px 10px 6px; font-weight: 600; font-size: 12px; color: var(--muted); }
   .menu .row { padding: 7px 10px; border-radius: 5px; cursor: pointer; font-size: 13px; }
-  .menu .row:hover { background: var(--accent); color: #fff; }
+  .menu .row:hover { background: var(--accent); color: var(--accent-ink); }
   .menu .row.muted { color: var(--muted); }
-  .menu .row.disabled { color: var(--muted); opacity: .55; cursor: not-allowed; }
+  /* Disabled menu rows: muted colour (which clears its contrast threshold),
+     never a faint opacity, so the reason text stays readable. */
+  .menu .row.disabled { color: var(--muted); cursor: not-allowed; }
   .menu .row.disabled:hover { background: none; color: var(--muted); }
   .menu .row .why { font-size: 11px; opacity: .8; font-style: italic; }
   .menu .row.clear { color: var(--target); }
@@ -105,12 +111,21 @@
               text-transform: uppercase; letter-spacing: .6px; }
   .banner { font-weight: 600; }
   .muted { color: var(--muted); }
-  button { background: #2f2b3b; color: var(--ink); border: 1px solid var(--line);
+  /* Button surface is derived from the theme (a slight ink-tint over the panel)
+     so buttons stay legible on light AND dark grounds -- a fixed dark fill made
+     option buttons dark-on-dark in the Light/Parchment themes. */
+  button { background: color-mix(in srgb, var(--ink) 8%, var(--panel)); color: var(--ink);
+           border: 1px solid var(--line);
            border-radius: 7px; padding: 7px 11px; font-size: 13px; cursor: pointer;
            margin: 3px 4px 3px 0; }
   button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #1a1622; font-weight: 600; }
-  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  /* Disabled buttons: signal "off" with a muted colour + faded surface rather
+     than a low opacity that would drop the label below its legible contrast. */
+  button:disabled { background: transparent; color: var(--muted); border-color: var(--line);
+                    cursor: not-allowed; font-weight: 400; }
+  button:disabled:hover { border-color: var(--line); }
+  button.primary:disabled { background: transparent; color: var(--muted); }
   .chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
           border: 1px solid var(--line); }
   /* A small replica of the board token's numbered disc, to match data to a counter. */
@@ -123,13 +138,13 @@
   .chip.gold { color: var(--gold); border-color: var(--gold); }
   .chip.violet { color: var(--violet); border-color: var(--violet); }
   #log { padding: 6px 16px 10px; font-size: 15px; }
-  #log div { padding: 2px 0; border-bottom: 1px solid #2a2733; color: var(--muted); }
+  #log div { padding: 2px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
   /* A blow that actually lands stands out from misses, dodges, and movement. */
   #log div.log-hit { color: var(--ink); font-weight: 600; font-size: 16.5px; }
   #log div.log-crit { color: var(--gold); font-weight: 700; font-size: 18px;
                       letter-spacing: .2px; }
   .roster .row { display: flex; justify-content: space-between; padding: 4px 0;
-                 border-bottom: 1px solid #2a2733; cursor: pointer; }
+                 border-bottom: 1px solid var(--line); cursor: pointer; }
   /* At-a-glance kit under each roster name: readied weapon + DX (#214). */
   .roster .row .rowmain { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .roster .row .kit { font-size: 12px; }
@@ -142,7 +157,7 @@
   .charsheet .sheet-weapons li { padding: 1px 0; }
   .charsheet .sheet-weapons .readied { color: var(--gold); font-weight: 600; }
   .charsheet .sheet-gear { margin-top: 6px; font-size: 13px; }
-  .roster .row:hover { color: #fff; }
+  .roster .row:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
   .roster .row.dead { opacity: .4; text-decoration: line-through; }
   /* Per-character selection (#192): the figure with initiative is highlighted;
      figures still waiting their turn are dimmed; a passer shows a waiting tint. */
@@ -157,10 +172,19 @@
      block greyed as a preview of the control that becomes theirs on their turn. */
   .roster .charctl { display: flex; flex-direction: column; gap: 6px;
       margin: 2px 0 12px; padding: 8px; border: 1px solid var(--line);
-      border-radius: 8px; background: rgba(255, 255, 255, .02); }
-  .roster .charctl.enabled { border-color: var(--accent);
-      background: rgba(230, 184, 0, .1); }
-  .roster .charctl.disabled { opacity: .55; }
+      border-radius: 8px; background: transparent; }
+  /* Enabled (the figure whose turn it is): a bright accent-tinted card with a
+     2px accent border, so the live control stands out in every theme. Colour
+     comes from the theme's own --accent via color-mix, not a fixed rgba. */
+  .roster .charctl.enabled { border: 2px solid var(--accent); padding: 7px;
+      background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); }
+  .roster .charctl.enabled .opt { color: var(--ink); }
+  /* Disabled (a preview of another figure's future turn): greyed with the muted
+     token — never a low opacity — so its text stays legible while reading as off. */
+  .roster .charctl.disabled { border-color: var(--line);
+      background: color-mix(in srgb, var(--muted) 6%, transparent); color: var(--muted); }
+  .roster .charctl.disabled .opt,
+  .roster .charctl.disabled .opt .why { color: var(--muted); }
   /* The inline option list (#202): every action for the character, the valid ones
      live, the rest greyed with the server's reason. */
   .roster .charctl .opt-list { display: flex; flex-direction: column; gap: 4px; }
@@ -216,9 +240,9 @@
   #controls .checklist .row { display: flex; justify-content: space-between;
       gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
   #controls .checklist .row:last-child { border-bottom: none; }
-  #controls .checklist .done { color: #8ad08a; }
+  #controls .checklist .done { color: var(--green); }
   #controls .checklist .todo { color: var(--accent); font-weight: 600; }
-  #controls .warnline { color: #e3b34d; font-size: 12.5px; margin-top: 8px; }
+  #controls .warnline { color: var(--target); font-size: 12.5px; margin-top: 8px; }
   #editor, #setup, #admin, #liveEdit { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
             flex-direction: column; align-items: center; overflow: auto; }
   #editor, #admin, #liveEdit { z-index: 55; }   /* opens on top of the setup panel */
@@ -227,7 +251,7 @@
   #editorRoster .card, #liveEditSlot .card { border: 1px solid var(--line); border-radius: 8px;
                         padding: 10px 12px; margin: 8px 0; }
   #editor input, #editor select, #admin input,
-  #liveEdit input, #liveEdit select { background: #2f2b3b; color: var(--ink);
+  #liveEdit input, #liveEdit select { background: color-mix(in srgb, var(--ink) 8%, var(--panel)); color: var(--ink);
     border: 1px solid var(--line); border-radius: 5px; padding: 3px 5px; margin: 1px; }
   #editor label, #liveEdit label { white-space: nowrap; }
   /* The live-edit Apply button sits at full width so it is always obvious and
@@ -249,47 +273,60 @@
     "--bg", "--panel", "--ink", "--muted", "--line",
     "--hex", "--hex-stroke", "--hex-entrance",
     "--red", "--blue", "--green", "--gold", "--violet",
-    "--reach", "--reach2", "--target", "--accent",
+    "--reach", "--reach2", "--target", "--accent", "--accent-ink",
   ];
   // The corner colour swatches each drive one or more tokens; a saved swatch is a
   // "Custom" tweak layered ON TOP of whatever preset is active.
   window.MELEE_SWATCH_VARS = { bgColor: ["--bg", "--panel"], textColor: ["--ink"], hexColor: ["--hex"] };
   window.MELEE_THEMES = {
+    // A refined indigo dark: deep desaturated-violet base, soft lavender accent,
+    // side colours brightened just enough to clear 3:1 on the lighter panel.
     "Dark": {
-      "--bg": "#34313f", "--panel": "#3f3c4c", "--ink": "#f1eff6", "--muted": "#c0b9cf", "--line": "#5a546b",
-      "--hex": "#4d4960", "--hex-stroke": "#6a6480", "--hex-entrance": "#262338",
-      "--red": "#d0524f", "--blue": "#4f86d0", "--green": "#57b894", "--gold": "#e0b13c", "--violet": "#b07ad8",
-      "--reach": "#3a6f4a", "--reach2": "#5fae74", "--target": "#d8b54a", "--accent": "#8a78d0",
+      "--bg": "#23212e", "--panel": "#2d2a39", "--ink": "#f1eff7", "--muted": "#b9b2ca", "--line": "#463f57",
+      "--hex": "#3b3750", "--hex-stroke": "#5a5473", "--hex-entrance": "#191725",
+      "--red": "#e46b68", "--blue": "#6ea6e6", "--green": "#4fc298", "--gold": "#e6bb4a", "--violet": "#c295ee",
+      "--reach": "#34614a", "--reach2": "#5aa87a", "--target": "#e0bd52", "--accent": "#9d8cf0", "--accent-ink": "#17141f",
     },
+    // A true light theme: near-black ink on off-white, deep violet accent with
+    // white text, and darker side colours re-tuned to read on a pale ground.
     "Light": {
-      "--bg": "#f2f0f7", "--panel": "#ffffff", "--ink": "#211d2b", "--muted": "#5d566e", "--line": "#cbc5d8",
-      "--hex": "#e4e0ee", "--hex-stroke": "#b3accb", "--hex-entrance": "#cdd6ea",
-      "--red": "#c23b38", "--blue": "#2f66b8", "--green": "#2b8f6a", "--gold": "#b07d12", "--violet": "#8348c4",
-      "--reach": "#bfe3cc", "--reach2": "#57b98d", "--target": "#c98f12", "--accent": "#6f57c4",
+      "--bg": "#f4f2f8", "--panel": "#ffffff", "--ink": "#1c1826", "--muted": "#574f68", "--line": "#d3cddd",
+      "--hex": "#e7e3f0", "--hex-stroke": "#b3accb", "--hex-entrance": "#d3ddee",
+      "--red": "#c1332f", "--blue": "#245fb0", "--green": "#1f7d5b", "--gold": "#8a6a10", "--violet": "#7a3fbd",
+      "--reach": "#bfe3cc", "--reach2": "#3f9e73", "--target": "#9a6b10", "--accent": "#5b45b8", "--accent-ink": "#ffffff",
     },
+    // Crisp high-contrast: pure black/white with vivid, well-separated hues; a
+    // light lavender accent takes near-black text for a strong primary button.
     "High contrast": {
-      "--bg": "#000000", "--panel": "#0a0a0a", "--ink": "#ffffff", "--muted": "#d0d0d0", "--line": "#4d4d4d",
-      "--hex": "#1a1a1a", "--hex-stroke": "#808080", "--hex-entrance": "#202b45",
-      "--red": "#ff5b57", "--blue": "#5aa2ff", "--green": "#46e39a", "--gold": "#ffd23d", "--violet": "#d18cff",
-      "--reach": "#12683f", "--reach2": "#2ecb82", "--target": "#ffd23d", "--accent": "#8a5cf0",
+      "--bg": "#000000", "--panel": "#0c0c0c", "--ink": "#ffffff", "--muted": "#dadada", "--line": "#585858",
+      "--hex": "#181818", "--hex-stroke": "#8a8a8a", "--hex-entrance": "#1e2b48",
+      "--red": "#ff6b66", "--blue": "#6cb0ff", "--green": "#4fe6a0", "--gold": "#ffd23d", "--violet": "#d79bff",
+      "--reach": "#12683f", "--reach2": "#34d68a", "--target": "#ffd23d", "--accent": "#b394ff", "--accent-ink": "#0c0c0c",
     },
+    // Warm parchment: dark-brown ink on cream, a leather-brown accent with cream
+    // text, muted golds and earthy sides that sit calmly on the aged-paper base.
     "Parchment": {
-      "--bg": "#f2e6cf", "--panel": "#faf1dd", "--ink": "#3a2e1c", "--muted": "#6f5c3e", "--line": "#d8c39a",
-      "--hex": "#e6d6b3", "--hex-stroke": "#bfa878", "--hex-entrance": "#cdd8c2",
-      "--red": "#b23a2e", "--blue": "#2f6ea8", "--green": "#4a7d3a", "--gold": "#b8860b", "--violet": "#7d4aa0",
-      "--reach": "#c3ddb0", "--reach2": "#6fae5a", "--target": "#b8860b", "--accent": "#9a6a3c",
+      "--bg": "#f0e5cd", "--panel": "#faf3e1", "--ink": "#3a2c18", "--muted": "#6c5836", "--line": "#d9c69c",
+      "--hex": "#e7d8b4", "--hex-stroke": "#c0a877", "--hex-entrance": "#d8ddc0",
+      "--red": "#a8342a", "--blue": "#285f92", "--green": "#4a6f2f", "--gold": "#7f5c0e", "--violet": "#6f3f92",
+      "--reach": "#cbdcaf", "--reach2": "#6a9a4a", "--target": "#7f5c0e", "--accent": "#8a5626", "--accent-ink": "#faf3e1",
     },
+    // Solarized dark: Ethan Schoonover's base03/02 ground and base1 text, with
+    // the canonical accents (red/violet nudged one step brighter to clear 3:1
+    // on base02) and the signature blue as the accent.
     "Solarized": {
       "--bg": "#002b36", "--panel": "#073642", "--ink": "#eee8d5", "--muted": "#93a1a1", "--line": "#0f4a5a",
       "--hex": "#073642", "--hex-stroke": "#35707f", "--hex-entrance": "#0b4a5c",
-      "--red": "#dc322f", "--blue": "#268bd2", "--green": "#859900", "--gold": "#b58900", "--violet": "#6c71c4",
-      "--reach": "#0f5a3f", "--reach2": "#2aa198", "--target": "#b58900", "--accent": "#268bd2",
+      "--red": "#e8524f", "--blue": "#3a9bde", "--green": "#8ba300", "--gold": "#bb8f0a", "--violet": "#8288d4",
+      "--reach": "#0f5a3f", "--reach2": "#2aa198", "--target": "#bb8f0a", "--accent": "#3a9bde", "--accent-ink": "#04222b",
     },
+    // Tasteful terminal: phosphor green on near-black, muted-green secondary text,
+    // and side colours toned toward the green/amber family so nothing clashes.
     "Terminal": {
-      "--bg": "#050805", "--panel": "#0b120b", "--ink": "#33ff66", "--muted": "#1f9d43", "--line": "#14401f",
+      "--bg": "#040704", "--panel": "#0b120b", "--ink": "#35ff6a", "--muted": "#2bb350", "--line": "#184a22",
       "--hex": "#0d1a0d", "--hex-stroke": "#1f6b32", "--hex-entrance": "#123a1a",
-      "--red": "#ff5f5f", "--blue": "#5fd7ff", "--green": "#33ff66", "--gold": "#eaff5f", "--violet": "#b96bff",
-      "--reach": "#0f4a24", "--reach2": "#33ff66", "--target": "#eaff5f", "--accent": "#12b33f",
+      "--red": "#ff7a6b", "--blue": "#5fd7ff", "--green": "#35ff6a", "--gold": "#e8e15f", "--violet": "#c58bff",
+      "--reach": "#0f4a24", "--reach2": "#35ff6a", "--target": "#e8e15f", "--accent": "#17c247", "--accent-ink": "#03150a",
     },
   };
   window.meleeActivePreset = function () {
