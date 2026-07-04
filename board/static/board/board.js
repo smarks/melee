@@ -41,7 +41,11 @@ const escapeHtml = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
 // in board.html before this module loads (a module's top-level names are not
 // readable from the template, and Django can't render tags into a static file).
 const LOGGED_IN = !!(window.__MELEE_CONFIG__ && window.__MELEE_CONFIG__.loggedIn);
-const csrftoken = () => (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || "";
+// The CSRF cookie is HTTPONLY (settings hardening), so document.cookie never
+// contains it; the template injects the token into __MELEE_CONFIG__ instead.
+// The cookie read stays as a fallback for any non-httponly deployment.
+const csrftoken = () => (window.__MELEE_CONFIG__ && window.__MELEE_CONFIG__.csrfToken)
+  || (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || "";
 let SAVED = [];   // the signed-in player's saved characters (for the editor)
 function postJSON(path, body) {
   return fetch(path, {method: "POST", headers: {
@@ -1157,6 +1161,9 @@ function drawSelInfo() {
   // The live editor is owner/admin-only: a figure you don't command shows the
   // read-only sheet above but gets no Edit button (#214).
   if (!myControlled(f) || !f.edit_spec) return;
+  // Keep this fighter: a signed-in player may snapshot a fighter they control
+  // into their saved characters, straight from the running game (#234).
+  if (LOGGED_IN) box.appendChild(saveCharacterUi(f));
   if (!CAT || !RULES || CAT.profile !== PROFILE) { ensureGameCatalog(); return; }
   // The full editor opens in its own modal so the stats, gear, and Apply button
   // get a first-class, always-reachable surface instead of being crammed into
@@ -1166,6 +1173,61 @@ function drawSelInfo() {
   edit.textContent = "✎ Edit this fighter…";
   edit.addEventListener("click", () => openLiveEdit(f.uid));
   box.appendChild(edit);
+}
+
+// ---- keep a fighter: save it from the game to your account (#234) -----------
+// Per-figure save status, keyed by uid. The panel is state-driven — it renders
+// from this map on every pass, so nothing here is a transient toast: "saved"
+// stays shown until the page reloads, and a name collision renders a persistent
+// inline rename prompt that survives re-renders (the typed name lives here too).
+const SAVE_CHAR_UI = {};   // uid -> {saved} | {renameTo, error}
+
+function saveCharacterUi(f) {
+  const ui = SAVE_CHAR_UI[f.uid];
+  const wrap = document.createElement("div");
+  wrap.className = "savechar"; wrap.style.marginTop = "10px";
+  if (ui && ui.saved) {
+    wrap.innerHTML = `<span class="muted">Saved to your characters as `
+      + `“${escapeHtml(ui.saved)}” ✓</span>`;
+    return wrap;
+  }
+  if (ui && ui.error) {
+    const problem = document.createElement("div");
+    problem.className = "muted"; problem.style.color = "var(--target)";
+    problem.textContent = ui.error;
+    const rename = document.createElement("input");
+    rename.className = "savechar-name"; rename.maxLength = 80;
+    rename.value = ui.renameTo; rename.style.marginRight = "6px";
+    rename.addEventListener("input", () => { ui.renameTo = rename.value; });
+    const retry = document.createElement("button");
+    retry.textContent = "Save as";
+    retry.addEventListener("click", () => saveCharacterFromGame(f, rename.value));
+    problem.style.marginBottom = "4px";
+    wrap.appendChild(problem); wrap.appendChild(rename); wrap.appendChild(retry);
+    return wrap;
+  }
+  const save = document.createElement("button");
+  save.textContent = "💾 Save character";
+  save.addEventListener("click", () => saveCharacterFromGame(f, f.name));
+  wrap.appendChild(save);
+  return wrap;
+}
+
+async function saveCharacterFromGame(f, name) {
+  const requestedName = String(name == null ? f.name : name).trim();
+  if (!requestedName) return;
+  const data = await postJSON(
+    `/api/game/${GID}/figure/${f.uid}/save_character`, {name: requestedName});
+  if (data.error) {
+    dbg("SAVE", `save character ${f.name} refused`, {uid: f.uid, error: data.error});
+    SAVE_CHAR_UI[f.uid] = {renameTo: requestedName, error: data.error};
+  } else {
+    dbg("SAVE", `saved character ${data.name}`, {uid: f.uid, id: data.id});
+    SAVE_CHAR_UI[f.uid] = {saved: data.name};
+    const idx = SAVED.findIndex(c => c.id === data.id);   // keep the wizard list fresh
+    if (idx >= 0) SAVED[idx] = data; else SAVED.push(data);
+  }
+  render();
 }
 
 let LIVE_EDIT_FOR = null;            // uid the live-edit modal is open for, if any

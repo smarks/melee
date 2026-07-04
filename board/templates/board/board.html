@@ -513,6 +513,9 @@
 <script>
   window.__MELEE_CONFIG__ = {
     loggedIn: {{ request.user.is_authenticated|yesno:"true,false" }},
+    // The CSRF cookie is HTTPONLY (settings hardening), so document.cookie
+    // can't supply the token; the template hands it over instead.
+    csrfToken: "{{ csrf_token }}",
   };
 </script>
 <script type="module" src="{% static 'board/board.js' %}"></script>
