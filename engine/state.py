@@ -24,7 +24,7 @@ from hexarena.hex import Hex
 from hexarena.pathfinding import Reach
 
 from .arena import BODY_COST, CLEAR_COST, Arena
-from .combat import AttackResult
+from .combat import AttackResult, DamageEvent
 from .facing import (
     FRONT,
     REAR,
@@ -1856,24 +1856,31 @@ class _CombatMixin:
                 and member.can_act()]
         enemies = [member for member in pile if member.side != attacker.side]
         friends = [member for member in pile if member.side == attacker.side]
-        for victim in [*enemies, *friends]:
-            zone = attack_zone(self.arena.layout, attacker, victim)
-            result = self.rules.resolve_attack(
-                self.dice, attacker, victim,
-                zone=zone, weapon=weapon,
-                dice_count=self.rules.attack_dice_count(victim, ranged=False),
-                ranged=False,
-                range_penalty=pending.range_penalty,
-                situational=pending.situational,
-                situational_note=pending.situational_note,
-                blunted=self.practice,
-            )
-            result.thrown = pending.thrown
-            self._apply(attacker, victim, result)
-            results.append(result)
-            if result.hit:
-                self.log.append(narrate_cascade(attacker, intended, victim))
-                return
+        # The friends in this loop are the ONE case the rules let a blow harm its
+        # own side; flag it so the recorded DamageEvent is not read as friendly
+        # fire (#231). Restored in the finally so a raised error can't leave it set.
+        self._same_side_hit_ok = True
+        try:
+            for victim in [*enemies, *friends]:
+                zone = attack_zone(self.arena.layout, attacker, victim)
+                result = self.rules.resolve_attack(
+                    self.dice, attacker, victim,
+                    zone=zone, weapon=weapon,
+                    dice_count=self.rules.attack_dice_count(victim, ranged=False),
+                    ranged=False,
+                    range_penalty=pending.range_penalty,
+                    situational=pending.situational,
+                    situational_note=pending.situational_note,
+                    blunted=self.practice,
+                )
+                result.thrown = pending.thrown
+                self._apply(attacker, victim, result)
+                results.append(result)
+                if result.hit:
+                    self.log.append(narrate_cascade(attacker, intended, victim))
+                    return
+        finally:
+            self._same_side_hit_ok = False
 
     def _apply(self, attacker: Figure, target: Figure, result: AttackResult) -> None:
         attacker.attacked_this_turn = True
@@ -1901,6 +1908,14 @@ class _CombatMixin:
         if not result.hit:
             return
         self.rules.apply_damage(target, result.damage, body_hit=result.body_hit)
+        # Audit every damaging hit with both sides so a test can prove no figure
+        # is harmed by its own side (#231). Zero-damage hits (armour turned it
+        # aside) cost no ST, so they are not recorded as damage.
+        if result.damage > 0:
+            self.damage_events.append(DamageEvent(
+                attacker_side=attacker.side, target_side=target.side,
+                attacker_uid=attacker.uid, target_uid=target.uid,
+                damage=result.damage, same_side_allowed=self._same_side_hit_ok))
         # Force-retreat eligibility (p.20) counts only melee damage: "missile or
         # thrown weapon hits ... don't count." A missile/thrown hit deals ST damage
         # but must not arm a force retreat.
@@ -2019,6 +2034,14 @@ class GameState(
         self.turn_number = 1
         self.log: list[str] = []
         self._pending: list[PendingAttack] = []
+        # Damage-attribution audit trail (#231). Every damaging hit appends a
+        # DamageEvent here so a test can prove no figure was ever harmed by its
+        # own side. Purely observational — reading/writing it changes no rules.
+        self.damage_events: list[DamageEvent] = []
+        # Set True only while the p.17-18 HTH miss-cascade resolves, the one path
+        # on which a figure may legitimately strike its own side; the recorded
+        # DamageEvent carries this so the invariant checker exempts that case.
+        self._same_side_hit_ok: bool = False
         # Per-character initiative selection (#192). Left empty until a caller
         # opens a selection with begin_selection(); while empty the move() turn
         # guard is inert, so pure movement-mechanics tests drive move() freely.
