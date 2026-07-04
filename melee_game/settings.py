@@ -136,6 +136,22 @@ LOGIN_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/?setup"   # land on the board with the New-game wizard open
 LOGOUT_REDIRECT_URL = "/"
 
+# Django's standard password strength checks, enforced by the registration,
+# password-change, and (if ever enabled) password-reset forms (#258).
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+# Email-based password reset is deliberately NOT enabled: melee production has
+# no outbound email (no EMAIL_* / SMTP configuration anywhere in the deploy).
+# origami-auth therefore registers no reset routes and shows no "Forgot your
+# password?" link — the logged-in change-password flow is the supported path.
+# To enable reset later: configure EMAIL_BACKEND/EMAIL_HOST/... and set
+# ORIGAMI_AUTH_ENABLE_PASSWORD_RESET = True.
+
 USE_TZ = True
 
 # --- Security hardening -------------------------------------------------------
