@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from .combat import AttackResult, classify_roll
 from .figure import Figure
-from .options import Option, spec
 from .profile import RulesProfile
 from .rules_data import THREE_DICE, WeaponKind
 
@@ -30,7 +29,7 @@ from .rules_data import THREE_DICE, WeaponKind
 # armour reads "the armour turns it aside"; an auto/forced hit reads
 # "unavoidable"; a crit reads "crushing"; an ordinary hit "connects".
 _HIT_WORDS = ("connects", "crushing", "unavoidable", "turns it aside")
-_MISS_WORDS = ("misses", "dodges clear", "flailing wide")
+_MISS_WORDS = ("misses", "dodges clear", "fumbles")
 
 # Phases the driving turn cycle may report (the board's phase machine, #192).
 VALID_PHASES = frozenset({"select", "combat"})
@@ -180,6 +179,25 @@ def _check_missile_sanity(state, context: str) -> None:
             )
 
 
+def _check_weapon_kit(state, context: str) -> None:
+    """A figure's readied weapon is always one it actually carries (#233).
+
+    The fumble path (a Tarmar natural-1 drop/break, classic Melee's 17/18)
+    unreadies the weapon and removes it from the kit in one move; a ready
+    weapon missing from ``weapons`` is that bookkeeping torn in half — the
+    figure is fighting with a weapon it dropped or that no longer exists.
+    """
+    for figure in state.figures:
+        ready = figure.ready_weapon
+        if ready is not None and ready not in figure.weapons:
+            _fail(
+                "ready-weapon-not-carried",
+                f"{figure.name}({figure.side}) has {ready.name} readied "
+                f"but it is not in its kit",
+                context,
+            )
+
+
 def assert_state_invariants(
     state,
     profile: RulesProfile,
@@ -213,6 +231,7 @@ def assert_state_invariants(
     _check_figure_bounds(state, context)
     _check_turn_selection(state, phase, context)
     _check_missile_sanity(state, context)
+    _check_weapon_kit(state, context)
 
 
 # ---- combat-log truthfulness -----------------------------------------------

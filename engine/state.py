@@ -1905,6 +1905,9 @@ class _CombatMixin:
             attacker.ready_weapon = None
         else:
             self.log.append(narrate_attack(attacker, target, result))
+        # Attacker-side aftermath (Tarmar fumbles: off-balance spent/set, weapon
+        # stress marked) — a ruleset hook so resolve_attack stays pure (#233).
+        self.rules.apply_attack_side_effects(attacker, result)
         if not result.hit:
             return
         self.rules.apply_damage(target, result.damage, body_hit=result.body_hit)

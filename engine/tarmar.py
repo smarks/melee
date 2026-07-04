@@ -18,8 +18,12 @@ The d20 resolution math itself is NOT duplicated here — it lives in the shared
 truth. This module only maps Melee's weapons/armour onto Tarmar classes/tiers
 and feeds the figures' numbers in.
 
-Deferred (kept simple for the first cut, noted for later): the severe-crit
-"confirm" roll (triple + bleeding), fumble drop/break on a natural 1, mana/magic.
+The spec's §7 crit/fumble layer is in (see #233): a natural 20 doubles the
+damage dice and rolls a *confirm* d20 against the same Target Number — hitting
+upgrades to the severe crit (triple damage, the blow reaches Body, bleeding in
+the narration). A natural 1 rolls the d6 fumble table: 1-3 off-balance (-2 to
+the next attack), 4-5 weapon dropped, 6 the weapon takes stress and breaks on a
+second fumble. Deferred, noted for later: mana/magic.
 """
 from __future__ import annotations
 
@@ -57,6 +61,11 @@ SHIELD_BONUS: dict[str, int] = {"Small shield": 1, "Large shield": 2}
 
 DEFEND_TN_BONUS = 4  # dodge/defend raises your Target Number (no advantage/disadvantage)
 
+# The fumble outcome beyond tarmar_rules' stateless d6 table: a natural 1 with a
+# weapon that already carries stress breaks it outright ("breaks on a second
+# fumble", spec §7). Rides AttackResult.fumble_effect like the table's outcomes.
+FUMBLE_BREAK = "break"
+
 # Knockdown fires when one turn's hits reach this fraction of the target's
 # Fatigue pool. Derived from classic Melee's KNOCKDOWN_HITS (8) against its
 # ~10-point ST pool (8/10 = 0.8); see TarmarRuleset.status_after_hit.
@@ -76,6 +85,13 @@ class TarmarFigure(Figure):
     weapon_skill: dict[str, int] = field(default_factory=dict)  # weapon -> 0..5
     fatigue_taken: int = 0
     body_taken: int = 0
+    # §7 fumble state. `off_balance` is a standing -2 on the next attack (set by
+    # a 1-3 fumble, spent by the next attack). `stressed_weapons` holds the names
+    # of carried weapons that took stress on a 6 — a second fumble breaks them.
+    # Keyed by name on the FIGURE, not the weapon: the catalog Weapon objects are
+    # shared singletons, so per-wielder state cannot live on them.
+    off_balance: bool = False
+    stressed_weapons: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         # Tarmar lets you wield a weapon you're too weak for (with a to-hit
@@ -191,8 +207,12 @@ class TarmarRuleset(Ruleset):
             weapon_class, tier, shield_bonus=shield, defender_dodge=dodge) + defend
 
         skill = attacker.weapon_skill.get(weapon.name, 0)
+        # A standing off-balance penalty (from a 1-3 fumble) drags this attack;
+        # apply_attack_side_effects clears the flag once the attack is applied.
+        off_balance = (tarmar_rules.OFF_BALANCE_PENALTY
+                       if getattr(attacker, "off_balance", False) else 0)
         situational = ((0 if ignore_facing else facing_bonus(zone))
-                       + range_penalty + situational)
+                       + range_penalty + situational + off_balance)
         bonus = tarmar_rules.to_hit_bonus(
             effective_dexterity=attacker.base_adj_dx,   # armour drags your aim
             skill_level=skill,
@@ -204,8 +224,32 @@ class TarmarRuleset(Ruleset):
         die = dice.dn(20)
         outcome = tarmar_rules.resolve_attack(die, target_number, bonus)
         if force_hit:                                    # flight already decided a hit
-            outcome = {**outcome, "hit": True, "critical": False, "outcome": "hit"}
-        multiplier = 2 if outcome["critical"] else 1   # crit = double dice (deferred: confirm->triple)
+            outcome = {**outcome, "hit": True, "critical": False, "fumble": False,
+                       "outcome": "hit"}
+
+        # §7 natural 20: double dice, then a confirm d20 against the same TN —
+        # hitting again upgrades to the severe crit (triple dice, reaches Body).
+        multiplier = 1
+        confirm_roll = 0
+        severe_crit = False
+        if outcome["critical"]:
+            confirm_roll = dice.dn(20)
+            severe_crit = tarmar_rules.confirm_severe_crit(
+                confirm_roll, target_number, bonus)
+            multiplier = (tarmar_rules.SEVERE_CRIT_DAMAGE_MULTIPLIER if severe_crit
+                          else tarmar_rules.CRIT_DAMAGE_MULTIPLIER)
+
+        # §7 natural 1: the d6 fumble table — unless the weapon already carries
+        # stress, in which case this second fumble breaks it outright.
+        dropped_weapon = broke_weapon = False
+        fumble_effect = ""
+        if outcome["fumble"]:
+            if weapon.name in getattr(attacker, "stressed_weapons", ()):
+                broke_weapon = True
+                fumble_effect = FUMBLE_BREAK
+            else:
+                fumble_effect = tarmar_rules.fumble_result(dice.dn(6))
+                dropped_weapon = fumble_effect == tarmar_rules.FUMBLE_DROP
 
         raw_damage = damage = 0
         if outcome["hit"]:
@@ -220,26 +264,40 @@ class TarmarRuleset(Ruleset):
         return AttackResult(
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
             multiplier=multiplier, raw_damage=raw_damage, damage=damage,
-            dropped_weapon=False, broke_weapon=False, weapon=weapon, zone=zone,
-            body_hit=outcome["critical"],  # crit reaches Body (carried on the result, not the target)
+            dropped_weapon=dropped_weapon, broke_weapon=broke_weapon,
+            weapon=weapon, zone=zone,
+            body_hit=severe_crit,  # only the CONFIRMED crit reaches Body (§7)
             note=outcome["outcome"],
             roll_under=False,
             auto_hit=force_hit,
+            confirm_roll=confirm_roll, severe_crit=severe_crit,
+            fumble_effect=fumble_effect,
             to_hit_breakdown=self._breakdown(
                 attacker, weapon, weapon_class, tier, shield, defends,
                 target_number, skill, zone, ignore_facing, range_penalty, bonus,
-                situational_note))
+                situational_note, off_balance=off_balance))
 
     def _resolve_hth(self, dice, attacker, target, zone, weapon, hth_damage,
                      *, blunted=False) -> AttackResult:
         """A grapple strike under Tarmar — bare hands have no weapon class, so this
         rolls d20 vs a flat grapple number with the DX and +4 rear adjustments,
-        then takes off the target's flat armour stops. (An approximation.)"""
+        then takes off the target's flat armour stops. (An approximation.) The
+        §7 severe-crit confirm applies here too — Body must be exactly as hard
+        to reach bare-handed as armed — but not the fumble table: a grappler
+        has no weapon in hand to drop or stress."""
         target_number = 11
         bonus = tarmar_rules.dex_modifier(attacker.base_adj_dx) + facing_bonus(zone)
         die = dice.dn(20)
         outcome = tarmar_rules.resolve_attack(die, target_number, bonus)
-        multiplier = 2 if outcome["critical"] else 1
+        multiplier = 1
+        confirm_roll = 0
+        severe_crit = False
+        if outcome["critical"]:
+            confirm_roll = dice.dn(20)
+            severe_crit = tarmar_rules.confirm_severe_crit(
+                confirm_roll, target_number, bonus)
+            multiplier = (tarmar_rules.SEVERE_CRIT_DAMAGE_MULTIPLIER if severe_crit
+                          else tarmar_rules.CRIT_DAMAGE_MULTIPLIER)
         raw_damage = damage = 0
         if outcome["hit"]:
             raw_damage = roll_damage(dice, hth_damage, multiplier)
@@ -250,13 +308,14 @@ class TarmarRuleset(Ruleset):
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
             multiplier=multiplier, raw_damage=raw_damage, damage=damage,
             dropped_weapon=False, broke_weapon=False, weapon=weapon, zone=zone,
-            body_hit=outcome["critical"], roll_under=False,
+            body_hit=severe_crit, roll_under=False,
+            confirm_roll=confirm_roll, severe_crit=severe_crit,
             note=outcome["outcome"], to_hit_breakdown=f"grapple: d20 {bonus:+d} vs {target_number}")
 
     @staticmethod
     def _breakdown(attacker, weapon, weapon_class, tier, shield, defending,
                    target_number, skill, zone, ignore_facing, range_penalty, bonus,
-                   situational_note="") -> str:
+                   situational_note="", off_balance=0) -> str:
         """How the d20 to-hit was reached: the target number it needed, and the
         bonus added to the die (with its parts)."""
         target = f"need {target_number} ({weapon_class} vs {tier}"
@@ -276,11 +335,32 @@ class TarmarRuleset(Ruleset):
             attacker.strength, weapon.min_strength or None)
         if str_pen:
             parts.append(f"{str_pen:+d} str")
+        if off_balance:
+            parts.append(f"{off_balance:+d} off-balance")
         parts.extend(format_situational_parts(
             zone, ignore_facing=ignore_facing,
             range_penalty=range_penalty, situational_note=situational_note))
         roll = f"roll d20 {bonus:+d}" + (f" ({', '.join(parts)})" if parts else "")
         return f"{target}; {roll}"
+
+    def apply_attack_side_effects(self, attacker, result) -> None:
+        """The fumble table's lingering effects on the ATTACKER (§7, #233).
+
+        Any completed attack spends a standing off-balance penalty (it applied
+        to this very roll), and a fresh 1-3 fumble sets a new one — both in a
+        single assignment. A 6 marks the wielded weapon stressed; the break (a
+        second fumble with it) clears the mark, since the weapon itself is gone
+        from the game. Mutation lives here, not in :meth:`resolve_attack`, so
+        resolution stays pure over the figures.
+        """
+        result_effect = result.fumble_effect
+        attacker.off_balance = result_effect == tarmar_rules.FUMBLE_OFF_BALANCE
+        if result.weapon is None:
+            return
+        if result_effect == tarmar_rules.FUMBLE_STRESS:
+            attacker.stressed_weapons.add(result.weapon.name)
+        elif result_effect == FUMBLE_BREAK:
+            attacker.stressed_weapons.discard(result.weapon.name)
 
     def apply_damage(self, target, amount: int, *, body_hit: bool = False) -> None:
         target.fatigue_taken += amount
