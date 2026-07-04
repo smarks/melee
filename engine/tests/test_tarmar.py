@@ -7,14 +7,19 @@ is deterministic.
 """
 from __future__ import annotations
 
-import pytest
+import tarmar_rules
 from hexarena.dice import Dice
 
 from engine.facing import FRONT, REAR
 from engine.profile import CLASSIC, TARMAR
 from engine.rules_data import BATTLEAXE, BROADSWORD, NO_ARMOR, PLATE, SMALL_SHIELD
 from engine.ruleset import DEAD, KNOCKDOWN, Ruleset
-from engine.tarmar import TarmarFigure, TarmarRuleset, create_tarmar_fighter
+from engine.tarmar import (
+    FUMBLE_BREAK,
+    TarmarFigure,
+    TarmarRuleset,
+    create_tarmar_fighter,
+)
 
 
 def _attacker(weapon, *, st=12, dx=12, skill=3, **kw):
@@ -50,16 +55,35 @@ def test_normal_hit_reduces_fatigue_only() -> None:
     assert tgt.current_fatigue == 40
 
 
-def test_natural_twenty_crits_into_body() -> None:
+def test_crit_confirmed_is_severe_triple_damage_into_body() -> None:
+    # §7: a nat 20 rolls a confirm d20 vs the same TN; hitting upgrades to the
+    # severe crit — triple dice, and the blow reaches Body as well as Fatigue.
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)          # bonus +7; Striking vs None -> TN 13
+    tgt = _target(armor=NO_ARMOR)
+    # d20=20 crit; confirm 15 (+7 = 22 >= 13) -> severe; damage (5+4)*3 = 27
+    dice = Dice(scripted=[20, 15, 5, 4])
+    result = rules.resolve_attack(dice, atk, tgt, zone=FRONT)
+    rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
+    assert result.note == "critical" and result.confirm_roll == 15
+    assert result.severe_crit and result.multiplier == 3
+    assert result.damage == 27 and result.body_hit
+    assert tgt.fatigue_taken == 27 and tgt.body_taken == 27
+
+
+def test_crit_not_confirmed_stays_double_and_spares_body() -> None:
+    # The confirm misses (5 + 7 = 12 < 13): a plain crit — double dice,
+    # Fatigue only. Body is reached ONLY by the confirmed severe crit.
     rules = TarmarRuleset()
     atk = _attacker(BROADSWORD)
     tgt = _target(armor=NO_ARMOR)
-    dice = Dice(scripted=[20, 5, 4])     # nat 20 -> crit, double dice (5+4)*2 = 18
+    dice = Dice(scripted=[20, 5, 5, 4])
     result = rules.resolve_attack(dice, atk, tgt, zone=FRONT)
     rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
-    assert result.note == "critical" and result.multiplier == 2
-    assert result.damage == 18
-    assert tgt.fatigue_taken == 18 and tgt.body_taken == 18  # crit reaches Body
+    assert result.note == "critical" and result.confirm_roll == 5
+    assert not result.severe_crit and result.multiplier == 2
+    assert result.damage == 18 and not result.body_hit
+    assert tgt.fatigue_taken == 18 and tgt.body_taken == 0
 
 
 def test_hybrid_armour_heavy_weapon_halves_plate_stops() -> None:
@@ -99,13 +123,13 @@ def test_under_strength_wielding_allowed_but_penalised() -> None:
     assert strong_hit.hit and not weak_hit.hit
 
 
-def test_repeated_crits_eventually_kill_via_body() -> None:
+def test_repeated_severe_crits_eventually_kill_via_body() -> None:
     rules = TarmarRuleset()
     atk = _attacker(BROADSWORD)
     tgt = _target(armor=NO_ARMOR)        # body 32
     status = None
-    for _ in range(6):                   # each crit: (6+6)*2 = 24 to Fatigue and Body
-        result = rules.resolve_attack(Dice(scripted=[20, 6, 6]), atk, tgt, zone=FRONT)
+    for _ in range(6):                   # confirm nat 20 -> severe: (6+6)*3 = 36 to both pools
+        result = rules.resolve_attack(Dice(scripted=[20, 20, 6, 6]), atk, tgt, zone=FRONT)
         rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
         status = rules.status_after_hit(tgt)
         if status == DEAD:
@@ -131,13 +155,13 @@ def test_crit_body_signal_rides_result_without_mutating_target() -> None:
     rules = TarmarRuleset()
     atk = _attacker(BROADSWORD)
     tgt = _target(armor=NO_ARMOR)
-    result = rules.resolve_attack(Dice(scripted=[20, 5, 4]), atk, tgt, zone=FRONT)
+    result = rules.resolve_attack(Dice(scripted=[20, 15, 5, 4]), atk, tgt, zone=FRONT)
     assert result.body_hit is True
     assert tgt.fatigue_taken == 0 and tgt.body_taken == 0   # resolve_attack is pure
     assert not hasattr(tgt, "pending_body_hit")             # no target flag left behind
     # Applying with the carried flag is what reaches Body.
     rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
-    assert tgt.fatigue_taken == 18 and tgt.body_taken == 18
+    assert tgt.fatigue_taken == 27 and tgt.body_taken == 27
     # A normal hit carries no Body signal.
     normal = rules.resolve_attack(
         Dice(scripted=[10, 4, 3]), atk, _target(armor=NO_ARMOR), zone=FRONT)
@@ -196,3 +220,99 @@ def test_profiles_pair_model_with_ruleset() -> None:
         CLASSIC.ruleset, TarmarRuleset)
     assert isinstance(TARMAR.ruleset, TarmarRuleset)
     assert TARMAR.build_fighter is create_tarmar_fighter
+
+
+# ---- §7 natural-1 fumbles (#233) --------------------------------------------
+
+def test_natural_one_fumble_drops_the_weapon() -> None:
+    # Fumble d6 of 4-5 -> the weapon is dropped (state grounds it via _apply).
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)
+    tgt = _target(armor=NO_ARMOR)
+    result = rules.resolve_attack(Dice(scripted=[1, 4]), atk, tgt, zone=FRONT)
+    assert not result.hit and result.note == "fumble"
+    assert result.fumble_effect == tarmar_rules.FUMBLE_DROP
+    assert result.dropped_weapon and not result.broke_weapon
+
+
+def test_natural_one_fumble_off_balance_penalises_the_next_attack() -> None:
+    # Fumble d6 of 1-3 -> -2 on the fumbler's next attack, then the flag clears.
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)          # bonus +7; TN 13
+    tgt = _target(armor=NO_ARMOR)
+    fumbled = rules.resolve_attack(Dice(scripted=[1, 2]), atk, tgt, zone=FRONT)
+    assert fumbled.fumble_effect == tarmar_rules.FUMBLE_OFF_BALANCE
+    assert not fumbled.dropped_weapon and not fumbled.broke_weapon
+    rules.apply_attack_side_effects(atk, fumbled)
+    assert atk.off_balance
+
+    # d20=7 would hit (7+7=14 >= 13) but off-balance drags it to 12 -> miss.
+    hampered = rules.resolve_attack(Dice(scripted=[7]), atk, tgt, zone=FRONT)
+    assert not hampered.hit
+    assert "-2 off-balance" in hampered.to_hit_breakdown
+    rules.apply_attack_side_effects(atk, hampered)
+    assert not atk.off_balance           # the penalty is spent by that attack
+
+    recovered = rules.resolve_attack(Dice(scripted=[7, 3, 3]), atk, tgt, zone=FRONT)
+    assert recovered.hit                 # same die, no penalty
+
+
+def test_stressed_weapon_breaks_on_a_second_fumble() -> None:
+    # Fumble d6 of 6 -> the weapon takes stress; a second natural 1 with the
+    # stressed weapon breaks it outright (no table roll).
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)
+    tgt = _target(armor=NO_ARMOR)
+    stressed = rules.resolve_attack(Dice(scripted=[1, 6]), atk, tgt, zone=FRONT)
+    assert stressed.fumble_effect == tarmar_rules.FUMBLE_STRESS
+    assert not stressed.dropped_weapon and not stressed.broke_weapon
+    rules.apply_attack_side_effects(atk, stressed)
+    assert atk.stressed_weapons == {"Broadsword"}
+
+    broken = rules.resolve_attack(Dice(scripted=[1]), atk, tgt, zone=FRONT)
+    assert broken.broke_weapon and not broken.dropped_weapon
+    assert broken.fumble_effect == FUMBLE_BREAK
+    rules.apply_attack_side_effects(atk, broken)
+    assert atk.stressed_weapons == set()  # the broken weapon's mark is cleared
+
+
+def test_state_applies_a_fumble_drop_and_the_off_balance_flag() -> None:
+    # Through the real turn machinery: a drop unreadies + grounds the weapon,
+    # and an off-balance fumble sets the attacker flag via the _apply hook.
+    from hexarena.hex import FLAT, Hex, HexLayout
+
+    from engine.arena import Arena
+    from engine.invariants import assert_state_invariants
+    from engine.options import Option
+    from engine.state import GameState
+
+    layout = HexLayout(orientation=FLAT, odd=True)
+
+    def _duel(scripted: list[int]) -> tuple:
+        atk = _attacker(BROADSWORD)
+        tgt = _target(armor=NO_ARMOR, weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+        tgt.position = Hex(5, 5)
+        atk.position = layout.neighbor(Hex(5, 5), 0)
+        atk.facing = layout.direction_to(atk.position, tgt.position)
+        tgt.facing = layout.direction_to(tgt.position, atk.position)
+        state = GameState(arena=Arena(cols=9, rows=15), figures=[atk, tgt],
+                          ruleset=TarmarRuleset(), dice=Dice(scripted=scripted))
+        atk.current_option = Option.SHIFT_ATTACK
+        state.queue_attack(atk, tgt)
+        return state, atk
+
+    # Fumble d6 = 4: dropped — unreadied, out of the kit, on the ground.
+    state, atk = _duel([1, 4])
+    results = state.resolve_combat()
+    assert results[0].dropped_weapon
+    assert atk.ready_weapon is None and BROADSWORD not in atk.weapons
+    assert [w.name for _, w in state.dropped] == ["Broadsword"]
+    assert any("fumbles and drops" in line for line in state.log)
+    assert_state_invariants(state, TARMAR, context="fumble-drop")
+
+    # Fumble d6 = 2: off-balance — weapon kept, flag set through the hook.
+    state, atk = _duel([1, 2])
+    state.resolve_combat()
+    assert atk.off_balance and atk.ready_weapon is BROADSWORD
+    assert any("off-balance" in line for line in state.log)
+    assert_state_invariants(state, TARMAR, context="fumble-off-balance")

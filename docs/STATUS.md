@@ -165,8 +165,6 @@ CI (see `e2e/README.md`). Gold standards: `engine/tests/test_combat_example.py`
 
 ## Open threads / next ideas
 
-- **#233 — Tarmar deferred refinements** (in progress): severe-crit
-  confirmation roll; fumble drop/break on a natural 1.
 - **#234 — save the current game's fighters as saved characters** (unclaimed).
 - **#235 — accounts polish** (unclaimed): profile editing, password reset.
 - **Mana / magic — the Wizard expansion.** The spell system exists in the

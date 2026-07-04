@@ -239,6 +239,19 @@ class Ruleset:
         target.damage_taken += amount
         target.hits_this_turn += amount
 
+    def apply_attack_side_effects(
+        self, attacker: Figure, result: AttackResult
+    ) -> None:
+        """Apply the *attacker-side* aftermath of a resolved attack.
+
+        Called by ``GameState._apply`` once per resolved attack, after the
+        weapon drop/break bookkeeping. Classic Melee has none (its 17/18
+        drop/break rides ``dropped_weapon``/``broke_weapon`` directly); the
+        Tarmar profile uses it to set/clear the off-balance flag and to mark a
+        stressed weapon from the fumble table. Keeping the mutation here keeps
+        :meth:`resolve_attack` pure over the figures.
+        """
+
     def status_after_hit(self, target: Figure) -> str | None:
         """Post-hit condition: :data:`DEAD`, :data:`UNCONSCIOUS`,
         :data:`KNOCKDOWN`, or ``None``. Override to change injury thresholds."""

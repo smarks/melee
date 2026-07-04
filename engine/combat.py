@@ -107,6 +107,14 @@ class AttackResult:
     #                              struck mid-flight, an HTH free hit) — the to-hit
     #                              roll did NOT decide it, so `rolled`/`needed` are
     #                              not a hit/miss test and must not be narrated as one.
+    confirm_roll: int = 0         # Tarmar §7: the second d20 rolled to confirm a
+    #                              natural-20 crit as severe (0 = no confirm rolled).
+    severe_crit: bool = False     # Tarmar §7: the confirm hit — triple damage, the
+    #                              blow reaches Body, and the wound bleeds.
+    fumble_effect: str = ""       # Tarmar §7 fumble-table outcome for a natural 1:
+    #                              "off_balance" / "drop" / "stress" / "break" (a
+    #                              second fumble with an already-stressed weapon).
+    #                              Read by narration and apply_attack_side_effects.
 
 
 def classify_roll(

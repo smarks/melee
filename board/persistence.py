@@ -125,6 +125,8 @@ def _figure_to_json(figure: Figure) -> dict:
             weapon_skill=dict(figure.weapon_skill),
             fatigue_taken=figure.fatigue_taken,
             body_taken=figure.body_taken,
+            off_balance=figure.off_balance,
+            stressed_weapons=sorted(figure.stressed_weapons),
         )
     return data
 
@@ -153,6 +155,9 @@ def _figure_from_json(data: dict) -> Figure:
             fatigue_roll=data["fatigue_roll"], mana_roll=data["mana_roll"],
             weapon_skill=dict(data["weapon_skill"]),
             fatigue_taken=data["fatigue_taken"], body_taken=data["body_taken"],
+            # .get(): saves from before the §7 fumble state existed (#233).
+            off_balance=data.get("off_balance", False),
+            stressed_weapons=set(data.get("stressed_weapons", [])),
             **gear,
         )
     else:

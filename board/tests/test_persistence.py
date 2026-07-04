@@ -41,7 +41,7 @@ _FIGURE_FIELDS = (
 _TARMAR_FIELDS = (
     "intelligence", "wisdom", "constitution", "charisma", "fatigue_roll",
     "mana_roll", "weapon_skill", "fatigue_taken", "body_taken",
-    "current_fatigue", "current_body",
+    "current_fatigue", "current_body", "off_balance", "stressed_weapons",
 )
 
 
@@ -148,6 +148,10 @@ def test_state_round_trips_through_json(profile_name: str) -> None:
     _play_a_turn(state)
     # Add a dropped weapon to prove the field round-trips.
     state.dropped.append((Hex(3, 3), WEAPONS["Dagger"]))
+    # Non-default §7 fumble state must survive the trip too (#233).
+    if profile_name == "Tarmar":
+        state.figures[0].off_balance = True
+        state.figures[0].stressed_weapons.add("Broadsword")
 
     # Go through real JSON to guarantee the payload is JSON-serializable.
     blob = json.dumps(persistence.state_to_json(state))

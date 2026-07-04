@@ -59,14 +59,29 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
     approach = _approach(attacker, target, result.weapon, result.zone,
                          getattr(result, "thrown", False))
     if not result.hit:
-        if getattr(target, "dodging", False) or getattr(target, "defending", False):
+        # A fumble's own story outranks the dodge line — the natural 1 missed
+        # on its own, and the table's outcome is the beat worth reading.
+        if result.note == "fumble":
+            weapon_name = result.weapon.name if result.weapon else "weapon"
+            if result.fumble_effect == "off_balance":
+                body = (f"{approach} — and fumbles, staggering off-balance "
+                        f"(-2 on the next attack)")
+            elif result.fumble_effect == "stress":
+                body = (f"{approach} — and fumbles, the {weapon_name} cracking "
+                        f"under the strain (a second fumble will break it)")
+            else:
+                # The running log swaps this line for :func:`narrate_fumble`'s
+                # drop/shatter story; this rendering still tells the miss.
+                body = f"{approach} — and fumbles, the blow flailing wide"
+        elif getattr(target, "dodging", False) or getattr(target, "defending", False):
             body = f"{approach}, who dodges clear"
-        elif result.note == "fumble":
-            body = f"{approach} — and fumbles, the blow flailing wide"
         else:
             body = f"{approach} — and misses"
     elif result.damage == 0:
         body = f"{approach} — but the armour turns it aside"
+    elif result.severe_crit:
+        body = (f"{approach} — a crushing blow for {result.damage}, "
+                f"the wound bleeding freely!")
     elif result.multiplier >= 2:
         body = f"{approach} — a crushing blow for {result.damage}!"
     else:
@@ -82,8 +97,14 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
     if getattr(result, "auto_hit", False):
         return _cap(f"{body} (an unavoidable hit{detail}).")
     threshold = "or less" if result.roll_under else "or more"
+    # A Tarmar natural 20 rolled a second d20 to confirm the severe crit; say
+    # how the confirm went so the upgrade (or its absence) is legible (#233).
+    confirm = ""
+    if result.confirm_roll:
+        verdict = "severe crit" if result.severe_crit else "crit not confirmed"
+        confirm = f"; confirm rolled {result.confirm_roll} — {verdict}"
     return _cap(f"{body} (needed {result.needed} {threshold}, "
-                f"rolled {result.rolled}{detail}).")
+                f"rolled {result.rolled}{confirm}{detail}).")
 
 
 def narrate_fumble(attacker: Figure, weapon, *, broke: bool) -> str:
