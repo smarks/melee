@@ -28,6 +28,8 @@ urlpatterns = [
     path("api/game/<str:gid>/award", views.api_game_award, name="api_game_award"),
     path("api/game/<str:gid>/figure/<str:uid>/advance",
          views.api_figure_advance, name="api_figure_advance"),
+    path("api/game/<str:gid>/figure/<str:uid>/save_character",
+         views.api_game_save_character, name="api_game_save_character"),
     path("api/game/<str:gid>/options", views.api_options, name="api_options"),
     path("api/game/<str:gid>/action", views.api_action, name="api_action"),
     path("api/game/<str:gid>/debug", views.api_debug, name="api_debug"),

@@ -42,7 +42,7 @@ from engine.tarmar import WEAPON_CLASS, TarmarFigure
 from . import persistence, scenario
 from .geometry import label_of, layout
 from .models import SavedCharacter, SavedGame
-from .serialize import dump_game
+from .serialize import _edit_spec, dump_game
 
 # In-memory games are bounded so the registry can't grow without limit (a DoS)
 # and stale games are reclaimed. Active games are touched on every access, so
@@ -572,6 +572,59 @@ def api_character_delete(request, pk):
         return HttpResponse(status=405)
     request.user.saved_characters.filter(pk=pk).delete()
     return JsonResponse({"ok": True})
+
+
+def api_game_save_character(request, gid: str, uid: str) -> HttpResponse:
+    """Keep a fighter from a running (or finished) game: snapshot it into the
+    signed-in player's saved characters (#234).
+
+    What is saved is the fighter *as built* — the chargen spec derived by
+    :func:`board.serialize._edit_spec` (basic ST/DX before Section IX
+    advancement, carried kit, armor, shield) — never mid-fight damage state, so
+    the save is always loadable fresh from the setup wizard. Unlike the wizard's
+    own save (an upsert of the player's explicit edit), a name collision here is
+    a clean 400 with ``collision: true`` so the UI can offer a rename — saving a
+    live fighter must never silently overwrite a stored character.
+    """
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    if not request.user.is_authenticated:
+        return JsonResponse({"error": "log in to save characters"}, status=401)
+    game = _resident_game(gid)
+    if not game:
+        return JsonResponse({"error": "unknown game"}, status=404)
+    try:
+        body = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "bad JSON"}, status=400)
+    state: GameState = game["state"]
+    try:
+        figure = _figure(state, uid)
+    except IllegalAction as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    # The seat rule from _authorize_action: you may only keep a fighter of a
+    # side you control; an admin (#86) may save any figure; games built outside
+    # _start_game (test fixtures) carry no seats and are unrestricted.
+    seats = game.get("seats")
+    if (seats and not _is_admin(request)
+            and figure.side not in _owned_sides(game, request)):
+        return JsonResponse({"error": f"you do not control {figure.side}"},
+                            status=403)
+    requested_name = (body.get("name") or figure.name or "").strip()
+    if not requested_name:
+        return JsonResponse({"error": "a name is required"}, status=400)
+    if request.user.saved_characters.filter(name=requested_name).exists():
+        return JsonResponse(
+            {"error": f"you already have a saved character named "
+                      f"“{requested_name}” — pick another name",
+             "collision": True},
+            status=400)
+    fighter_spec = _edit_spec(figure)
+    fighter_spec["name"] = requested_name   # a rename applies to the spec too
+    saved_character = SavedCharacter.objects.create(
+        owner=request.user, name=requested_name,
+        profile=game.get("profile", ""), spec=fighter_spec)
+    return JsonResponse(saved_character.as_dict(), status=201)
 
 
 # ---- admin powers (logged-in staff accounts) --------------------------------
