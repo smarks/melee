@@ -55,6 +55,34 @@ FOUR_DICE_SPECIALS = {
 
 
 @dataclass
+class DamageEvent:
+    """One damaging hit, tagged with both figures' sides for auditing.
+
+    Recorded by :meth:`engine.state.GameState._apply` every time an attack takes
+    real hits off a target, so a test can attribute damage to the attacker's side
+    and assert no figure is ever harmed by its own side (#229). Purely a record —
+    writing it changes no game behaviour.
+
+    Attributes:
+        attacker_side: The ``side`` of the figure that struck the blow.
+        target_side: The ``side`` of the figure that lost ST/Fatigue.
+        attacker_uid: Stable uid of the attacker (for a reproducible message).
+        target_uid: Stable uid of the target.
+        damage: Hits actually taken off the target (already past armour).
+        same_side_allowed: True only when the rules legitimately permit this
+            same-side hit — the "Hitting Your Friends" HTH miss-cascade (p.17-18),
+            the sole path on which a figure may harm its own side.
+    """
+
+    attacker_side: str
+    target_side: str
+    attacker_uid: str
+    target_uid: str
+    damage: int
+    same_side_allowed: bool = False
+
+
+@dataclass
 class AttackResult:
     """Outcome of one attack, before its hits are applied to the target."""
 
