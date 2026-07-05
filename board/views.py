@@ -136,6 +136,30 @@ class BoundedGameStore(MutableMapping):
 GAMES: BoundedGameStore = BoundedGameStore()
 
 
+# Per-game mutation lock (#253). The store's own RLock guards only registry
+# bookkeeping and is released the moment a game reference escapes __getitem__, so
+# two concurrent requests on one gid could otherwise interleave their
+# load -> mutate -> persist on the shared GameState and lose an update (or, via
+# _resident_game's check-then-act reload, mutate two different copies). Each gid
+# gets a stable lock held across that whole critical section by the mutating
+# views. Lock ordering is fixed: a request takes the per-game lock FIRST, then any
+# GAMES access (which briefly takes the store RLock) happens inside it — nothing
+# ever grabs a per-game lock while holding the store lock, so the two can't
+# deadlock. The lock registry is itself guarded by a dedicated lock.
+_GAME_LOCKS: dict[str, threading.Lock] = {}
+_GAME_LOCKS_GUARD = threading.Lock()
+
+
+def _game_lock(gid: str) -> threading.Lock:
+    """The stable per-game mutation lock for ``gid`` (created on first use, #253)."""
+    with _GAME_LOCKS_GUARD:
+        lock = _GAME_LOCKS.get(gid)
+        if lock is None:
+            lock = threading.Lock()
+            _GAME_LOCKS[gid] = lock
+        return lock
+
+
 # ---- helpers ----------------------------------------------------------------
 def _hex_from_label(label: str) -> Hex:
     label = label.strip()
@@ -976,25 +1000,36 @@ def api_new_custom(request):
 
 
 def api_state(request, gid):
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
-    payload = _payload(game)
-    payload.update(_ownership_fields(game, _player_id(request)))
-    payload["is_admin"] = _is_admin(request)
-    return JsonResponse(payload)
+    # Read under the per-game lock so a poll never serializes a half-mutated game
+    # while a concurrent action is mid-resolve (#253).
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        payload = _payload(game)
+        payload.update(_ownership_fields(game, _player_id(request)))
+        payload["is_admin"] = _is_admin(request)
+        return JsonResponse(payload)
 
 
 @csrf_exempt
 def api_game_save(request, gid):
-    """Persist a resident game so it survives a server restart (#12)."""
+    """Persist a resident game so it survives a server restart (#12).
+
+    A whole-game write: only a seat owner (or admin) may save (#257).
+    """
     if request.method != "POST":
         return HttpResponse(status=405)
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
-    _persist_game(gid, game)
-    return JsonResponse({"ok": True, "gid": gid})
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        try:
+            _authorize_game_write(game, request)
+        except Forbidden as exc:
+            return JsonResponse({"error": str(exc)}, status=403)
+        _persist_game(gid, game)
+        return JsonResponse({"ok": True, "gid": gid})
 
 
 @csrf_exempt
@@ -1006,33 +1041,50 @@ def api_game_award(request, gid):
     figure per Section IX. The winning side is taken from the live victory check;
     ``ran_away_unhurt`` (a list of uids) only affects arena combat. The updated
     game is persisted so the progression survives a restart.
+
+    A seat owner or admin only (#257): experience is a shared-game write, not a
+    spectator power. Awarding is idempotent — Section IX is a one-shot bounty at
+    game over, so the game is stamped ``awarded`` and a second POST is a 400
+    rather than farming another +50/+100 onto every figure.
     """
     if request.method != "POST":
         return HttpResponse(status=405)
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
-    try:
-        body = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "bad JSON"}, status=400)
-    state: GameState = game["state"]
-    # Default to the bout's own variant (a practice game awards practice XP) so the
-    # mode set at creation is the single source of truth; an explicit body wins.
-    try:
-        combat_type = experience.CombatType(
-            body.get("combat_type") or state.combat_type.value)
-    except ValueError:
-        return JsonResponse(
-            {"error": f"unknown combat type {body.get('combat_type')!r}"}, status=400)
-    awards = experience.award_experience(
-        state.figures, combat_type,
-        winning_side=state.victor(),
-        ran_away_unhurt=body.get("ran_away_unhurt", []))
-    _persist_game(gid, game)
-    payload = _payload(game)
-    payload["awards"] = awards
-    return JsonResponse(payload)
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        try:
+            _authorize_game_write(game, request)
+        except Forbidden as exc:
+            return JsonResponse({"error": str(exc)}, status=403)
+        if game.get("awarded"):
+            return JsonResponse(
+                {"error": "experience has already been awarded for this game"},
+                status=400)
+        try:
+            body = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "bad JSON"}, status=400)
+        state: GameState = game["state"]
+        # Default to the bout's own variant (a practice game awards practice XP) so
+        # the mode set at creation is the single source of truth; an explicit body
+        # wins.
+        try:
+            combat_type = experience.CombatType(
+                body.get("combat_type") or state.combat_type.value)
+        except ValueError:
+            return JsonResponse(
+                {"error": f"unknown combat type {body.get('combat_type')!r}"},
+                status=400)
+        awards = experience.award_experience(
+            state.figures, combat_type,
+            winning_side=state.victor(),
+            ran_away_unhurt=body.get("ran_away_unhurt", []))
+        game["awarded"] = True          # one-shot: block repeat-award XP farming
+        _persist_game(gid, game)
+        payload = _payload(game)
+        payload["awards"] = awards
+        return JsonResponse(payload)
 
 
 @csrf_exempt
@@ -1042,34 +1094,45 @@ def api_figure_advance(request, gid, uid):
     The POST body's ``attribute`` is ``strength`` or ``dexterity``. Enforces the
     100-XP cost and the 8-point lifetime cap (a refused spend is a clean 400). The
     advanced figure is persisted so progression survives a restart.
+
+    Only the owner of that figure's side (or an admin) may spend its XP (#257):
+    otherwise an opponent or spectator could permanently buff — or drain — any
+    figure on the board.
     """
     if request.method != "POST":
         return HttpResponse(status=405)
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
-    try:
-        body = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "bad JSON"}, status=400)
-    try:
-        attribute = experience.Attribute(body.get("attribute", ""))
-    except ValueError:
-        return JsonResponse(
-            {"error": f"unknown attribute {body.get('attribute')!r}"}, status=400)
-    state: GameState = game["state"]
-    try:
-        figure = _figure(state, uid)
-    except IllegalAction as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-    try:
-        experience.spend_experience(figure, attribute)
-    except ValueError as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-    _persist_game(gid, game)
-    payload = _payload(game)
-    payload["uid"] = uid
-    return JsonResponse(payload)
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        try:
+            _authorize_figure_write(game, request, uid)
+        except Forbidden as exc:
+            return JsonResponse({"error": str(exc)}, status=403)
+        except IllegalAction as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+        try:
+            body = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "bad JSON"}, status=400)
+        try:
+            attribute = experience.Attribute(body.get("attribute", ""))
+        except ValueError:
+            return JsonResponse(
+                {"error": f"unknown attribute {body.get('attribute')!r}"}, status=400)
+        state: GameState = game["state"]
+        try:
+            figure = _figure(state, uid)
+        except IllegalAction as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+        try:
+            experience.spend_experience(figure, attribute)
+        except ValueError as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+        _persist_game(gid, game)
+        payload = _payload(game)
+        payload["uid"] = uid
+        return JsonResponse(payload)
 
 
 def api_game_load(request, gid):
@@ -1178,8 +1241,16 @@ def _ownership_fields(game: dict, pid: str | None) -> dict:
     }
 
 
+# Every action that commands one specific figure, named by the body's ``uid``.
+# Membership here is what makes _authorize_action enforce "you may only act on a
+# figure of a side you own". Any per-figure combat verb MUST be listed, or a seat
+# owner could drive an opponent's figure (#244): the combat actions queue_hth /
+# shield_rush / hth_disengage / disengage_move each take an acting figure by uid
+# and so belong here alongside the movement/selection verbs.
 _FIGURE_ACTIONS = {"move", "do_nothing", "pass", "queue_attack",
-                   "force_retreat", "update_figure"}
+                   "force_retreat", "update_figure",
+                   "queue_hth", "shield_rush", "hth_disengage",
+                   "disengage_move"}
 
 
 def _is_admin(request) -> bool:
@@ -1211,49 +1282,85 @@ def _authorize_action(game: dict, request, body: dict) -> None:
             raise Forbidden(f"you do not control {figure.side}")
 
 
+def _authorize_game_write(game: dict, request) -> None:
+    """Gate a whole-game mutating write (save / award): you must own at least one
+    seat, or be an admin, to change a shared game (#257). Reads stay open for
+    spectators. A seatless game (test fixtures) is unrestricted, matching
+    :func:`_authorize_action`.
+    """
+    seats = game.get("seats")
+    if not seats:
+        return
+    if _is_admin(request):
+        return
+    if not _owned_sides(game, request):
+        raise Forbidden("you are not a player in this game")
+
+
+def _authorize_figure_write(game: dict, request, uid: str) -> None:
+    """Gate a per-figure mutating write (attribute advance): you must own that
+    figure's side, or be an admin (#257). A seatless game is unrestricted.
+    """
+    seats = game.get("seats")
+    if not seats:
+        return
+    if _is_admin(request):
+        return
+    mine = _owned_sides(game, request)
+    if not mine:
+        raise Forbidden("you are not a player in this game")
+    figure = _figure(game["state"], uid)
+    if figure.side not in mine:
+        raise Forbidden(f"you do not control {figure.side}")
+
+
 @csrf_exempt
 def api_action(request, gid):
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
     if request.method != "POST":
         return HttpResponse(status=405)
-    try:
-        body = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "bad JSON"}, status=400)
+    # Hold the per-game lock across the whole load -> mutate -> persist so
+    # concurrent requests on one gid serialize and can't lose an update (#253).
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        try:
+            body = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "bad JSON"}, status=400)
 
-    try:
-        _authorize_action(game, request, body)
-        result = _dispatch(game, body, is_admin=_is_admin(request))
-        _debug_record(game, "client", body.get("type"), _debug_params(body))
-        # Drive the computer, then auto-end an idle combat turn -- and if that opens
-        # a fresh select pass led by a computer figure, drive that too. Without the
-        # re-drive, a combat turn that auto-ends into a computer-first initiative
-        # would hang, leaving the human waiting on a figure it cannot move.
-        for _ in range(256):
-            _advance_computer(game)
-            if not _auto_end_if_idle(game):
-                break
-            _debug_record(game, "system", "auto_end_turn", {})
-    except IllegalAction as exc:
-        _debug_record(game, "client", body.get("type"), _debug_params(body),
-                      error=str(exc))
-        return JsonResponse({"error": str(exc)}, status=400)
-    except Forbidden as exc:
-        _debug_record(game, "client", body.get("type"), _debug_params(body),
-                      error=str(exc))
-        return JsonResponse({"error": str(exc)}, status=403)
+        try:
+            _authorize_action(game, request, body)
+            result = _dispatch(game, body, is_admin=_is_admin(request))
+            _debug_record(game, "client", body.get("type"), _debug_params(body))
+            # Drive the computer, then auto-end an idle combat turn -- and if that
+            # opens a fresh select pass led by a computer figure, drive that too.
+            # Without the re-drive, a combat turn that auto-ends into a
+            # computer-first initiative would hang, leaving the human waiting on a
+            # figure it cannot move.
+            for _ in range(256):
+                _advance_computer(game)
+                if not _auto_end_if_idle(game):
+                    break
+                _debug_record(game, "system", "auto_end_turn", {})
+        except IllegalAction as exc:
+            _debug_record(game, "client", body.get("type"), _debug_params(body),
+                          error=str(exc))
+            return JsonResponse({"error": str(exc)}, status=400)
+        except Forbidden as exc:
+            _debug_record(game, "client", body.get("type"), _debug_params(body),
+                          error=str(exc))
+            return JsonResponse({"error": str(exc)}, status=403)
 
-    # Snapshot after every applied action so a worker restart or a registry
-    # eviction can never orphan a live match (#275).
-    _autosave_game(gid, game)
-    payload = _payload(game)
-    payload.update(_ownership_fields(game, _player_id(request)))
-    payload["is_admin"] = _is_admin(request)
-    if result is not None:
-        payload["result"] = result
-    return JsonResponse(payload)
+        # Snapshot after every applied action so a worker restart or a registry
+        # eviction can never orphan a live match (#275).
+        _autosave_game(gid, game)
+        payload = _payload(game)
+        payload.update(_ownership_fields(game, _player_id(request)))
+        payload["is_admin"] = _is_admin(request)
+        if result is not None:
+            payload["result"] = result
+        return JsonResponse(payload)
 
 
 def api_debug(request, gid):
@@ -1282,48 +1389,52 @@ def api_seat(request, gid):
     Computer seats can't be reassigned. The per-figure-side authorization in
     :func:`_authorize_action` then enforces "control only your own figures".
     """
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
     if request.method != "POST":
         return HttpResponse(status=405)
-    try:
-        body = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "bad JSON"}, status=400)
-    seats = game.get("seats")
-    if not seats:
-        return JsonResponse({"error": "this game has no seats"}, status=400)
+    # The whole check-then-set of a claim runs under the per-game lock so two
+    # joiners can't both pass the "seat is open" test and both take it (#253).
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        try:
+            body = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "bad JSON"}, status=400)
+        seats = game.get("seats")
+        if not seats:
+            return JsonResponse({"error": "this game has no seats"}, status=400)
 
-    action = body.get("action")
-    side = body.get("side")
-    if side not in seats:
-        return JsonResponse({"error": f"unknown side {side!r}"}, status=400)
-    if seats[side] == "computer":
-        return JsonResponse({"error": "a computer seat can't be reassigned"}, status=400)
+        action = body.get("action")
+        side = body.get("side")
+        if side not in seats:
+            return JsonResponse({"error": f"unknown side {side!r}"}, status=400)
+        if seats[side] == "computer":
+            return JsonResponse(
+                {"error": "a computer seat can't be reassigned"}, status=400)
 
-    pid = _player_id(request)
-    minted = False
-    if action == "claim":
-        if seats[side] != "open":
-            return JsonResponse({"error": "that seat is already taken"}, status=409)
-        if pid is None:
-            pid, minted = secrets.token_hex(16), True
-        seats[side] = pid
-    elif action in ("open", "release"):
-        if seats[side] != pid:
-            return JsonResponse({"error": "you don't own that seat"}, status=403)
-        seats[side] = "open"
-    else:
-        return JsonResponse({"error": f"unknown seat action {action!r}"}, status=400)
+        pid = _player_id(request)
+        minted = False
+        if action == "claim":
+            if seats[side] != "open":
+                return JsonResponse({"error": "that seat is already taken"}, status=409)
+            if pid is None:
+                pid, minted = secrets.token_hex(16), True
+            seats[side] = pid
+        elif action in ("open", "release"):
+            if seats[side] != pid:
+                return JsonResponse({"error": "you don't own that seat"}, status=403)
+            seats[side] = "open"
+        else:
+            return JsonResponse({"error": f"unknown seat action {action!r}"}, status=400)
 
-    _autosave_game(gid, game)          # seats are part of the snapshot (#275)
-    payload = _payload(game)
-    payload.update(_ownership_fields(game, pid))
-    response = JsonResponse(payload)
-    if minted:
-        _set_player_cookie(response, pid)
-    return response
+        _autosave_game(gid, game)          # seats are part of the snapshot (#275)
+        payload = _payload(game)
+        payload.update(_ownership_fields(game, pid))
+        response = JsonResponse(payload)
+        if minted:
+            _set_player_cookie(response, pid)
+        return response
 
 
 # A phase's internal name vs. the word used in its guard message. Kept as a small
@@ -1581,3 +1692,17 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
         rebuilt.fatigue_taken = min(figure.fatigue_taken, rebuilt.fatigue)
         rebuilt.body_taken = min(figure.body_taken, rebuilt.body)
     state.figures[state.figures.index(figure)] = rebuilt
+
+    # A mid-combat edit swaps the Figure object, but a queued attack holds direct
+    # references to the OLD object (PendingAttack.attacker/target/second_target).
+    # Rebind them to the rebuilt figure so resolution damages the live figure
+    # rather than a discarded copy (a hit would silently vanish), and so the
+    # duplicate-attack guard's identity test still recognizes the edited attacker
+    # (or it could queue and land a second attack in one turn) — issue #264.
+    for pending in state._pending:
+        if pending.attacker is figure:
+            pending.attacker = rebuilt
+        if pending.target is figure:
+            pending.target = rebuilt
+        if pending.second_target is figure:
+            pending.second_target = rebuilt
