@@ -665,7 +665,7 @@ function drawControls() {
 
   if (S.victory) {
     setHint(`🏆 <b>${sideName(S.victory)}</b> wins the field!`);
-    bigPrimary(c, "Start next round →", () => act({type: "end_turn"}).then(after));
+    bigPrimary(c, "Start next round →", () => act({type: "end_turn", expected_turn: S.turn}).then(after));
     return;
   }
 
@@ -755,7 +755,10 @@ function drawControls() {
       drawForceRetreat(c);                 // post-combat shoves, if any
       bigPrimary(c, "End turn →", () => {
         dbg("INTERACT", "End turn pressed");
-        resetAll(); act({type: "end_turn"}).then(after);
+        // #242: carry the turn we mean to end so a double-click / retried POST
+        // that lands after the first end_turn already advanced is a safe no-op
+        // server-side instead of silently skipping a whole turn.
+        resetAll(); act({type: "end_turn", expected_turn: S.turn}).then(after);
       });
     }
     return;
