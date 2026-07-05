@@ -105,6 +105,55 @@ def _closing_move(state: GameState, figure: Figure, target: Figure, option: Opti
     return dest, reach.path_to(dest)
 
 
+def _weapon_power(weapon) -> float:
+    """Expected damage — the AI's yardstick for which weapon to take up."""
+    return weapon.damage.count * 3.5 + weapon.damage.modifier
+
+
+def _rearm_or_close(state: GameState, figure: Figure, target: Figure) -> None:
+    """Recover from a lost weapon (#249/#275) — the fumble table (a Tarmar
+    natural 1, classic Melee's 17/18) leaves ``ready_weapon`` empty, and a
+    figure that never re-arms can neither attack nor be attacked into
+    progress: the fight wedges. So, in order of preference:
+
+    * **engaged** — swap to a carried melee weapon (option m); with none to
+      swap to, hold (a grapple may still be declared in the combat phase).
+    * **free, a weapon lying in reach** — pick the best one up (option q; a
+      fumbled weapon lands in the fumbler's own hex, so this is usually its
+      own blade at its feet).
+    * **free, carrying a spare** — ready the best carried weapon (option e).
+    * **nothing to recover** — close toward the target bare-handed (the
+      combat phase may offer a grapple).
+    """
+    layout = state.arena.layout
+    facing = _facing_toward(layout, figure.position, target.position)
+    if state.engaged(figure):
+        melee = next((w for w in figure.weapons
+                      if w.kind != WeaponKind.MISSILE), None)
+        if melee is not None:
+            state.move(figure, Option.CHANGE_WEAPONS, facing=facing,
+                       ready=melee.name)
+        else:
+            state.set_do_nothing(figure)
+        return
+    dropped = state.dropped_in_reach(figure)
+    if dropped:
+        state.move(figure, Option.PICK_UP,
+                   ready=max(dropped, key=_weapon_power).name)
+        return
+    if figure.weapons:
+        state.move(figure, Option.READY_WEAPON, facing=facing,
+                   ready=max(figure.weapons, key=_weapon_power).name)
+        return
+    advance = _closing_move(state, figure, target, Option.MOVE)
+    if advance is not None:
+        dest, path = advance
+        state.move(figure, Option.MOVE, path=path,
+                   facing=_travel_facing(layout, figure, dest, target))
+    else:
+        state.move(figure, Option.MOVE, facing=facing)
+
+
 def take_action(state: GameState, figure: Figure) -> None:
     """Set the action for ONE computer-controlled ``figure`` (#192).
 
@@ -130,6 +179,11 @@ def take_action(state: GameState, figure: Figure) -> None:
         return
 
     weapon = figure.ready_weapon
+    if weapon is None:
+        # Disarmed by a fumble: re-arm (or close bare-handed) instead of
+        # committing to an attack it can never make (#275).
+        _rearm_or_close(state, figure, target)
+        return
     has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
     can_fire = has_missile and figure.missile_cooldown == 0
     facing = _facing_toward(layout, figure.position, target.position)
@@ -213,19 +267,36 @@ def queue_attacks(state: GameState, side: str) -> None:
                 state.hth_attack(figure, min(foes, key=lambda e: e.current_st))
             continue
         option = figure.current_option
-        if option is None or not spec(option).is_attack:
-            continue
         weapon = figure.ready_weapon
         if weapon is None:
+            # Bare hands (a fumble took the weapon): the one attack left is a
+            # grapple — take it when the rules allow one (#275). A figure that
+            # chose to defend or disengage keeps that choice.
+            if option is not None and (spec(option).sets_dodge
+                                       or spec(option).sets_defend
+                                       or option == Option.DISENGAGE):
+                continue
+            foes = state.hth_targets(figure)
+            if foes:
+                figure.current_option = Option.HTH_ATTACK
+                state.hth_attack(figure, min(foes, key=lambda e: e.current_st))
+            continue
+        if option is None or not spec(option).is_attack:
             continue
         if weapon.kind == WeaponKind.MISSILE:
             if figure.missile_cooldown > 0:
                 continue                        # still reloading
             # Only fire at a foe in the front arc (p.16); the AI faces the nearest
-            # enemy in its movement, so the lane is normally clear.
-            candidates = [e for e in state.enemies_of(figure)
-                          if e.position is not None
-                          and state.in_front_arc(figure, e.position)]
+            # enemy in its movement, so the lane is normally clear. Never aim at
+            # a foe grappling one of our own: a shot into an HTH pile strikes a
+            # RANDOM member (p.18), so it could hit the friend (#275).
+            candidates = [
+                e for e in state.enemies_of(figure)
+                if e.position is not None
+                and state.in_front_arc(figure, e.position)
+                and not (e.in_hth and any(
+                    friend.side == figure.side and friend.position == e.position
+                    for friend in state.figures))]
         else:
             candidates = state.melee_targets(figure, weapon)   # front hexes + pole jab
         if candidates:
