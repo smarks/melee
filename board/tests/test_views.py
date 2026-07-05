@@ -227,6 +227,44 @@ def test_auto_end_turn_when_no_attacks_remain() -> None:
     assert game["phase"] == "select"
 
 
+def test_decided_game_does_not_churn_past_the_victory_turn() -> None:
+    # #277: once a side has won, the action drive loop kept auto-ending turns —
+    # burning the full 256-iteration bound, racing the turn counter ahead and
+    # spamming "holds, taking no action" lines every request. A decided game must
+    # stop the moment it is won: no advance, no churn.
+    from board.views import _advance_computer, _auto_end_if_idle
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    winner = create_human("Victor", 12, 12, "blue", weapons=[BROADSWORD],
+                          ready_weapon=BROADSWORD)
+    loser = create_human("Fallen", 12, 12, "red", weapons=[BROADSWORD],
+                         ready_weapon=BROADSWORD)
+    winner.position = Hex(3, 3)
+    loser.position = layout.neighbor(winner.position, 0)
+    loser.damage_taken = loser.strength          # collapsed -> blue has won the field
+    state = GameState(arena, [winner, loser])
+    assert state.victor() == "blue"
+    game = {
+        "state": state, "phase": "combat",
+        "controllers": {"red": "human", "blue": "computer"}, "combat_prepared": True,
+    }
+
+    start_turn = state.turn_number
+    log_before = len(state.log)
+    for _ in range(256):                          # the real api_action drive loop
+        _advance_computer(game)
+        if not _auto_end_if_idle(game):
+            break
+    assert state.turn_number == start_turn        # never advanced past the deciding turn
+    assert len(state.log) - log_before < 5        # no run of hold-lines was appended
+
+
 def _combat_duel():
     """A red & blue knight adjacent (red facing blue), registered in combat phase."""
     from board.geometry import layout as board_layout

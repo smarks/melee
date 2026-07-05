@@ -65,15 +65,56 @@ def _best_target(state: GameState, figure: Figure, candidates: list[Figure]) -> 
     )
 
 
+def _adjacent_enemies(state: GameState, figure: Figure, enemies: list[Figure]) -> list[Figure]:
+    """The enemies touching ``figure``'s footprint (distance 1 from any of its
+    hexes) — the foes it could face and strike this turn without moving."""
+    layout = state.arena.layout
+    footprint = figure.footprint(layout)
+    return [enemy for enemy in enemies
+            if min(layout.distance(hex_position, enemy.position)
+                   for hex_position in footprint) <= 1]
+
+
 def _pick_target(state: GameState, figure: Figure) -> Figure | None:
     """The foe to manoeuvre toward and attack: the weakest reachable enemy on
     the field (lowest remaining ST, nearest as a tie-break, via
     :func:`_best_target`), so the AI focus-fires rather than chasing whoever
-    happens to be nearest."""
+    happens to be nearest.
+
+    When ``figure`` is engaged it focus-fires among the **adjacent** foes only, so
+    it faces and strikes the enemy actually engaging it instead of turning its back
+    on it to chase a weaker foe far away — which left it eating rear (+4) hits and
+    never swinging (#240)."""
     enemies = [e for e in state.enemies_of(figure) if e.position is not None]
     if not enemies or figure.position is None:
         return None
+    if state.engaged(figure):
+        adjacent = _adjacent_enemies(state, figure, enemies)
+        if adjacent:
+            return _best_target(state, figure, adjacent)
     return _best_target(state, figure, enemies)
+
+
+def _turn_in_place_facing(state: GameState, figure: Figure, target: Figure) -> int | None:
+    """Facing for a STATIONARY figure turning to face ``target``.
+
+    A single-hex figure turns freely to face its target. A multi-hex figure turns
+    only when its rotated footprint fits; otherwise it keeps its current facing
+    (``None``) rather than requesting a turn the engine must reject — a giant that
+    used to crash its engaged/fire-in-place turns this way (#153/#250).
+    """
+    facing = _facing_toward(state.arena.layout, figure.position, target.position)
+    return facing if state.turn_in_place_fits(figure, facing) else None
+
+
+def _has_free_adjacent_hex(state: GameState, figure: Figure) -> bool:
+    """Whether a free (unoccupied, on-arena) hex adjoins ``figure`` — somewhere a
+    disengage could step into."""
+    if figure.position is None:
+        return False
+    held = set(state.occupied(exclude=figure))
+    return any(state.arena.contains(hex_position) and hex_position not in held
+               for hex_position in state.arena.neighbors(figure.position))
 
 
 def _travel_facing(layout, figure: Figure, dest, target: Figure) -> int | None:
@@ -116,8 +157,12 @@ def _rearm_or_close(state: GameState, figure: Figure, target: Figure) -> None:
     figure that never re-arms can neither attack nor be attacked into
     progress: the fight wedges. So, in order of preference:
 
-    * **engaged** — swap to a carried melee weapon (option m); with none to
-      swap to, hold (a grapple may still be declared in the combat phase).
+    * **engaged, a carried melee weapon** — swap to it (option m).
+    * **engaged, only a missile weapon carried** — it can neither ready a bow
+      while engaged (p.13/#79) nor fire empty-handed, so if a weapon lies in
+      reach and there's a free hex to step to, break away (option n) toward it
+      and pick it up once free next turn (#278); otherwise hold (a grapple may
+      still be declared in the combat phase).
     * **free, a weapon lying in reach** — pick the best one up (option q; a
       fumbled weapon lands in the fumbler's own hex, so this is usually its
       own blade at its feet).
@@ -126,13 +171,17 @@ def _rearm_or_close(state: GameState, figure: Figure, target: Figure) -> None:
       combat phase may offer a grapple).
     """
     layout = state.arena.layout
-    facing = _facing_toward(layout, figure.position, target.position)
+    facing = _turn_in_place_facing(state, figure, target)
     if state.engaged(figure):
         melee = next((w for w in figure.weapons
                       if w.kind != WeaponKind.MISSILE), None)
         if melee is not None:
             state.move(figure, Option.CHANGE_WEAPONS, facing=facing,
                        ready=melee.name)
+        elif state.dropped_in_reach(figure) and _has_free_adjacent_hex(state, figure):
+            # Only missile weapons carried but a blade in reach: disengage toward
+            # it (the step happens in the combat phase), then pick it up next turn.
+            state.move(figure, Option.DISENGAGE)
         else:
             state.set_do_nothing(figure)
         return
@@ -144,6 +193,36 @@ def _rearm_or_close(state: GameState, figure: Figure, target: Figure) -> None:
     if figure.weapons:
         state.move(figure, Option.READY_WEAPON, facing=facing,
                    ready=max(figure.weapons, key=_weapon_power).name)
+        return
+    advance = _closing_move(state, figure, target, Option.MOVE)
+    if advance is not None:
+        dest, path = advance
+        state.move(figure, Option.MOVE, path=path,
+                   facing=_travel_facing(layout, figure, dest, target))
+    else:
+        state.move(figure, Option.MOVE, facing=facing)
+
+
+def _fight_without_missiles(state: GameState, figure: Figure, target: Figure) -> None:
+    """Arm for melee in a practice bout, where no missile may ever be loosed (p.22).
+
+    A readied bow is dead weight — the engine forbids every missile option — so a
+    practice archer must take up a carried melee weapon (Change Weapons when
+    engaged, Ready Weapon otherwise) and fight. With no melee weapon carried it
+    closes toward the target bare-handed (a grapple may still come in the combat
+    phase), or holds when engaged with nothing to do. Prevents the AI requesting a
+    shot the practice gate rejects, which used to crash or wedge the game (#239).
+    """
+    layout = state.arena.layout
+    facing = _turn_in_place_facing(state, figure, target)
+    melee = next((weapon for weapon in figure.weapons
+                  if weapon.kind != WeaponKind.MISSILE), None)
+    if melee is not None:
+        option = Option.CHANGE_WEAPONS if state.engaged(figure) else Option.READY_WEAPON
+        state.move(figure, option, facing=facing, ready=melee.name)
+        return
+    if state.engaged(figure):
+        state.set_do_nothing(figure)
         return
     advance = _closing_move(state, figure, target, Option.MOVE)
     if advance is not None:
@@ -184,16 +263,22 @@ def take_action(state: GameState, figure: Figure) -> None:
         # committing to an attack it can never make (#275).
         _rearm_or_close(state, figure, target)
         return
-    has_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
+    has_missile = weapon.kind == WeaponKind.MISSILE
+    if has_missile and state.practice:
+        # No missile may be loosed in a practice bout (p.22): a readied bow can
+        # never fire, so arm for melee instead of requesting a shot the engine
+        # rejects (which 500'd practice-vs-computer creation / wedged select) (#239).
+        _fight_without_missiles(state, figure, target)
+        return
     can_fire = has_missile and figure.missile_cooldown == 0
-    facing = _facing_toward(layout, figure.position, target.position)
+    turn_facing = _turn_in_place_facing(state, figure, target)   # None if a giant can't rotate
 
     if state.engaged(figure):
         if can_fire:
-            state.move(figure, Option.ONE_LAST_SHOT, facing=facing)   # loaded bow: shoot
+            state.move(figure, Option.ONE_LAST_SHOT, facing=turn_facing)   # loaded bow: shoot
             return
         if not has_missile:
-            state.move(figure, Option.SHIFT_ATTACK, facing=facing)    # blade in hand: strike
+            state.move(figure, Option.SHIFT_ATTACK, facing=turn_facing)    # blade in hand: strike
             return
         # Engaged with a reloading bow: it can neither shift-attack nor parry with a
         # missile weapon (both illegal, p.13/#79). Drop the bow for a carried melee
@@ -201,7 +286,7 @@ def take_action(state: GameState, figure: Figure) -> None:
         melee = next((w for w in figure.weapons
                       if w.kind != WeaponKind.MISSILE and w is not weapon), None)
         if melee is not None:
-            state.move(figure, Option.CHANGE_WEAPONS, facing=facing, ready=melee.name)
+            state.move(figure, Option.CHANGE_WEAPONS, facing=turn_facing, ready=melee.name)
         else:
             state.set_do_nothing(figure)
         return
@@ -220,7 +305,7 @@ def take_action(state: GameState, figure: Figure) -> None:
                 state.move(figure, Option.MISSILE_ATTACK, path=path,
                            facing=_facing_toward(layout, dest, target.position))
             else:
-                state.move(figure, Option.MISSILE_ATTACK, facing=facing)
+                state.move(figure, Option.MISSILE_ATTACK, facing=turn_facing)
             return
         # Reloading (a crossbow) or no shot worth taking: ADVANCE at a full run
         # toward the target instead of holding — the weapon reloads on its own
@@ -231,7 +316,7 @@ def take_action(state: GameState, figure: Figure) -> None:
             state.move(figure, Option.MOVE, path=path,
                        facing=_travel_facing(layout, figure, dest, target))
         else:
-            state.move(figure, Option.MOVE, facing=facing)  # boxed in; face the foe
+            state.move(figure, Option.MOVE, facing=turn_facing)  # boxed in; face the foe
         return
 
     # Melee: charge into contact if reachable this turn, else close distance.
@@ -252,13 +337,44 @@ def take_action(state: GameState, figure: Figure) -> None:
         state.move(figure, Option.MOVE, path=path,
                    facing=_travel_facing(layout, figure, dest, target))
     else:
-        state.move(figure, Option.MOVE, facing=facing)  # boxed in; just face the foe
+        state.move(figure, Option.MOVE, facing=turn_facing)  # boxed in; just face the foe
+
+
+def _disengage_step(state: GameState, figure: Figure) -> None:
+    """Carry out a chosen disengage (option n) in the combat phase (#278).
+
+    Steps to the reachable hex that best sets up re-arming: one that keeps a
+    dropped weapon in reach, breaking contact so the figure can PICK_UP/READY next
+    turn. Among those it prefers the hex furthest from the foes engaging it. A
+    boxed-in figure (no free step) keeps its held no-op.
+    """
+    destinations = [dest for dest in state.disengage_destinations(figure)
+                    if state.figure_at(dest) is None]      # free hexes only, no grapple
+    if not destinations:
+        return
+    layout = state.arena.layout
+    dropped_hexes = [hex_position for hex_position, _weapon in state.dropped]
+    enemies = [enemy for enemy in state.enemies_of(figure) if enemy.position is not None]
+
+    def _preference(dest) -> tuple[bool, int]:
+        keeps_weapon_in_reach = any(layout.distance(dest, hex_position) <= 1
+                                    for hex_position in dropped_hexes)
+        distance_from_foes = min((layout.distance(dest, enemy.position)
+                                  for enemy in enemies), default=0)
+        return (keeps_weapon_in_reach, distance_from_foes)
+
+    state.disengage_move(figure, max(destinations, key=_preference))
 
 
 def queue_attacks(state: GameState, side: str) -> None:
     """Declare attacks for every figure on ``side`` that chose an attack option."""
-    layout = state.arena.layout
     for figure in [f for f in state.figures if f.side == side and f.can_act()]:
+        if (figure.current_option == Option.DISENGAGE
+                and not figure.attacked_this_turn):
+            # A figure that chose to break away (option n) moves instead of
+            # attacking; carry out that step now so it can re-arm next turn (#278).
+            _disengage_step(state, figure)
+            continue
         if figure.in_hth:                    # locked in a grapple: keep wrestling
             foes = [f for f in state.figures
                     if f.uid in figure.hth_opponents and f.can_act()]

@@ -1286,6 +1286,24 @@ class _ShieldRushMixin:
         # A valid set advances the initiative pointer to the next actor.
         self._advance_active()
 
+    def turn_in_place_fits(self, figure: Figure, facing: int | None) -> bool:
+        """Whether a STATIONARY ``figure`` may turn to ``facing`` — its rotated
+        footprint stays on the arena and clear of every other figure.
+
+        A single-hex figure (or a no-op turn) always fits; a multi-hex figure's
+        in-place rotation is gated because footprint rotation is deferred (#153).
+        Shared by :meth:`_validate_multihex_turn` (the raising authority) and the
+        AI's turn-in-place choice, so the legality test has one source of truth and
+        the AI can never request a turn the engine must reject (#250).
+        """
+        if (facing is None or figure.size == 1 or figure.position is None
+                or facing % 6 == figure.facing):
+            return True
+        rotated = footprint_for(self.arena.layout, figure.position, facing % 6, figure.size)
+        blocked = set(self.occupied(exclude=figure))
+        return all(self.arena.contains(hex_position) and hex_position not in blocked
+                   for hex_position in rotated)
+
     def _validate_multihex_turn(
         self, figure: Figure, path: list[Hex], facing: int | None
     ) -> None:
@@ -1293,8 +1311,9 @@ class _ShieldRushMixin:
 
         A multi-hex figure may **translate** freely (footprint validated by
         :meth:`_validate_path`) or **turn in place** when stationary (the rotated
-        footprint must fit). Turning *while* moving -- combined rotation and
-        translation -- is the hard case and is deferred, so it's rejected.
+        footprint must fit, :meth:`turn_in_place_fits`). Turning *while* moving --
+        combined rotation and translation -- is the hard case and is deferred, so
+        it's rejected.
         """
         if facing is None or facing % 6 == figure.facing:
             return
@@ -1303,18 +1322,11 @@ class _ShieldRushMixin:
                 f"{figure.name} cannot turn while moving "
                 f"(footprint rotation deferred)"
             )
-        anchor = figure.position if not path else path[-1]
-        rotated = footprint_for(self.arena.layout, anchor, facing % 6, figure.size)
-        blocked = set(self.occupied(exclude=figure))
-        for hex_position in rotated:
-            if not self.arena.contains(hex_position):
-                raise IllegalAction(
-                    f"{figure.name} cannot turn: {hex_position} is off the arena"
-                )
-            if hex_position in blocked:
-                raise IllegalAction(
-                    f"{figure.name} cannot turn: {hex_position} is occupied"
-                )
+        if not self.turn_in_place_fits(figure, facing):
+            raise IllegalAction(
+                f"{figure.name} cannot turn: its rotated footprint would leave "
+                f"the arena or hit another figure"
+            )
 
     def _validate_ready(self, figure: Figure, option: Option, weapon_name: str) -> None:
         """Check a weapon switch is legal, mutating nothing. Called both up front
