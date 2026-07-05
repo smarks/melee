@@ -709,12 +709,16 @@ def test_committed_thrower_can_be_targeted_and_resolve_enables(
     # Craft the deadlock in the shared, in-process server state: arm a red figure
     # with a Spear (throwable pole weapon, reach 2), stand it 3 hexes from a blue
     # foe (out of melee reach -> its only attack is a thrown shot), and commit it to
-    # an attack so it lands in must_attack. Every other figure is taken off the
+    # an attack so it lands in must_attack. Keep a SECOND blue foe on the board (also
+    # out of reach) so the thrower has more than one legal target: with two targets
+    # the sole-target auto-queue (#299) stays out of the way and the must-attack gate
+    # is exercised as intended. Every red figure but the thrower is taken off the
     # board so the gate is solely about the thrower.
     game = views.GAMES[gid]
     state = game["state"]
     thrower = next(f for f in state.figures if f.side == "red")
-    foe = next(f for f in state.figures if f.side == "blue")
+    blue_foes = [f for f in state.figures if f.side == "blue"]
+    foe = blue_foes[0]
     if SPEAR not in thrower.weapons:
         thrower.weapons.append(SPEAR)
     thrower.ready_weapon = SPEAR
@@ -726,8 +730,13 @@ def test_committed_thrower_can_be_targeted_and_resolve_enables(
     foe.position = Hex(9, 6)
     foe.facing = 3
     foe.armor = NO_ARMOR          # unarmoured so a landed throw reliably wounds it
+    second_foe = blue_foes[1] if len(blue_foes) > 1 else None
+    assert second_foe is not None, "the seed needs a second blue foe for two targets"
+    second_foe.position = Hex(9, 8)   # another enemy, also out of the thrower's reach
+    second_foe.facing = 3
+    second_foe.current_option = None
     for other in state.figures:
-        if other is thrower or other is foe:
+        if other in (thrower, foe, second_foe):
             continue
         other.current_option = None
         other.position = None

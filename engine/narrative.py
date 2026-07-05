@@ -162,6 +162,7 @@ _MOVE_VERB = {
     Option.MISSILE_ATTACK: "takes aim",
     Option.STAND_UP: "rises to their feet",
     Option.CRAWL: "crawls",
+    Option.ATTACK: "stands fast to strike",
     Option.SHIFT_ATTACK: "shifts in to attack",
     Option.SHIFT_DEFEND: "raises a guard",
     Option.ONE_LAST_SHOT: "looses a parting shot",

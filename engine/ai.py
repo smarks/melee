@@ -292,7 +292,15 @@ def take_action(state: GameState, figure: Figure) -> None:
             state.move(figure, Option.ONE_LAST_SHOT, facing=turn_facing)   # loaded bow: shoot
             return
         if not has_missile:
-            state.move(figure, Option.SHIFT_ATTACK, facing=turn_facing)    # blade in hand: strike
+            # Stand and strike when the foe is already within reach (turning to
+            # face it costs nothing and needs no step); only take the optional
+            # 1-hex shift when the target is a hex too far to reach in place. A
+            # plain Attack grants no charge/shift bonus (#300) — neither does a
+            # shift, so this is purely about not moving when a move is pointless.
+            weapon_reach = weapon.reach
+            in_reach = state.arena.distance(figure.position, target.position) <= weapon_reach
+            strike = Option.ATTACK if in_reach else Option.SHIFT_ATTACK
+            state.move(figure, strike, facing=turn_facing)    # blade in hand: strike
             return
         # Engaged with a reloading bow: it can neither shift-attack nor parry with a
         # missile weapon (both illegal, p.13/#79). Drop the bow for a carried melee

@@ -328,6 +328,28 @@ def test_attack_can_be_declared_in_the_combat_phase(client: Client) -> None:
         del GAMES["duel-test"]
 
 
+def test_sole_target_attacker_is_flagged_with_exactly_one_target(client: Client) -> None:
+    # #299: the frontend auto-queues the shot when a committed attacker has
+    # exactly ONE legal target. That auto-fill keys off two server signals: the
+    # figure appears in must_attack, and its options report a single target. Prove
+    # both hold for a plain-Attack (#300) figure facing one adjacent foe.
+    from board.views import GAMES, _attack_targets, _must_attack
+    from engine.options import Option
+
+    red, blue = _combat_duel()
+    try:
+        red.current_option = Option.ATTACK              # committed to a stand-still strike
+        state = GAMES["duel-test"]["state"]
+        assert red.uid in _must_attack(state)           # so Resolve gates on it
+        targets = _attack_targets(state, red)
+        assert targets.melee == [blue.uid]              # exactly one legal target
+        assert targets.ranged == []
+        out = client.get(f"/api/game/duel-test/options?uid={red.uid}").json()
+        assert out["melee_targets"] == [blue.uid]       # the one target the UI auto-picks
+    finally:
+        del GAMES["duel-test"]
+
+
 def test_auto_facing_follows_direction_of_travel() -> None:
     from board.views import _auto_facing
     from engine.arena import Arena

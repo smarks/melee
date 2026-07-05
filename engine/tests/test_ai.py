@@ -82,6 +82,24 @@ def test_ai_engaged_attacks_and_resolves() -> None:
     assert blue.current_st < blue.strength             # blue took damage
 
 
+def test_ai_stands_and_strikes_an_adjacent_foe_without_shifting() -> None:
+    # #300: when the foe is already within reach the AI takes the plain ATTACK
+    # (stand still, strike) rather than a pointless SHIFT_ATTACK -- standing and
+    # striking is correct, so it must not force a shift.
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    blue = _fighter("Blue", "blue")
+    red = _fighter("Red", "red")
+    blue.position, blue.facing = Hex(3, 3), 0
+    red.position = layout.neighbor(blue.position, 0)    # adjacent, in reach already
+    red.facing = 3
+    state = GameState(arena, [red, blue], dice=Dice(seed=1))
+
+    _drive(state, "red")
+    assert red.current_option == Option.ATTACK         # plain strike, no shift
+    assert red.moved_this_turn == 0                     # it stood its ground
+
+
 def _archer(name: str, side: str, **kw):
     return create_human(name, 12, 12, side, weapons=[SMALL_BOW, DAGGER],
                         ready_weapon=SMALL_BOW, armor=NO_ARMOR, **kw)
