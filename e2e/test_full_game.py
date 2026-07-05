@@ -143,6 +143,99 @@ def test_full_game_plays_out(live_server, page: Page) -> None:
 
 
 # ============================================================================
+# Tarmar full game (#267): the entire Tarmar profile was browser-invisible -- no
+# e2e ever SELECTED the Tarmar ruleset, so its SPA surfaces (the Fatigue/Body
+# health pools in the roster, the d20 "needed N or more" to-hit log lines) never
+# ran under Playwright. This starts a Tarmar-vs-Computer match through the real
+# Game Control and plays it out, asserting those Tarmar-specific surfaces appear.
+# ============================================================================
+
+
+def _inspected_figure_shows_tarmar_pools(page: Page) -> bool:
+    """Select each roster figure in turn and check whether the Selected-figure panel
+    renders the Tarmar Fatigue/Body health pools.
+
+    Clicking a figure's roster row inspects it into ``#selInfo``, whose status
+    header reads ``Fatigue X/Y · Body X/Y`` for a tarmar figure but ``ST X/Y`` for
+    a classic one (board.js ``statusHeader``). Finding that text proves the SPA
+    drew the Tarmar figure model -- the surface no prior e2e ever reached."""
+    rows = page.locator("#roster .row[data-uid]")
+    for index in range(rows.count()):
+        rows.nth(index).click()
+        info = page.locator("#selInfo").inner_text()
+        if "Fatigue" in info and "Body" in info:
+            return True
+        page.keyboard.press("Escape")     # dismiss any action menu the click opened
+    return False
+
+
+@pytest.mark.django_db
+def test_tarmar_full_game_plays_out(live_server, page: Page) -> None:
+    """Drive a Tarmar (d20) Player-vs-Computer match through its real controls and
+    verify the Tarmar profile is genuinely browser-visible (#267): the roster shows
+    Fatigue/Body pools (not classic ST), and once combat resolves the log carries
+    the d20 to-hit lines ("needed N or more, rolled N" -- Tarmar rolls a d20 OVER
+    the target, where classic Melee rolls 3d6 UNDER, "or less").
+
+    Mirrors ``test_full_game_plays_out`` but SELECTS the Tarmar ruleset in Game
+    Control before starting. PR #238 (crit-confirm / nat-1 fumble) and the #283 AI
+    batch make a Tarmar game play to a decision; if it stalls here that is a real
+    bug, surfaced rather than worked around. Records video."""
+    page.goto(live_server.url)
+    # Select the Tarmar ruleset BEFORE starting, then add one AI player and begin.
+    page.locator("#profile").select_option("Tarmar")
+    page.get_by_role("button", name="Add AI player").click()
+    page.get_by_role("button", name="New Game").click()
+    banner = page.locator("#phaseBanner")
+    expect(banner).to_contain_text("Turn", timeout=20_000)
+
+    # The Tarmar figure model surfaces in the SPA: inspecting a figure shows its
+    # Fatigue/Body pools (classic would show ST). Proves the Tarmar rendering ran.
+    assert _inspected_figure_shows_tarmar_pools(page), (
+        "no inspected figure showed Tarmar Fatigue/Body pools -- the SPA is not "
+        "drawing the Tarmar figure model")
+
+    victory = False
+    saw_combat = False
+    stalls = 0
+    for index in range(400):
+        text = banner.inner_text()
+        if "wins the field" in text:
+            victory = True
+            break
+        if not saw_combat and index % 12 == 0:
+            saw_combat = _combat_happened(page.locator("#roster").inner_text())
+        if saw_combat and _turn_number(text) >= 10:
+            break
+
+        if _advance_once(page):
+            stalls = 0
+            page.wait_for_timeout(80)
+        else:
+            stalls += 1
+            assert stalls < 40, (
+                "no forward control appeared for 40 tries -- the Tarmar game "
+                f"stalled (a real bug per #267); banner was {text!r}"
+            )
+            page.wait_for_timeout(250)
+
+    combat_log = page.locator("#log").inner_text()
+    assert combat_log.strip(), "combat log is unexpectedly empty"
+    assert "Turn" in combat_log, "no turn markers in the log -- the game didn't advance"
+    saw_combat = saw_combat or _combat_happened(page.locator("#roster").inner_text())
+    assert victory or saw_combat, (
+        f"no combat resolved and no victory after the Tarmar run; "
+        f"roster was {page.locator('#roster').inner_text()!r}"
+    )
+    # The d20 to-hit line is the Tarmar-specific narration: it reads "needed N or
+    # more, rolled N" (classic Melee reads "or less"). Its presence proves a real
+    # Tarmar combat resolution was surfaced to the browser, not a classic one.
+    assert "or more" in combat_log.lower(), (
+        "no d20 'needed N or more' to-hit line in the log -- the Tarmar resolution "
+        f"path was not surfaced; log was:\n{combat_log}")
+
+
+# ============================================================================
 # Human-driven full game (#204): the HUMAN actually moves, melees, and fires a
 # missile through the real UI, and we assert the human's OWN action dealt the
 # damage (a specific enemy figure's ST falls). It fails on the pre-#204 missile
