@@ -21,6 +21,18 @@ def _edit_spec(figure: Figure) -> dict:
     ready_name = ready.name if ready else "Dagger"
     second = next((w for w in figure.weapons
                    if w is not ready and w.name != "Dagger"), None)
+    # A two-handed ready weapon leaves no free hand for a shield (Section III), so
+    # a spec pairing them is illegal and chargen.build rejects the round-trip --
+    # which froze mid-game edits on a two-handed wielder and stalled the turn
+    # (#298). Drop the shield in exactly the case chargen would reject: a
+    # two-handed ready weapon with no one-handed second weapon to justify carrying
+    # it. Keep the shield when a one-handed backup pairs with it (the engine slings
+    # it while the two-hander is out), and keep a one-handed wielder's
+    # merely-slung shield too, so any legitimately-carried shield still round-trips.
+    ready_is_two_handed = ready is not None and ready.two_handed
+    has_one_handed_backup = second is not None and not second.two_handed
+    shield_name = ("None" if ready_is_two_handed and not has_one_handed_backup
+                   else figure.shield.name)
     # Report the *basic* spread (before any Section IX advancement, #10) so the
     # editor and chargen.build still see ST+DX summing to the race total. The
     # added points are re-applied when the rebuilt figure is swapped back in.
@@ -29,7 +41,7 @@ def _edit_spec(figure: Figure) -> dict:
         "strength": figure.strength - figure.added_st,
         "dexterity": figure.dexterity - figure.added_dx,
         "weapon": ready_name, "weapon2": second.name if second else "None",
-        "armor": figure.armor.name, "shield": figure.shield.name,
+        "armor": figure.armor.name, "shield": shield_name,
         "shield_ready": figure.shield_ready,
     }
     if isinstance(figure, TarmarFigure):

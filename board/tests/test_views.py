@@ -406,6 +406,91 @@ def test_edit_spec_round_trips_through_build() -> None:
     assert chargen.build("Classic Melee", derived).ready_weapon.name == "Broadsword"
 
 
+def test_edit_spec_drops_shield_for_two_handed_wielder() -> None:
+    """A figure wielding a two-handed weapon can't also use a shield, so its edit
+    spec must not carry one -- otherwise chargen.build rejects the round-trip and a
+    mid-game edit on that figure can never apply, stalling the turn (issue #298)."""
+    from engine import chargen
+    from engine.figure import create_human
+    from engine.rules_data import DAGGER, LARGE_SHIELD, LONGBOW
+
+    from board.serialize import _edit_spec
+
+    archer = create_human("Archer", 14, 10, "red",
+                          weapons=[LONGBOW, DAGGER], ready_weapon=LONGBOW,
+                          shield=LARGE_SHIELD)
+    assert not archer.shield_ready          # the two-handed weapon forced it down
+    derived = _edit_spec(archer)
+    assert (derived["shield"] or "None") == "None"
+    # pre-fix this raises ValueError ("Longbow is two-handed ... shield")
+    assert chargen.build("Classic Melee", derived).ready_weapon.name == "Longbow"
+
+
+def test_edit_spec_keeps_shield_for_two_hander_with_one_handed_backup() -> None:
+    """A fighter carrying a two-handed weapon *and* a one-handed backup legitimately
+    keeps a shield (slung while the two-hander is out, #204); the edit spec must
+    round-trip it, not drop it."""
+    from engine import chargen
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD, DAGGER, LARGE_SHIELD, LONGBOW
+
+    from board.serialize import _edit_spec
+
+    archer = create_human("Archer", 14, 10, "red",
+                          weapons=[LONGBOW, BROADSWORD, DAGGER],
+                          ready_weapon=LONGBOW, shield=LARGE_SHIELD)
+    derived = _edit_spec(archer)
+    assert derived["shield"] == "Large shield"   # kept: pairs with the Broadsword
+    chargen.build("Classic Melee", derived)      # and still a legal spec
+
+
+def test_edit_spec_keeps_slung_shield_for_one_handed_wielder() -> None:
+    """A one-handed wielder that has merely un-readied its shield (e.g. to grapple)
+    still carries it; the edit spec must round-trip the shield, not drop it."""
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD, DAGGER, LARGE_SHIELD
+
+    from board.serialize import _edit_spec
+
+    fighter = create_human("F", 13, 11, "red",
+                           weapons=[BROADSWORD, DAGGER], ready_weapon=BROADSWORD,
+                           shield=LARGE_SHIELD)
+    fighter.shield_ready = False             # slung, but the weapon is one-handed
+    derived = _edit_spec(fighter)
+    assert derived["shield"] == "Large shield"
+
+
+def test_mid_game_edit_of_two_handed_wielder_applies() -> None:
+    """End-to-end: the editor is populated from a figure's serialized edit_spec and
+    sent back through update_figure. A two-handed wielder carrying a shield produced
+    an un-appliable spec, so the active figure could never set an action and the
+    turn stalled -- the game "stopped responding" (issue #298)."""
+    from board.serialize import _figure_dict
+    from board.views import GAMES, _update_figure
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import DAGGER, LARGE_SHIELD, LONGBOW
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    archer = create_human("Archer", 14, 10, "red",
+                          weapons=[LONGBOW, DAGGER], ready_weapon=LONGBOW,
+                          shield=LARGE_SHIELD)
+    archer.position = Hex(3, 3)
+    state = GameState(arena, [archer])
+    GAMES["edit-2h-test"] = {"state": state, "profile": "Classic Melee"}
+    try:
+        # This is exactly what the front end round-trips: read edit_spec, apply it.
+        round_trip_spec = _figure_dict(state, archer)["edit_spec"]
+        _update_figure(GAMES["edit-2h-test"], archer.uid, round_trip_spec)
+        rebuilt = GAMES["edit-2h-test"]["state"].figures[0]
+        assert rebuilt.uid == archer.uid
+        assert rebuilt.ready_weapon.name == "Longbow"
+    finally:
+        del GAMES["edit-2h-test"]
+
+
 def test_update_figure_rebuilds_in_place_preserving_board_state() -> None:
     from board.views import GAMES, _update_figure
     from engine.arena import Arena
