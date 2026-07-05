@@ -57,6 +57,29 @@ def test_char_class_is_serialized_alongside_the_fun_name():
         assert figure["name"] != figure["char_class"]    # the identity is the fun name
 
 
+def test_defending_flag_is_serialized_for_the_ui():
+    """#247: a figure that chose Shift & Defend must ship its ``defending`` flag
+    so the board can draw the guard ring / status the same way it does for Dodge.
+    Pre-fix the serializer only sent ``dodging`` and this KeyErrors."""
+    from hexarena.dice import Dice
+
+    from board.serialize import dump_game
+    from engine.state import GameState
+
+    arena, figures = scenario.build_game("Classic Melee", 2, 2)
+    state = GameState(arena, figures, dice=Dice(seed=1))
+    # One fighter is defending (Shift & Defend), another is dodging: the wire must
+    # carry both flags distinctly so the UI can label and mark each correctly.
+    figures[0].defending = True
+    figures[1].dodging = True
+    payload = dump_game(state)
+    by_uid = {figure["uid"]: figure for figure in payload["figures"]}
+    assert by_uid[figures[0].uid]["defending"] is True
+    assert by_uid[figures[0].uid]["dodging"] is False
+    assert by_uid[figures[1].uid]["defending"] is False
+    assert by_uid[figures[1].uid]["dodging"] is True
+
+
 def test_custom_build_places_any_number_of_teams():
     specs = []
     for side in ("red", "blue", "green"):

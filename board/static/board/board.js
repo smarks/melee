@@ -352,6 +352,28 @@ const NEEDS_DEST = new Set(["move", "half_move", "charge_attack", "dodge", "dise
 // which read as a movement placement that couldn't be completed (#204).
 const DEST_OPTIONAL = new Set(["missile_attack"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
+// The set of weapon names a "which weapon?" selector should offer for an option,
+// or null when there's no real choice (0 or 1). A weapon change picks from the
+// figure's carried weapons; Pick up weapon picks from the dropped weapons in
+// reach (#269 — previously it silently grabbed pickups[0]).
+function readyChoices(f, option) {
+  if (WEAPON_CHANGE.has(option)) {
+    const carried = f.weapons || [];
+    return carried.length > 1 ? carried : null;
+  }
+  if (option === "pick_up") {
+    const pickups = (optInfo && optInfo.pickups) || [];
+    return pickups.length > 1 ? pickups : null;
+  }
+  return null;
+}
+// The default selection for readyChoices: a weapon change defaults to the OTHER
+// carried weapon; a pick-up defaults to the first dropped weapon in reach.
+function defaultReadyChoice(f, option, choices) {
+  if (WEAPON_CHANGE.has(option))
+    return choices.find(weapon => weapon !== f.weapon) || choices[0];
+  return choices[0];
+}
 const TEAM_FILL = {red: "#d0524f", blue: "#4f86d0", green: "#57b894", gold: "#e0b13c", violet: "#b07ad8"};
 const fillFor = side => TEAM_FILL[side] || "#888";
 const optLabel = o => OPTION_LABEL[o] || o;
@@ -504,7 +526,7 @@ function drawArena() {
     if (f.uid === sel) cls += " sel";
     if (isTarget(f.uid)) cls += " target";
     if (f.posture === "prone") cls += " prone";
-    if (f.dodging) cls += " dodge";
+    if (f.dodging || f.defending) cls += " dodge";
     g.setAttribute("class", cls);
 
     // Grapplers share one hex — fan them around its centre so each stays visible.
@@ -606,9 +628,10 @@ function drawArena() {
       g.appendChild(ring);
     }
 
-    // A figure that chose dodge/defend this turn is attacked on FOUR dice — mark
-    // it with a guard ring + shield glyph so everyone can see who's defending.
-    if (f.dodging && !f.dead) {
+    // A figure that chose dodge (vs missiles) or Shift & Defend (vs melee) this
+    // turn is attacked on FOUR dice — mark it with a guard ring + shield glyph so
+    // everyone can see who's guarding (#247: defend used to be invisible).
+    if ((f.dodging || f.defending) && !f.dead) {
       const guardRing = document.createElementNS(SVG, "circle");
       guardRing.setAttribute("cx", h.cx); guardRing.setAttribute("cy", h.cy);
       guardRing.setAttribute("r", LAYOUT.size * 0.74);
@@ -866,8 +889,18 @@ function openMenu(f) {
     const shooting = !!(f.weapon && missileReady(f, optInfo));
     for (const uid of (optInfo._targets || [])) {
       const e = figByUid(uid);
-      rows.push({label: `${shooting ? "🏹 Shoot" : "⚔ Attack"} ${e ? e.name : uid}`,
+      rows.push({label: `${shooting ? "🏹 Shoot" : "⚔ Attack"} ${escapeHtml(e ? e.name : uid)}`,
                  act: () => setAttack(f, uid)});
+    }
+    // #248: a fighter with a Main-Gauche in a free off-hand may add its extra
+    // -4 DX jab to a melee attack (p.13). Offer it as a companion attack row for
+    // each melee target when the server reports the jab is available.
+    if (optInfo.main_gauche_jab) {
+      for (const uid of (optInfo.melee_targets || [])) {
+        const e = figByUid(uid);
+        rows.push({label: `⚔ Attack ${escapeHtml(e ? e.name : uid)} + 🗡 main-gauche jab`,
+                   act: () => setAttack(f, uid, {mainGauche: true})});
+      }
     }
     // #141: when there's no weapon target, show Attack disabled with the reason
     // (matching the grapple/break-free rows) instead of silently omitting it. A
@@ -879,12 +912,12 @@ function openMenu(f) {
     }
     for (const uid of (optInfo.hth_targets || [])) {
       const e = figByUid(uid);
-      rows.push({label: `🤼 ${grappling ? "Strike" : "Grapple"} ${e ? e.name : uid}`,
+      rows.push({label: `🤼 ${grappling ? "Strike" : "Grapple"} ${escapeHtml(e ? e.name : uid)}`,
                  act: () => setHth(f, uid)});
     }
     for (const uid of (optInfo.shield_rush_targets || [])) {
       const e = figByUid(uid);
-      rows.push({label: `🛡 Shield-rush ${e ? e.name : uid}`,
+      rows.push({label: `🛡 Shield-rush ${escapeHtml(e ? e.name : uid)}`,
                  act: () => setShieldRush(f, uid)});
     }
     // Option (n) general disengage: a figure that chose Disengage in the
@@ -905,14 +938,14 @@ function openMenu(f) {
   const plan = PLAN[f.uid];
   // Header reflects commit state for this phase (issue #72): committed shows what
   // it committed to (+ Clear); uncommitted invites a choice from the options.
-  let html = `<div class="head">${f.name}`
+  let html = `<div class="head">${escapeHtml(f.name)}`
     + (f.char_class ? ` <span class="muted">— ${escapeHtml(f.char_class)}</span>` : "")
     + ` <span class="chip ${f.side}">${f.side}</span></div>`;
   // A figure with no real choice (only "Do nothing" / disabled rows) is already
   // doing nothing — don't nag it as "uncommitted" (issue #117).
   const hasRealAction = rows.some(r => r.act && r.label !== "Do nothing");
   html += plan
-    ? `<div class="commit">Committed: <b>${plan.label}</b>${plan.dest ? " → " + plan.dest : ""}</div>`
+    ? `<div class="commit">Committed: <b>${escapeHtml(plan.label)}</b>${plan.dest ? " → " + escapeHtml(plan.dest) : ""}</div>`
     : hasRealAction
       ? `<div class="commit muted">Uncommitted — choose an action:</div>`
       : `<div class="commit muted">No action available — will do nothing.</div>`;
@@ -940,11 +973,14 @@ function openMenu(f) {
 function chooseMoveOption(f, option) {
   dbg("INTERACT", `chose option ${option} for ${f.name}`, {uid: f.uid, option});
   sel = f.uid; pendingDest = null; pendingReady = null;
-  // A weapon change with more than one carried weapon opens the placement panel so
-  // the player explicitly picks which weapon to ready (#142) instead of auto-toggling.
-  const pickWeapon = WEAPON_CHANGE.has(option) && (f.weapons || []).length > 1;
-  if (NEEDS_DEST.has(option) || pickWeapon) {
-    chosenOption = option; pendingFacing = "auto"; render();       // enter placement
+  // A weapon change with more than one carried weapon — or a pick-up with more than
+  // one dropped weapon in reach (#269) — opens the placement panel so the player
+  // explicitly picks which weapon (#142) instead of silently taking the first.
+  const choices = readyChoices(f, option);
+  if (NEEDS_DEST.has(option) || choices) {
+    chosenOption = option; pendingFacing = "auto";
+    if (choices) pendingReady = defaultReadyChoice(f, option, choices);
+    render();       // enter placement
   } else {
     // Selection phase: a simple option needs no placement, so submit it now (#192).
     let ready = null;
@@ -975,10 +1011,15 @@ function setDisengageMove(f, dest) {
                  label: `💨 Disengage → ${dest}`};
   render();
 }
-function setAttack(f, target) {
+function setAttack(f, target, {mainGauche = false} = {}) {
   const e = figByUid(target);
-  dbg("INTERACT", `queue attack ${f.name} → ${e ? e.name : target}`, {attacker: f.uid, foe: target});
-  PLAN[f.uid] = {uid: f.uid, phase: "combat", target, label: `Attack ${e ? e.name : target}`};
+  dbg("INTERACT", `queue attack ${f.name} → ${e ? e.name : target}`,
+      {attacker: f.uid, foe: target, mainGauche});
+  // The off-hand main-gauche jab (p.13) is an extra -4 DX melee hit riding on the
+  // same attack; carry the flag so executePlans can send main_gauche (#248).
+  const jab = mainGauche ? " + 🗡 main-gauche jab" : "";
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", target, mainGauche,
+                 label: `Attack ${e ? e.name : target}${jab}`};
   render();
 }
 function setDoNothing(f) {
@@ -1022,8 +1063,9 @@ async function executePlans(kind) {
     if (p.disengage) await act({type: "hth_disengage", uid: p.uid});
     else if (p.disengageMove) await act({type: "disengage_move", uid: p.uid, dest: p.dest});
     else if (p.rush) await act({type: "shield_rush", uid: p.uid, target: p.target});
-    else if (p.target) await act({type: p.hth ? "queue_hth" : "queue_attack",
-                                  uid: p.uid, target: p.target});
+    else if (p.hth) await act({type: "queue_hth", uid: p.uid, target: p.target});
+    else if (p.target) await act({type: "queue_attack", uid: p.uid, target: p.target,
+                                  main_gauche: !!p.mainGauche});
   }
   resetAll(); await act({type: "resolve_combat"}); render();
 }
@@ -1276,12 +1318,12 @@ function weaponsLine(f) {
 function statusHeader(f) {
   const classLine = f.char_class
     ? `<div class="muted">${escapeHtml(f.char_class)}</div>` : "";
-  return `<div>${tokenBadge(f)} <b>${f.name}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
+  return `<div>${tokenBadge(f)} <b>${escapeHtml(f.name)}</b> <span class="chip ${f.side}">${f.side}</span></div>` +
     classLine +
     (f.model === "tarmar"
       ? `<div class="muted">Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · adjDX ${f.dx}</div>`
       : `<div class="muted">ST ${f.st}/${f.max_st} · adjDX ${f.dx}</div>`) +
-    `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · defending" : ""}` +
+    `<div class="muted">${f.posture}${f.engaged ? " · engaged" : ""}${f.dodging ? " · dodging" : ""}${f.defending ? " · defending" : ""}` +
     `${(f.hth_opponents && f.hth_opponents.length) ? " · 🤼 grappling" : ""}</div>` +
     weaponsLine(f);
 }
@@ -1349,8 +1391,8 @@ async function applyEdit(card, uid) {
 }
 function planLine(f) {
   const p = PLAN[f.uid];
-  if (p) return `<div style="margin-top:8px" class="muted">Action set: <b>${p.label}</b>`
-    + `${p.dest ? " → " + p.dest : ""}</div>`;
+  if (p) return `<div style="margin-top:8px" class="muted">Action set: <b>${escapeHtml(p.label)}</b>`
+    + `${p.dest ? " → " + escapeHtml(p.dest) : ""}</div>`;
   if (S.phase === "select" && f.acted)
     return `<div style="margin-top:8px" class="muted">Action set: <b>${optLabel(f.option)}</b></div>`;
   if (S.phase === "select" && hasPassed(f) && !f.acted)
@@ -1460,18 +1502,21 @@ function optionListHtml(f, info, enabled) {
 function placementInnerHtml(f) {
   const needHex = NEEDS_DEST.has(chosenOption);
   const destOptional = DEST_OPTIONAL.has(chosenOption);
-  const swap = WEAPON_CHANGE.has(chosenOption) && (f.weapons || []).length > 1;
-  if (swap && pendingReady == null)
-    pendingReady = (f.weapons || []).find(w => w !== f.weapon) || f.weapon;
+  const choices = readyChoices(f, chosenOption);
+  if (choices && pendingReady == null)
+    pendingReady = defaultReadyChoice(f, chosenOption, choices);
   const facingTxt = pendingFacing === "auto" ? "→ enemy" : pendingFacing;
   const destTxt = pendingDest || (destOptional ? "none (fire in place)" : "—");
   let html = `<div class="place-head">Placing <b>${escapeHtml(optLabel(chosenOption))}</b>`
     + (needHex ? ` · dest ${escapeHtml(destTxt)}` : "")
     + ` · facing ${escapeHtml(String(facingTxt))}</div>`;
-  if (swap) html += `<div style="margin:2px 0">Ready: <select data-ready>`
-    + (f.weapons || []).map(w =>
-        `<option ${w === pendingReady ? "selected" : ""}>${escapeHtml(w)}</option>`).join("")
-    + `</select></div>`;
+  if (choices) {
+    const pickLabel = chosenOption === "pick_up" ? "Pick up" : "Ready";
+    html += `<div style="margin:2px 0">${pickLabel}: <select data-ready>`
+      + choices.map(weaponName =>
+          `<option ${weaponName === pendingReady ? "selected" : ""}>${escapeHtml(weaponName)}</option>`).join("")
+      + `</select></div>`;
+  }
   if (needHex && !pendingDest && destOptional)
     // Option (f): the 1-hex step is optional, so make firing from here obvious.
     html += `<div class="place-hint">Optionally click a green hex to move up to 1 hex`
@@ -1505,9 +1550,9 @@ function onPlacementAct(f, action) {
   else if (action === "turncw") { pendingFacing = (facingNow() + 1) % 6; render(); }
   else if (action === "cancel") { chosenOption = null; pendingDest = null; pendingReady = null; render(); }
   else if (action === "setaction") {
-    const swap = WEAPON_CHANGE.has(chosenOption) && (f.weapons || []).length > 1;
+    const choices = readyChoices(f, chosenOption);
     submitMove(f, chosenOption,
-               {dest: pendingDest, facing: pendingFacing, ready: swap ? pendingReady : null});
+               {dest: pendingDest, facing: pendingFacing, ready: choices ? pendingReady : null});
   }
 }
 // Ensure the active, controllable figure's options (availability + reach) are
@@ -1755,7 +1800,7 @@ function adminCreateCharFor() {
 
 function savedCharacterOptions() {   // was loadOptions — collided with the game
   return `<option value="">Load saved…</option>`   // options fetch (issue #115)
-    + SAVED.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
+    + SAVED.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
 }
 function applySpecToCard(card, spec) {        // fill a card from a saved spec (keep its team)
   if (spec.name != null) card.querySelector("[data-name]").value = spec.name;
@@ -1796,7 +1841,7 @@ function cardInner(f) {     // the editable fields shared by the editor and the 
     `<label>${field.slice(0,3).toUpperCase()} <input type="number" data-stat="${field}" value="${f[field]}" `
     + `min="${RULES.min || 1}" max="${RULES.max || 30}" style="width:52px"></label>`).join(" ");
   return `<div><span class="chip ${f.side}">${f.side}</span> `
-    + `<input data-name value="${f.name}" style="width:130px"></div>`
+    + `<input data-name value="${escapeHtml(f.name)}" style="width:130px"></div>`
     + `<div style="margin-top:6px">${stats} <span class="muted" data-budget></span></div>`
     + `<div style="margin-top:6px">Carried weapon <select data-eq="weapon">${optionTags(CAT.weapons, f.weapon)}</select> ${skillInput("skill", f.skill)}</div>`
     + `<div style="margin-top:6px">Carried weapon 2 <select data-eq="weapon2"><option ${!f.weapon2 || f.weapon2 === "None" ? "selected" : ""}>None</option>${optionTags(CAT.weapons, f.weapon2)}</select> ${skillInput("skill2", f.skill2)}</div>`
@@ -1937,6 +1982,9 @@ async function startCustom() {
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
   closeEditor(); closeSetup(); closeLiveEdit(); resetSelection(); render();
+  // Lock Game Control just like startGame does (#255): a custom match is a live
+  // game, so profile/roster edits and New Game must be disabled and End Game live.
+  GAME_ACTIVE = true; syncGameControl();
 }
 
 // Theming: a chosen PRESET (see window.MELEE_THEMES in board.html) sets every
