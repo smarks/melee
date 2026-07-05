@@ -189,6 +189,15 @@ def test_pending_attacks_round_trip(profile_name: str) -> None:
     state._pending.append(PendingAttack(
         attacker=target, target=attacker, zone="rear", ignore_facing=False,
         range_penalty=0, hth_damage=DamageDice(1, -2)))
+    # A queued shield-rush plus every other non-default field, all of which used
+    # to drop on reload (#245): a save with shield_rush set came back as a full
+    # damaging weapon attack; weapon/second_target/charge_resolve_first likewise
+    # reverted to defaults, silently changing how the attack resolves.
+    state._pending.append(PendingAttack(
+        attacker=attacker, target=target, zone="front", ignore_facing=True,
+        range_penalty=2, shots=2, situational=-4, situational_note="off-hand jab",
+        damage_dice_bonus=1, charge_resolve_first=True, thrown=True,
+        weapon=WEAPONS["Main-Gauche"], second_target=attacker, shield_rush=True))
 
     restored = persistence.state_from_json(
         json.loads(json.dumps(persistence.state_to_json(state))))
@@ -198,12 +207,46 @@ def test_pending_attacks_round_trip(profile_name: str) -> None:
         assert copy.attacker.uid == original.attacker.uid
         assert copy.target.uid == original.target.uid
         assert copy.zone == original.zone
+        assert copy.ignore_facing == original.ignore_facing
         assert copy.range_penalty == original.range_penalty
+        assert copy.shots == original.shots
+        assert copy.situational == original.situational
+        assert copy.situational_note == original.situational_note
+        assert copy.damage_dice_bonus == original.damage_dice_bonus
+        # The four fields #245 dropped: a mid-combat save must resolve identically.
+        assert copy.charge_resolve_first == original.charge_resolve_first
+        assert copy.thrown == original.thrown
+        assert copy.shield_rush == original.shield_rush
+        assert copy.weapon is original.weapon  # catalog singleton, restored by name
+        if original.second_target is None:
+            assert copy.second_target is None
+        else:
+            assert copy.second_target.uid == original.second_target.uid
         assert (copy.hth_damage.count, copy.hth_damage.modifier) == \
             (original.hth_damage.count, original.hth_damage.modifier) \
             if original.hth_damage else copy.hth_damage is None
     # the queued attacks still resolve after a load
     restored.resolve_combat()
+
+
+def test_pending_serialization_covers_every_field() -> None:
+    """Drift guard: the persisted key set must equal PendingAttack's field set.
+
+    If a field is added to PendingAttack but not accounted for in
+    ``_pending_to_json``/``_pending_from_json``, this fails loudly — so the #245
+    class of silent-drop bug can never recur.
+    """
+    import dataclasses
+
+    state = _two_figure_game("Classic Melee")
+    attacker, target = state.figures[0], state.figures[1]
+    pending = PendingAttack(
+        attacker=attacker, target=target, zone="front", ignore_facing=False,
+        range_penalty=0)
+
+    persisted_keys = set(persistence._pending_to_json(pending))
+    dataclass_fields = {field.name for field in dataclasses.fields(PendingAttack)}
+    assert persisted_keys == dataclass_fields
 
 
 @pytest.mark.django_db

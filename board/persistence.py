@@ -40,6 +40,8 @@ figure's ``ready_weapon`` is the same object instance as the matching entry in i
 """
 from __future__ import annotations
 
+import dataclasses
+
 from hexarena.dice import Dice
 from hexarena.hex import Hex
 
@@ -191,38 +193,82 @@ def _figure_from_json(data: dict) -> Figure:
 
 
 # ---- pending attacks --------------------------------------------------------
+# Serialization is driven off the PendingAttack dataclass itself so a newly
+# added field can never silently drop from a mid-combat save (the drift that
+# caused #245, where shield_rush/weapon/second_target/charge_resolve_first were
+# omitted and rebuilt at their defaults on reload — turning a queued shield-rush
+# into a full damaging weapon attack). Fields that reference live objects need
+# special handling; everything else is a JSON-safe scalar copied verbatim. Any
+# field not named below is treated as a scalar automatically, so an addition is
+# persisted by default and, if it is not JSON-safe, fails loudly at ``json.dumps``
+# rather than vanishing. ``test_pending_attacks_round_trip`` also asserts the
+# persisted key set equals the dataclass field set, so drift fails in CI.
+
+# Fields holding a Figure — persisted by uid, restored via the by-uid map.
+_PENDING_FIGURE_FIELDS = ("attacker", "target", "second_target")
+# Fields holding a catalog Weapon singleton — persisted by name.
+_PENDING_WEAPON_FIELDS = ("weapon",)
+# Fields holding a DamageDice — persisted as ``[count, modifier]``.
+_PENDING_DAMAGE_FIELDS = ("hth_damage",)
+_PENDING_SPECIAL_FIELDS = (
+    _PENDING_FIGURE_FIELDS + _PENDING_WEAPON_FIELDS + _PENDING_DAMAGE_FIELDS
+)
+
+_PENDING_FIELD_NAMES = tuple(field.name for field in dataclasses.fields(PendingAttack))
+_PENDING_SCALAR_FIELDS = tuple(
+    name for name in _PENDING_FIELD_NAMES if name not in _PENDING_SPECIAL_FIELDS
+)
+_PENDING_SCALAR_DEFAULTS = {
+    field.name: field.default
+    for field in dataclasses.fields(PendingAttack)
+    if field.name in _PENDING_SCALAR_FIELDS
+}
+
+# Guard against a special-field list that names a field the dataclass no longer
+# has (a rename/removal) — fail at import, not with a confusing KeyError later.
+if not set(_PENDING_SPECIAL_FIELDS) <= set(_PENDING_FIELD_NAMES):
+    raise RuntimeError(
+        "PendingAttack persistence names unknown fields: "
+        f"{sorted(set(_PENDING_SPECIAL_FIELDS) - set(_PENDING_FIELD_NAMES))}"
+    )
+
+
 def _pending_to_json(pending: PendingAttack) -> dict:
-    hth = pending.hth_damage
-    return {
-        "attacker": pending.attacker.uid,
-        "target": pending.target.uid,
-        "zone": pending.zone,
-        "ignore_facing": pending.ignore_facing,
-        "range_penalty": pending.range_penalty,
-        "shots": pending.shots,
-        "situational": pending.situational,
-        "situational_note": pending.situational_note,
-        "damage_dice_bonus": pending.damage_dice_bonus,
-        "thrown": pending.thrown,
-        "hth_damage": [hth.count, hth.modifier] if hth is not None else None,
-    }
+    payload: dict = {}
+    for field_name in _PENDING_SCALAR_FIELDS:
+        payload[field_name] = getattr(pending, field_name)
+    for field_name in _PENDING_FIGURE_FIELDS:
+        figure = getattr(pending, field_name)
+        payload[field_name] = figure.uid if figure is not None else None
+    for field_name in _PENDING_WEAPON_FIELDS:
+        weapon = getattr(pending, field_name)
+        payload[field_name] = weapon.name if weapon is not None else None
+    for field_name in _PENDING_DAMAGE_FIELDS:
+        damage = getattr(pending, field_name)
+        payload[field_name] = [damage.count, damage.modifier] if damage is not None else None
+    return payload
 
 
 def _pending_from_json(data: dict, by_uid: dict[str, Figure]) -> PendingAttack:
-    hth = data["hth_damage"]
-    return PendingAttack(
-        attacker=by_uid[data["attacker"]],
-        target=by_uid[data["target"]],
-        zone=data["zone"],
-        ignore_facing=data["ignore_facing"],
-        range_penalty=data["range_penalty"],
-        shots=data["shots"],
-        situational=data["situational"],
-        situational_note=data["situational_note"],
-        damage_dice_bonus=data["damage_dice_bonus"],
-        thrown=data["thrown"],
-        hth_damage=DamageDice(hth[0], hth[1]) if hth is not None else None,
-    )
+    kwargs: dict = {}
+    for field_name in _PENDING_SCALAR_FIELDS:
+        default = _PENDING_SCALAR_DEFAULTS[field_name]
+        # Required scalars (no default) were always persisted; optional ones fall
+        # back to the dataclass default so pre-#245 snapshots still load.
+        if default is dataclasses.MISSING:
+            kwargs[field_name] = data[field_name]
+        else:
+            kwargs[field_name] = data.get(field_name, default)
+    for field_name in _PENDING_FIGURE_FIELDS:
+        uid = data.get(field_name)
+        kwargs[field_name] = by_uid[uid] if uid is not None else None
+    for field_name in _PENDING_WEAPON_FIELDS:
+        weapon_name = data.get(field_name)
+        kwargs[field_name] = WEAPONS[weapon_name] if weapon_name is not None else None
+    for field_name in _PENDING_DAMAGE_FIELDS:
+        damage = data.get(field_name)
+        kwargs[field_name] = DamageDice(damage[0], damage[1]) if damage is not None else None
+    return PendingAttack(**kwargs)
 
 
 # ---- game state -------------------------------------------------------------
