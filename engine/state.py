@@ -286,6 +286,7 @@ class _TurnMixin:
                     self.log.append(narrate_ready(figure, dagger))
                 figure.hth_drew_dagger = False
         self._pending.clear()
+        self.applied_results.clear()
         self.turn_number += 1
         self.log.append(narrate_turn(self.turn_number))
         # Freeze a fresh initiative order for the new turn (skips the dead). No
@@ -381,6 +382,12 @@ class _MovementMixin:
                 reason = "nothing to parry with — missile weapon ready"
             elif option == Option.PICK_UP and not self.dropped_in_reach(figure):
                 reason = "nothing on the ground in reach"
+            # Known, deliberate deviation from Melee option (d), the general DROP
+            # (move up to half MA then drop prone/kneeling) (#311): the engine
+            # models only the firing-posture use of prone/kneel -- a missile user
+            # steadying its shot, with movement_cap "none" (no half-MA move). A
+            # melee fighter never gains from voluntarily dropping in this engine,
+            # so the extra DROP path is intentionally omitted rather than a defect.
             elif option == Option.GO_PRONE and not (has_missile and weapon.reload > 0):
                 reason = ("only a crossbow may fire prone" if has_missile
                           else "only when firing a missile weapon")
@@ -858,8 +865,11 @@ class _MovementMixin:
         survivors are no longer in hand-to-hand -- but they are still stacked on
         the vacated hex, which is only legal for figures actually grappling. One
         survivor may stay put (a corpse blocks no one), and any others stand and
-        step to an adjacent open hex, mirroring an HTH disengage (p.19), so no two
-        conscious same-side figures end the resolution sharing a hex.
+        step to the nearest open hex, mirroring an HTH disengage (p.19), so no two
+        conscious same-side figures end the resolution sharing a hex. A 3+ ally
+        pile whose vacated hex has every immediate neighbour taken forces the
+        search past the first ring (a two-step relocation), so even the boxed-in
+        case leaves each freed survivor its own distinct hex (#311).
         """
         occupied = set(self.occupied())
         claimed: set[Hex] = set()
@@ -871,17 +881,38 @@ class _MovementMixin:
             if survivor.position not in claimed:
                 claimed.add(survivor.position)
                 continue
-            destination = next(
-                (neighbor for neighbor in self.arena.neighbors(survivor.position)
-                 if self.arena.contains(neighbor)
-                 and neighbor not in occupied
-                 and neighbor not in claimed),
-                None,
-            )
+            destination = self._nearest_free_hex(survivor, occupied | claimed)
             if destination is not None:
                 survivor.position = destination
                 survivor.posture = Posture.STANDING
                 claimed.add(destination)
+
+    def _nearest_free_hex(self, figure: Figure, blocked: set[Hex]) -> Hex | None:
+        """Breadth-first search outward for the closest hex whose whole footprint
+        is in-bounds and clear of ``blocked``.
+
+        One freed grappler needs an adjacent open hex, but a pile with every
+        immediate neighbour taken must reach past the first ring. Returns
+        ``None`` only when no hex anywhere on the arena can hold the figure -- a
+        board packed solid, which a real bout never reaches.
+        """
+        layout = self.arena.layout
+        seen: set[Hex] = {figure.position}
+        frontier: list[Hex] = [figure.position]
+        while frontier:
+            next_frontier: list[Hex] = []
+            for here in frontier:
+                for neighbor in self.arena.neighbors(here):
+                    if neighbor in seen or not self.arena.contains(neighbor):
+                        continue
+                    seen.add(neighbor)
+                    footprint = footprint_for(layout, neighbor, figure.facing, figure.size)
+                    if all(self.arena.contains(cell) and cell not in blocked
+                           for cell in footprint):
+                        return neighbor
+                    next_frontier.append(neighbor)
+            frontier = next_frontier
+        return None
 
 
 class _HthMixin:
@@ -1991,6 +2022,9 @@ class _CombatMixin:
             self._same_side_hit_ok = False
 
     def _apply(self, attacker: Figure, target: Figure, result: AttackResult) -> None:
+        # Record every narrated attack so the log-truthfulness audit reaches the
+        # select-phase free-hits too, not just resolve_combat's return (#311).
+        self.applied_results.append(result)
         attacker.attacked_this_turn = True
         # A fired crossbow must reload before firing again; bows fire every turn
         # (their per-turn limit is the shot count, not a cooldown).
@@ -2114,12 +2148,24 @@ class _ForceRetreatMixin:
         if not self.can_force_retreat(attacker, target):
             raise IllegalAction("force retreat not allowed")
         occupied = set(self.occupied(exclude=target))
-        start_distance = self.arena.layout.distance(attacker.position, target.position)
+        layout = self.arena.layout
+        start_distance = layout.distance(attacker.position, target.position)
+
+        def footprint_fits(anchor: Hex) -> bool:
+            # A man-sized target validates its single hex; a multi-hex target
+            # (a giant) must land its WHOLE footprint in-bounds and unoccupied,
+            # so a shove can never overlap another figure or slide part of the
+            # giant off the arena (#311).
+            return all(
+                self.arena.contains(cell) and cell not in occupied
+                for cell in footprint_for(layout, anchor, target.facing, target.size)
+            )
+
         destinations = [
             hex_position
             for hex_position in self.arena.neighbors(target.position)
-            if hex_position not in occupied
-            and self.arena.layout.distance(attacker.position, hex_position) > start_distance
+            if layout.distance(attacker.position, hex_position) > start_distance
+            and footprint_fits(hex_position)
         ]
         if not destinations:
             raise IllegalAction("no hex to retreat into")
@@ -2127,7 +2173,6 @@ class _ForceRetreatMixin:
         # order: push the target into the hex *furthest* from the attacker (it
         # gives the most ground), and settle any remaining ties on the hex's own
         # (col, row) so the choice never depends on dict/set ordering.
-        layout = self.arena.layout
         chosen = max(
             destinations,
             key=lambda hex_position: (
@@ -2195,6 +2240,12 @@ class GameState(
         # DamageEvent here so a test can prove no figure was ever harmed by its
         # own side. Purely observational — reading/writing it changes no rules.
         self.damage_events: list[DamageEvent] = []
+        # Every AttackResult that _apply narrates into the live log this turn --
+        # combat-phase blows AND the select-phase HTH free-hits/cascades that
+        # never reach resolve_combat's returned list. assert_log_truthful can
+        # audit this superset so no narrated attack escapes the truthfulness
+        # check (#311). Cleared each end_turn; purely observational.
+        self.applied_results: list[AttackResult] = []
         # Set True only while the p.17-18 HTH miss-cascade resolves, the one path
         # on which a figure may legitimately strike its own side; the recorded
         # DamageEvent carries this so the invariant checker exempts that case.

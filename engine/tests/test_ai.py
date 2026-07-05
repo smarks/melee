@@ -319,6 +319,32 @@ def test_ai_engaged_with_a_reloading_bow_and_no_blade_holds() -> None:
     assert shooter.current_option == Option.DO_NOTHING
 
 
+def test_ai_engaged_reloading_bow_picks_up_a_dropped_blade_in_reach() -> None:
+    # The engaged reloading-bow corner with NO carried melee weapon, but a melee
+    # weapon lies dropped within reach. PICK_UP is engaged-legal (#285/#290), so
+    # re-arm from the ground in one step rather than holding uselessly with an
+    # unfightable bow (#311). Before the fix this fell straight to DO_NOTHING,
+    # ignoring the blade at the figure's feet -- unlike _rearm_or_close.
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    shooter = create_human("Shooter", 12, 12, "red",
+                           weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    shooter.position, shooter.facing = Hex(3, 3), 0
+    foe.position = layout.neighbor(shooter.position, 0)
+    foe.facing = 3
+    shooter.missile_cooldown = 1
+    state = GameState(arena, [shooter, foe], dice=Dice(seed=1))
+    state._drop_to_ground(BROADSWORD, shooter.position)   # a blade underfoot
+
+    assert state.engaged(shooter) and shooter.missile_cooldown > 0
+    assert state.dropped_in_reach(shooter)                # the blade is in reach
+    ai.take_action(state, shooter)                        # must not raise
+    assert shooter.current_option == Option.PICK_UP
+    assert shooter.ready_weapon is not None
+    assert shooter.ready_weapon.name == "Broadsword"      # picked the dropped blade
+
+
 # ---- fumble-disarm recovery (#275, the #249 audit finding) -------------------
 # A natural-roll fumble (Tarmar's nat-1 table, classic Melee's 17/18) empties
 # ``ready_weapon``. An AI that never re-arms can neither attack nor be fought

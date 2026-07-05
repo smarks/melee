@@ -298,7 +298,14 @@ class TarmarRuleset(Ruleset):
         to reach bare-handed as armed — but not the fumble table: a grappler
         has no weapon in hand to drop or stress."""
         target_number = 11
-        bonus = tarmar_rules.dex_modifier(attacker.base_adj_dx) + facing_bonus(zone)
+        # A standing off-balance penalty (from a prior 1-3 fumble) drags this
+        # grapple strike just as it drags an armed blow in resolve_attack;
+        # apply_attack_side_effects clears the flag once this attack is applied,
+        # so read it here or it is spent unused (#311).
+        off_balance = (tarmar_rules.OFF_BALANCE_PENALTY
+                       if getattr(attacker, "off_balance", False) else 0)
+        bonus = (tarmar_rules.dex_modifier(attacker.base_adj_dx)
+                 + facing_bonus(zone) + off_balance)
         die = dice.dn(20)
         outcome = tarmar_rules.resolve_attack(die, target_number, bonus)
         multiplier = 1
