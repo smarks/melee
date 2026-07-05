@@ -892,6 +892,23 @@ function openMenu(f) {
       rows.push({label: `${shooting ? "🏹 Shoot" : "⚔ Attack"} ${escapeHtml(e ? e.name : uid)}`,
                  act: () => setAttack(f, uid)});
     }
+    // #268: a two-shot bow (high-adjDX archer) may split its arrows between two
+    // different foes (p.5, p.10). When the server reports missile_shots >= 2 and
+    // there are at least two missile targets in the front arc, offer each unordered
+    // pair as a split-fire row — no new picker widget, just one row per pair.
+    if (shooting && (optInfo.missile_shots || 1) >= 2) {
+      const foes = optInfo.missile_targets || [];
+      for (let first = 0; first < foes.length; first++) {
+        for (let second = first + 1; second < foes.length; second++) {
+          const alpha = figByUid(foes[first]), beta = figByUid(foes[second]);
+          rows.push({
+            label: `🏹 Split shots: ${escapeHtml(alpha ? alpha.name : foes[first])}`
+                 + ` + ${escapeHtml(beta ? beta.name : foes[second])}`,
+            act: () => setAttack(f, foes[first], {secondTarget: foes[second]}),
+          });
+        }
+      }
+    }
     // #248: a fighter with a Main-Gauche in a free off-hand may add its extra
     // -4 DX jab to a melee attack (p.13). Offer it as a companion attack row for
     // each melee target when the server reports the jab is available.
@@ -1011,15 +1028,19 @@ function setDisengageMove(f, dest) {
                  label: `💨 Disengage → ${dest}`};
   render();
 }
-function setAttack(f, target, {mainGauche = false} = {}) {
+function setAttack(f, target, {mainGauche = false, secondTarget = null} = {}) {
   const e = figByUid(target);
   dbg("INTERACT", `queue attack ${f.name} → ${e ? e.name : target}`,
-      {attacker: f.uid, foe: target, mainGauche});
+      {attacker: f.uid, foe: target, mainGauche, secondTarget});
   // The off-hand main-gauche jab (p.13) is an extra -4 DX melee hit riding on the
   // same attack; carry the flag so executePlans can send main_gauche (#248).
   const jab = mainGauche ? " + 🗡 main-gauche jab" : "";
-  PLAN[f.uid] = {uid: f.uid, phase: "combat", target, mainGauche,
-                 label: `Attack ${e ? e.name : target}${jab}`};
+  // A two-shot bow may loose its second arrow at a different foe (p.5, p.10);
+  // carry secondTarget so executePlans forwards it to the engine (#268).
+  const second = figByUid(secondTarget);
+  const split = secondTarget ? ` + 🏹 ${second ? second.name : secondTarget}` : "";
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", target, mainGauche, secondTarget,
+                 label: `Attack ${e ? e.name : target}${jab}${split}`};
   render();
 }
 function setDoNothing(f) {
@@ -1065,7 +1086,8 @@ async function executePlans(kind) {
     else if (p.rush) await act({type: "shield_rush", uid: p.uid, target: p.target});
     else if (p.hth) await act({type: "queue_hth", uid: p.uid, target: p.target});
     else if (p.target) await act({type: "queue_attack", uid: p.uid, target: p.target,
-                                  main_gauche: !!p.mainGauche});
+                                  main_gauche: !!p.mainGauche,
+                                  second_target: p.secondTarget || null});
   }
   resetAll(); await act({type: "resolve_combat"}); render();
 }
@@ -2083,7 +2105,10 @@ if (urlGid) { GID = urlGid; refresh(); } else { showPreGame(); }
 const POLL = setInterval(async () => {
   if (!GID) return;
   const polledGid = GID;                             // pin the game we're polling for
-  const data = await api(`/api/game/${GID}`);
+  // The hex layout is immutable after game creation, so once we have it, ask the
+  // server to skip re-shipping it on every 2s poll (#256). If we somehow don't
+  // have it yet, request the full payload so the board can still render.
+  const data = await api(`/api/game/${GID}${LAYOUT ? "?layout=0" : ""}`);
   // The game we polled may have ended (End Game -> showPreGame nulls GID) or been
   // replaced (New Game) while this request was in flight. Its now-stale response
   // must NOT repopulate S/board/banner over the reset -- that clobbered End Game's
@@ -2099,7 +2124,10 @@ const POLL = setInterval(async () => {
   const sig = JSON.stringify([data.state, data.you_control, data.open_seats, data.is_admin]);
   if (sig === _lastStateJSON) return;
   _lastStateJSON = sig;
-  LAYOUT = data.layout; S = data.state; captureOwnership(data); optCache = {}; render();
+  // Keep the cached layout when the poll omitted it (?layout=0); only replace it
+  // when the server actually sent one (first load / reconnect) (#256).
+  if (data.layout) LAYOUT = data.layout;
+  S = data.state; captureOwnership(data); optCache = {}; render();
 }, 2000);
 // Arriving from login (LOGIN_REDIRECT_URL = "/?setup") opens the wizard straight away.
 if (new URLSearchParams(location.search).has("setup")) openSetup();
