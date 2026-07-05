@@ -24,4 +24,4 @@ tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@v0.2.0
 # dependency, but pip does not resolve a git dependency's transitive git deps
 # automatically, so it must be listed explicitly here (and before origami-auth).
 origami-common @ git+https://github.com/smarks/origami-common.git@v0.2.0
-origami-auth @ git+https://github.com/smarks/origami-auth.git@v0.3.0
+origami-auth @ git+https://github.com/smarks/origami-auth.git@v0.3.1

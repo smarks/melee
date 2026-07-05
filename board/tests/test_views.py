@@ -1534,3 +1534,180 @@ def test_one_end_turn_request_never_skips_a_turn_242(client: Client) -> None:
         latest = _post(client, gid, {"type": "end_turn", "expected_turn": starting_turn})
         assert latest.get("error") is None
     assert latest["state"]["turn"] == starting_turn + 1
+
+
+# ---- seat authorization on per-figure combat actions (#244) ------------------
+def test_seat_auth_blocks_combat_actions_on_an_opponents_figure(client: Client) -> None:
+    # #244: a seat owner must not drive the OTHER side's figure through a
+    # per-figure combat verb. Pre-fix queue_hth / shield_rush / hth_disengage /
+    # disengage_move skipped the per-figure side check, so authorization passed
+    # (they then failed only on phase, a 400); post-fix the side check rejects
+    # them up front with a 403.
+    data = _new(client)                          # creator owns both seats
+    gid = data["gid"]
+    blue_uid = next(f["uid"] for f in data["state"]["figures"] if f["side"] == "blue")
+    opened = client.post(f"/api/game/{gid}/seat",
+                         data=json.dumps({"action": "open", "side": "blue"}),
+                         content_type="application/json")
+    assert opened.json()["you_control"] == ["red"]           # creator kept only red
+
+    for body in (
+        {"type": "queue_hth", "uid": blue_uid, "target": blue_uid},
+        {"type": "shield_rush", "uid": blue_uid, "target": blue_uid},
+        {"type": "hth_disengage", "uid": blue_uid},
+        {"type": "disengage_move", "uid": blue_uid, "dest": "0303"},
+    ):
+        out = client.post(f"/api/game/{gid}/action",
+                          data=json.dumps(body), content_type="application/json")
+        assert out.status_code == 403, body                  # not "not the combat phase"
+
+
+# ---- XP award / advance / save endpoints require ownership (#257) ------------
+@pytest.mark.django_db
+def test_award_advance_save_reject_a_non_owner(client: Client) -> None:
+    # #257: the experience/save write endpoints enforced no seat ownership at all,
+    # so any spectator holding the gid could farm XP or persist edits. They now
+    # require a seat owner (or admin); a stranger is a 403 while the owner is fine.
+    data = _new(client)                          # the fixture client owns the game
+    gid = data["gid"]
+    red_uid = next(f["uid"] for f in data["state"]["figures"] if f["side"] == "red")
+    intruder = Client()                          # owns no seat
+
+    def post(who: Client, path: str, payload: dict):
+        return who.post(path, data=json.dumps(payload), content_type="application/json")
+
+    assert post(intruder, f"/api/game/{gid}/award", {"combat_type": "death"}).status_code == 403
+    assert post(intruder, f"/api/game/{gid}/figure/{red_uid}/advance",
+                {"attribute": "strength"}).status_code == 403
+    assert post(intruder, f"/api/game/{gid}/save", {}).status_code == 403
+    assert post(client, f"/api/game/{gid}/save", {}).status_code == 200   # owner may save
+
+
+@pytest.mark.django_db
+def test_award_is_idempotent_and_cannot_farm_xp(client: Client) -> None:
+    # #257: award was additive and repeatable — every POST banked another +50/+100.
+    # It is now a one-shot: the first award grants the XP, a second is a 400 no-op
+    # and the figure's experience does not climb.
+    from board.views import GAMES
+
+    red, _blue = _victory_duel("award-once")     # seatless fixture -> auth open
+    try:
+        first = client.post("/api/game/award-once/award",
+                            data=json.dumps({"combat_type": "death"}),
+                            content_type="application/json")
+        assert first.status_code == 200
+        assert first.json()["awards"][red.uid] == 50
+        assert red.experience == 50
+
+        second = client.post("/api/game/award-once/award",
+                             data=json.dumps({"combat_type": "death"}),
+                             content_type="application/json")
+        assert second.status_code == 400                     # already awarded
+        assert red.experience == 50                          # not farmed to 100
+    finally:
+        del GAMES["award-once"]
+
+
+# ---- update_figure rebinds queued attacks to the rebuilt object (#264) -------
+def test_update_figure_rebinds_queued_attack_references(client: Client) -> None:
+    # #264: editing a figure mid-combat swapped the Figure object but left queued
+    # attacks pointing at the discarded copy, so a hit vanished or a figure could
+    # attack twice. After an edit, the pending attack must reference the rebuilt
+    # attacker AND target, never the stale objects.
+    from board.views import GAMES, _update_figure
+
+    red, blue = _combat_duel()
+    GAMES["duel-test"]["profile"] = "Classic Melee"   # _update_figure rebuilds from it
+    spec = {"strength": 12, "dexterity": 12, "weapon": "Broadsword",
+            "armor": "None", "shield": "None"}
+    try:
+        state = GAMES["duel-test"]["state"]
+        queued = client.post("/api/game/duel-test/action",
+                             data=json.dumps({"type": "queue_attack", "uid": red.uid,
+                                              "target": blue.uid}),
+                             content_type="application/json")
+        assert queued.status_code == 200 and len(state._pending) == 1
+        stale_attacker, stale_target = state._pending[0].attacker, state._pending[0].target
+        assert stale_attacker is red and stale_target is blue
+
+        _update_figure(GAMES["duel-test"], blue.uid, dict(spec))   # edit the target
+        _update_figure(GAMES["duel-test"], red.uid, dict(spec))    # and the attacker
+
+        live_red = next(f for f in state.figures if f.uid == red.uid)
+        live_blue = next(f for f in state.figures if f.uid == blue.uid)
+        pending = state._pending[0]
+        assert pending.attacker is live_red                 # follows the rebuilt attacker
+        assert pending.target is live_blue                  # follows the rebuilt target
+        assert pending.attacker is not stale_attacker        # not the discarded copies
+        assert pending.target is not stale_target
+    finally:
+        del GAMES["duel-test"]
+
+
+# ---- per-game mutation lock serializes concurrent requests (#253) ------------
+def test_game_lock_is_stable_per_gid() -> None:
+    from board.views import _game_lock
+
+    assert _game_lock("gid-a") is _game_lock("gid-a")       # same lock every time
+    assert _game_lock("gid-a") is not _game_lock("gid-b")   # distinct per game
+
+
+def test_concurrent_actions_on_one_game_are_serialized(client: Client, monkeypatch) -> None:
+    # #253: with no per-game lock, two requests on one gid interleave their
+    # load->mutate->persist on the shared GameState. Instrument the dispatch
+    # (which runs inside the critical section) and fire two requests at once: the
+    # per-game lock must keep them from ever both being inside it. Calls go through
+    # the view directly (a RequestFactory request, no middleware/DB) so the worker
+    # threads touch no database; the game is made seatless so authorization is open.
+    import threading
+    import time
+
+    from django.contrib.auth.models import AnonymousUser
+    from django.test import RequestFactory
+
+    from board import views
+    from board.views import GAMES
+
+    data = _new(client)
+    gid = data["gid"]
+    active = data["state"]["active_uid"]
+    GAMES[gid]["seats"] = {}                                 # seatless -> auth open
+    monkeypatch.setattr(views, "_autosave_game", lambda *a, **k: None)   # no DB writes
+
+    concurrency = {"now": 0, "max": 0}
+    counter_lock = threading.Lock()
+    original_dispatch = views._dispatch
+
+    def instrumented(game: dict, body: dict, **kwargs):
+        with counter_lock:
+            concurrency["now"] += 1
+            concurrency["max"] = max(concurrency["max"], concurrency["now"])
+        time.sleep(0.05)                                    # widen the overlap window
+        try:
+            return original_dispatch(game, body, **kwargs)
+        finally:
+            with counter_lock:
+                concurrency["now"] -= 1
+
+    monkeypatch.setattr(views, "_dispatch", instrumented)
+
+    factory = RequestFactory()
+    barrier = threading.Barrier(2)
+
+    def fire():
+        request = factory.post(
+            f"/api/game/{gid}/action",
+            data=json.dumps({"type": "do_nothing", "uid": active}),
+            content_type="application/json")
+        request.user = AnonymousUser()
+        barrier.wait()
+        views.api_action(request, gid)
+
+    threads = [threading.Thread(target=fire) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert gid in GAMES
+    assert concurrency["max"] == 1                          # never two at once inside the lock
