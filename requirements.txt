@@ -7,12 +7,15 @@ pytest-django>=4.8
 # Shared hex-grid library (coords, dice, pathfinding, layout). Installed from
 # GitHub so CI resolves it with no auth. For local development you can override
 # with an editable checkout:  pip install -e ../hexarena
-hexarena @ git+https://github.com/smarks/hexarena.git@main
+# PINNED TO A RELEASE TAG. To bump: cut a new vX.Y.Z tag in the lib (its pyproject
+# version must match — a tag-version-guard workflow enforces this), then update the
+# @vX.Y.Z here in a melee commit that CI tests.
+hexarena @ git+https://github.com/smarks/hexarena.git@v0.1.0
 
 # Shared Tarmar d20 combat core (matrix, modifiers, crit, Hybrid armour) — the
-# single source of truth for the "Tarmar rules" profile, also used by
-# tarmar-studio. Local dev:  pip install -e ../tarmar-rules
-tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@main
+# single source of truth for the "Tarmar rules" profile. Local dev:  pip install -e ../tarmar-rules
+# PINNED TO A RELEASE TAG (bump procedure as for hexarena above).
+tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@v0.2.0
 
 # Shared Django auth app (AbstractOrigamiUser: user model + register/login/
 # logout/profile/profile-edit/password-change/users-admin). PINNED TO A RELEASE

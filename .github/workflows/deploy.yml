@@ -1,7 +1,14 @@
 name: Deploy
 
 on:
-  push:
+  # Auto-deploy only after the CI workflow (unit tests AND Playwright e2e) is
+  # fully green on main. Previously this triggered directly on push, so a UI
+  # regression the e2e job catches could still deploy to production while the
+  # red e2e run merely emailed after the fact (#265). Manual dispatch stays
+  # available for deploy / rollback / status.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -12,6 +19,10 @@ on:
 
 jobs:
   deploy:
+    # workflow_run fires on any CI conclusion; deploy only when CI succeeded, so
+    # a red e2e (or red unit) run cannot reach production. Manual dispatch always
+    # deploys (e.g. rollback/status).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     uses: smarks/ops-workflows/.github/workflows/deploy-blue-green.yml@main
     with:
       app-dir: /home/sam/dev/melee
@@ -21,7 +32,9 @@ jobs:
 
   notify:
     needs: [deploy]
-    if: always()
+    # Skip when deploy itself was skipped (CI was red — CI already emailed);
+    # only notify when a deploy actually ran.
+    if: ${{ always() && needs.deploy.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - name: Email on failure or green-after-red
