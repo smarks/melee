@@ -1057,6 +1057,7 @@ def test_force_retreat_breaks_ties_deterministically() -> None:
     state, attacker, target = _duel()
     # Arm a force retreat directly, isolating the destination choice from combat.
     attacker.dealt_st_damage_this_turn = True
+    attacker.force_retreat_targets_this_turn = [target.uid]
     attacker.hits_this_turn = 0
     assert state.can_force_retreat(attacker, target)
 
@@ -1082,6 +1083,128 @@ def test_force_retreat_breaks_ties_deterministically() -> None:
     assert (layout.distance(attacker.position, destination)
             == max(layout.distance(attacker.position, c) for c in candidates))
     assert destination == max(reversed(candidates), key=tie_break_key)
+
+
+def test_force_retreat_is_spent_and_cannot_chain(  # noqa: D103  (#271 defect 1)
+) -> None:
+    """One qualifying melee hit grants exactly ONE push, even with advance=True.
+
+    p.20 grants "force the enemy to retreat one hex at the end of the turn" -- a
+    single shove, not an unbounded walk. Before the fix, advancing into the
+    vacated hex re-closed to distance 1 and re-armed can_force_retreat, so a
+    single hit chained a foe hex by hex across the arena.
+    """
+    state, attacker, target = _duel(Dice(scripted=[2, 3, 3, 5, 4]))  # a clean hit
+    attacker.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(attacker, target)
+    state.resolve_combat()
+    assert state.can_force_retreat(attacker, target)          # armed by the hit
+    state.force_retreat(attacker, target, advance=True)       # spend the one push
+    assert not state.can_force_retreat(attacker, target)      # ...and it is gone
+    assert target.uid not in attacker.force_retreat_targets_this_turn
+    with pytest.raises(IllegalAction):                        # no second shove
+        state.force_retreat(attacker, target, advance=True)
+
+
+def test_force_retreat_rejects_targets_the_menu_never_offers(  # (#271 defect 2)
+) -> None:
+    """Execution mirrors the menu: only a living, opposing foe the attacker
+    actually struck this turn can be pushed -- never a teammate, an untouched
+    enemy, or a fallen body (the legal-options/execution desync class, #229A)."""
+    arena = Arena(cols=9, rows=15)
+    attacker = create_human("Atk", 12, 12, "a", weapons=[BROADSWORD],
+                            ready_weapon=BROADSWORD)
+    struck_foe = create_human("Struck", 12, 12, "b", weapons=[BROADSWORD],
+                              ready_weapon=BROADSWORD)
+    other_foe = create_human("Other", 12, 12, "b", weapons=[BROADSWORD],
+                             ready_weapon=BROADSWORD)
+    teammate = create_human("Mate", 12, 12, "a", weapons=[BROADSWORD],
+                            ready_weapon=BROADSWORD)
+    attacker.position = Hex(5, 5)
+    struck_foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    other_foe.position = LAYOUT.neighbor(Hex(5, 5), 2)
+    teammate.position = LAYOUT.neighbor(Hex(5, 5), 4)
+    state = GameState(arena, [attacker, struck_foe, other_foe, teammate])
+    # The attacker dealt qualifying melee damage to struck_foe only.
+    attacker.dealt_st_damage_this_turn = True
+    attacker.force_retreat_targets_this_turn = [struck_foe.uid]
+    attacker.hits_this_turn = 0
+
+    assert state.can_force_retreat(attacker, struck_foe)      # the one it may push
+    # Everything the menu (enemies_of + can_force_retreat) never offers is refused:
+    for illegal_target in (teammate, other_foe):
+        assert not state.can_force_retreat(attacker, illegal_target)
+        with pytest.raises(IllegalAction):
+            state.force_retreat(attacker, illegal_target)
+    # A struck foe knocked unconscious this turn is a fallen body: no longer pushable.
+    struck_foe.unconscious = True
+    struck_foe.damage_taken = struck_foe.strength         # ST 0 -> collapsed
+    assert struck_foe.collapsed
+    assert not state.can_force_retreat(attacker, struck_foe)
+    with pytest.raises(IllegalAction):
+        state.force_retreat(attacker, struck_foe)
+
+
+def test_force_retreat_cannot_relocate_a_grappler(  # (#271 defect 3)
+) -> None:
+    """A figure locked in hand-to-hand may not be force-retreated: the rules give
+    no way to shove a grappler out of a pile, and doing so would leave a cross-hex
+    grapple (both figures striking each other across a gap). The push is refused,
+    so the HTH lock is never torn apart, and the invariant stays satisfied."""
+    from engine.invariants import assert_state_invariants
+    from engine.profile import CLASSIC
+    arena = Arena(cols=9, rows=15)
+    striker = create_human("Striker", 12, 12, "a", weapons=[BROADSWORD],
+                           ready_weapon=BROADSWORD)
+    grappled = create_human("Grappled", 12, 12, "b", weapons=[SHORTSWORD],
+                            ready_weapon=SHORTSWORD)
+    grappler = create_human("Grappler", 12, 12, "c", weapons=[SHORTSWORD],
+                            ready_weapon=SHORTSWORD)
+    striker.position = Hex(5, 5)
+    grappled.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    grappler.position = LAYOUT.neighbor(Hex(5, 5), 0)     # same hex: the HTH pile
+    grappled.posture = grappler.posture = Posture.PRONE
+    state = GameState(arena, [striker, grappled, grappler])
+    grappled.hth_opponents = [grappler.uid]              # uids assigned in __init__
+    grappler.hth_opponents = [grappled.uid]
+    # The standing striker hit the grounded grappler this turn (p.19: a floored
+    # HTH figure counts as a rear target) -- so it is "armed" against it.
+    striker.dealt_st_damage_this_turn = True
+    striker.force_retreat_targets_this_turn = [grappled.uid]
+    striker.hits_this_turn = 0
+
+    assert not state.can_force_retreat(striker, grappled)  # in_hth -> forbidden
+    with pytest.raises(IllegalAction):
+        state.force_retreat(striker, grappled)
+    # The grapple is intact and co-located, so the HTH invariant is happy.
+    assert grappled.position == grappler.position
+    assert_state_invariants(state, CLASSIC, context="force-retreat-grapple")
+
+
+def test_hth_lock_invariant_catches_a_cross_hex_grapple() -> None:  # (#271)
+    """assert_state_invariants raises the instant an HTH lock spans two hexes or
+    stops being mutual -- the soak net that guards the grapple bug forever."""
+    from engine.invariants import InvariantError, assert_state_invariants
+    from engine.profile import CLASSIC
+    arena = Arena(cols=9, rows=15)
+    one = create_human("One", 12, 12, "a", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    two = create_human("Two", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    one.position = Hex(5, 5)
+    two.position = Hex(5, 5)                               # co-located: a real grapple
+    one.posture = two.posture = Posture.PRONE
+    state = GameState(arena, [one, two])
+    one.hth_opponents = [two.uid]                          # uids assigned in __init__
+    two.hth_opponents = [one.uid]
+    assert_state_invariants(state, CLASSIC, context="valid-grapple")  # clean
+
+    two.position = LAYOUT.neighbor(Hex(5, 5), 0)          # shove without clearing HTH
+    with pytest.raises(InvariantError, match="hth-cross-hex"):
+        assert_state_invariants(state, CLASSIC, context="cross-hex")
+
+    two.position = one.position                            # co-located again...
+    two.hth_opponents = []                                 # ...but link torn one way
+    with pytest.raises(InvariantError, match="hth-asymmetric"):
+        assert_state_invariants(state, CLASSIC, context="asymmetric")
 
 
 def test_end_turn_rolls_wound_flag_forward() -> None:

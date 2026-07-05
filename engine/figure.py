@@ -154,7 +154,13 @@ class Figure:
     dropped_out: bool = False        # left a practice bout at ST <= 3 (p.22): out, alive
     uid: str = ""                    # stable id for UI / occupancy
     current_option: object | None = None  # the Option chosen this turn
-    dealt_st_damage_this_turn: bool = False  # for force-retreat eligibility
+    dealt_st_damage_this_turn: bool = False  # landed a qualifying melee hit this turn
+    # uids of enemies this figure dealt qualifying (melee, non-thrown, non-missile)
+    # damage to this turn and may STILL force to retreat -- each is a single push
+    # (p.20: "force the enemy to retreat one hex at the end of the turn"), removed
+    # once spent so no unbounded chain, and per-target so only a foe actually
+    # struck can be pushed (never a teammate or an untouched enemy).
+    force_retreat_targets_this_turn: list[str] = field(default_factory=list)
     missile_cooldown: int = 0        # turns until a fired missile weapon reloads
     hth_opponents: list[str] = field(default_factory=list)  # uids grappled (HTH)
     hth_drew_dagger: bool = False    # readied a dagger mid-grapple (usable next turn)
@@ -302,6 +308,7 @@ PER_TURN_FLAGS: dict[str, int | bool] = {
     "dodging": False,
     "defending": False,
     "dealt_st_damage_this_turn": False,
+    "force_retreat_targets_this_turn": [],
 }
 
 
