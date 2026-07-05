@@ -838,6 +838,40 @@ class _MovementMixin:
                 foe.hth_opponents.remove(figure.uid)
         figure.hth_opponents = []
 
+    def _disperse_pile_survivors(self, survivors: list[Figure]) -> None:
+        """Spread freed grapplers onto distinct hexes after their foe leaves (#287).
+
+        To grapple, a figure moves onto its foe's hex (p.17-18), so two allies
+        both piling one foe legitimately share that hex while the hand-to-hand
+        lock holds. When the foe dies (or collapses) the lock dissolves and the
+        survivors are no longer in hand-to-hand -- but they are still stacked on
+        the vacated hex, which is only legal for figures actually grappling. One
+        survivor may stay put (a corpse blocks no one), and any others stand and
+        step to an adjacent open hex, mirroring an HTH disengage (p.19), so no two
+        conscious same-side figures end the resolution sharing a hex.
+        """
+        occupied = set(self.occupied())
+        claimed: set[Hex] = set()
+        for survivor in survivors:
+            if survivor.position is None or not survivor.can_act():
+                continue
+            if survivor.in_hth:            # still locked with another foe -- fine
+                continue
+            if survivor.position not in claimed:
+                claimed.add(survivor.position)
+                continue
+            destination = next(
+                (neighbor for neighbor in self.arena.neighbors(survivor.position)
+                 if self.arena.contains(neighbor)
+                 and neighbor not in occupied
+                 and neighbor not in claimed),
+                None,
+            )
+            if destination is not None:
+                survivor.position = destination
+                survivor.posture = Posture.STANDING
+                claimed.add(destination)
+
 
 class _HthMixin:
     # ---- hand-to-hand combat (p.17) ----
@@ -2009,7 +2043,13 @@ class _CombatMixin:
             target.posture = Posture.PRONE
             self.log.append(narrate_dropout(target))
         if (target.is_dead or target.collapsed) and target.in_hth:
-            self._clear_hth(target)              # a downed grappler releases its hold
+            # A downed grappler releases its hold; capture who was piled on it
+            # before the links are cut so the freed survivors can be un-stacked
+            # from the vacated hex (#287) -- see :meth:`_disperse_pile_survivors`.
+            freed_survivors = [self._by_uid(uid) for uid in target.hth_opponents]
+            self._clear_hth(target)
+            self._disperse_pile_survivors(
+                [survivor for survivor in freed_survivors if survivor is not None])
 
 
 class _ForceRetreatMixin:
