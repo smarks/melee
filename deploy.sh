@@ -17,13 +17,19 @@
 
 set -e
 
-cd /home/sam/dev/melee
+APP_DIR="/home/sam/dev/melee"
 
 BLUE_PORT=9072
 GREEN_PORT=9073
 VENV="/home/sam/dev/melee/.venv"
 UPSTREAM_CONF="/etc/nginx/conf.d/melee-upstream.conf"
 STATE_FILE="/home/sam/dev/melee/.deploy-state"
+
+# A substring that only the real, working homepage renders. Django's generic
+# production error pages (DEBUG=False) use "<title>Server Error (500)</title>"
+# / "<title>Not Found</title>", so requiring "<title>Melee" proves a view
+# actually ran and rendered the board template rather than erroring out.
+HEALTH_MARKER='<title>Melee'
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -58,7 +64,50 @@ get_port() {
     fi
 }
 
-# Bring up an environment and confirm it answers HTTP before we trust it.
+# One health probe against an environment's local port. Returns 0 ONLY if the
+# app serves a genuinely working page: final HTTP status 200 AND the homepage
+# marker in the body.
+#
+# Two headers matter (#306):
+#   Host: melee.origamisoftware.com  - DJANGO_ALLOWED_HOSTS is that host, so a
+#     bare 127.0.0.1 request returns 400 (DisallowedHost) and never passes.
+#   X-Forwarded-Proto: https         - production sets SECURE_SSL_REDIRECT=True
+#     with SECURE_PROXY_SSL_HEADER=(HTTP_X_FORWARDED_PROTO, https). nginx adds
+#     this header on real traffic; without it SecurityMiddleware 301-redirects
+#     to https BEFORE any view/DB/template runs. The old probe used `curl -sf`
+#     with no header, and `-f` treats that 301 as success - so a deploy that
+#     boots gunicorn but 500s at request time (prod-only config error, dead DB,
+#     bad data) passed the check and took traffic. Sending the header makes the
+#     request "secure", so the actual index view runs and must return a 200.
+#
+# We deliberately do NOT follow redirects (-L): the redirect target is
+# https://melee.origamisoftware.com/, which is the PUBLIC (currently active)
+# site, not this inactive port. Following it would probe production and mask a
+# broken new environment. A healthy env returns 200 directly given the header;
+# anything that still redirects is treated as unhealthy.
+probe_once() {
+    local port=$1
+    local response status body
+
+    # Capture body + HTTP status in one request.
+    response=$(curl -sS \
+        -H "Host: melee.origamisoftware.com" \
+        -H "X-Forwarded-Proto: https" \
+        -w '\n%{http_code}' \
+        "http://127.0.0.1:$port/" 2>/dev/null) || return 1
+
+    status=${response##*$'\n'}
+    body=${response%$'\n'*}
+
+    [ "$status" = "200" ] || return 1
+    case "$body" in
+        *"$HEALTH_MARKER"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Bring up an environment and confirm it actually serves a working page before
+# we trust it. Retries because gunicorn needs a moment to bind after restart.
 verify_environment() {
     local env=$1
     local port
@@ -68,11 +117,8 @@ verify_environment() {
 
     log "Waiting for $env environment on port $port..."
     while [ $attempt -le $max_attempts ]; do
-        # Send the real Host header: DJANGO_ALLOWED_HOSTS is melee.origamisoftware.com,
-        # so a bare 127.0.0.1 request returns 400 (DisallowedHost) and the check would
-        # never pass. A 3xx (Django's HTTPS redirect) still counts as healthy here.
-        if curl -sf -H "Host: melee.origamisoftware.com" "http://127.0.0.1:$port/" > /dev/null 2>&1; then
-            log "$env environment is serving on port $port."
+        if probe_once "$port"; then
+            log "$env environment is serving HTTP 200 with expected content on port $port."
             return 0
         fi
         log "Attempt $attempt/$max_attempts - waiting..."
@@ -80,7 +126,7 @@ verify_environment() {
         attempt=$((attempt + 1))
     done
 
-    error "$env environment failed to start on port $port"
+    error "$env environment failed the health check (no HTTP 200 with expected content) on port $port"
 }
 
 # Point the nginx upstream at the given environment and reload.
@@ -106,6 +152,8 @@ EOF
 }
 
 main() {
+    cd "$APP_DIR"
+
     local force=false
     [ "$1" = "--force" ] && force=true
 
@@ -207,8 +255,12 @@ status() {
     systemctl is-active "melee-green" 2>/dev/null && echo "  melee-green: running" || echo "  melee-green: stopped"
 }
 
-case "${1:-}" in
-    rollback) rollback ;;
-    status) status ;;
-    *) main "$@" ;;
-esac
+# Only dispatch when executed directly. When sourced (e.g. by the health-check
+# test suite) we just want the function definitions, not a live deploy.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    case "${1:-}" in
+        rollback) rollback ;;
+        status) status ;;
+        *) main "$@" ;;
+    esac
+fi
