@@ -479,12 +479,13 @@ def test_engaged_multihex_ai_never_requests_a_blocked_turn() -> None:
     assert giant.current_option is not None          # a real, legal action was set
 
 
-# ---- #278: an engaged missile-only fighter disengages to re-arm --------------
+# ---- #278/#290: an engaged missile-only fighter recovers a weapon ------------
 # Post-#276 residual stalemate: a fumble that leaves an engaged figure carrying
 # only a missile weapon (which it can neither ready while engaged, p.13/#79, nor
-# fire empty-handed) with its blade underfoot used to hold forever. It must take
-# the two-step recovery the rules allow: DISENGAGE (option n) toward the dropped
-# weapon, then PICK_UP once free.
+# fire empty-handed) used to hold forever. With a MELEE blade in reach the fix
+# is a one-step PICK_UP — engaged-legal since #285, needing no free hex (#290);
+# the older two-step DISENGAGE-then-ready remains the recovery when only a MISSILE
+# weapon lies in reach (useless to pick up while still engaged).
 
 
 def _engaged_missile_only_with_blade_underfoot():
@@ -503,32 +504,50 @@ def _engaged_missile_only_with_blade_underfoot():
     return state, stuck, foe, layout
 
 
-def test_engaged_missile_only_ai_disengages_toward_its_dropped_blade() -> None:
+def test_engaged_missile_only_ai_picks_up_its_dropped_blade() -> None:
+    # A dropped MELEE weapon in reach is recovered in ONE step: PICK_UP is
+    # engaged-legal (#285), strictly better than the old two-step disengage (#290).
     state, stuck, foe, layout = _engaged_missile_only_with_blade_underfoot()
     assert state.engaged(stuck) and stuck.ready_weapon is None
     assert all(weapon.kind == WeaponKind.MISSILE for weapon in stuck.weapons)
     assert state.dropped_in_reach(stuck)                  # its blade is in reach
 
     ai.take_action(state, stuck)
-    assert stuck.current_option == Option.DISENGAGE      # chose to break away
+    assert stuck.current_option == Option.PICK_UP        # took the blade up in place
+    assert stuck.ready_weapon is DAGGER                   # re-armed in one turn
 
 
-def test_engaged_missile_only_ai_completes_the_recovery_in_two_turns() -> None:
-    # Turn 1: DISENGAGE step (combat phase) breaks contact but keeps the blade in
-    # reach. Turn 2: free of contact, it picks the blade back up.
-    state, stuck, foe, layout = _engaged_missile_only_with_blade_underfoot()
+def _engaged_missile_only_with_only_a_dropped_bow_in_reach():
+    """A disarmed blue fighter engaged by a red foe, carrying only a bow, with a
+    fumbled bow (no melee weapon) lying underfoot and free hexes to step to."""
+    arena = Arena(cols=9, rows=9)
+    layout = arena.layout
+    stuck = create_human("Stuck", 12, 12, "blue", weapons=[SMALL_BOW],
+                         ready_weapon=None, armor=NO_ARMOR)
+    foe = _fighter("Foe", "red")
+    stuck.position, stuck.facing = Hex(4, 4), 0
+    foe.position = layout.neighbor(stuck.position, 0)     # in the front hex -> engaged
+    _face_toward(layout, foe, stuck.position)
+    state = GameState(arena, [stuck, foe], dice=Dice(seed=1))
+    state._drop_to_ground(SMALL_BOW, stuck.position)      # only a bow in reach
+    return state, stuck, foe, layout
+
+
+def test_engaged_with_only_a_dropped_missile_in_reach_still_disengages() -> None:
+    # Nothing but a MISSILE weapon in reach — useless to pick up while engaged, so
+    # the two-step recovery still applies: DISENGAGE (option n) toward it, then
+    # ready it once free next turn (#278).
+    state, stuck, foe, layout = _engaged_missile_only_with_only_a_dropped_bow_in_reach()
+    assert state.engaged(stuck) and stuck.ready_weapon is None
+    assert all(weapon.kind == WeaponKind.MISSILE for weapon in stuck.weapons)
+    assert all(weapon.kind == WeaponKind.MISSILE
+               for weapon in state.dropped_in_reach(stuck))
 
     ai.take_action(state, stuck)                          # turn 1 selection: disengage
-    assert stuck.current_option == Option.DISENGAGE
+    assert stuck.current_option == Option.DISENGAGE      # chose to break away
     ai.queue_attacks(state, "blue")                       # turn 1 combat: step away
     assert stuck.attacked_this_turn                       # the step replaced its attack
     assert not state.engaged(stuck)                       # broke contact
-    assert state.dropped_in_reach(stuck)                  # blade still within reach
-    state.end_turn()
-
-    ai.take_action(state, stuck)                          # turn 2 selection: recover
-    assert stuck.current_option == Option.PICK_UP
-    assert stuck.ready_weapon is DAGGER                   # re-armed with a real weapon
 
 
 def test_barehanded_ai_grapples_in_combat_when_the_rules_allow() -> None:

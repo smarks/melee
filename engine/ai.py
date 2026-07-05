@@ -159,10 +159,12 @@ def _rearm_or_close(state: GameState, figure: Figure, target: Figure) -> None:
 
     * **engaged, a carried melee weapon** — swap to it (option m).
     * **engaged, only a missile weapon carried** — it can neither ready a bow
-      while engaged (p.13/#79) nor fire empty-handed, so if a weapon lies in
-      reach and there's a free hex to step to, break away (option n) toward it
-      and pick it up once free next turn (#278); otherwise hold (a grapple may
-      still be declared in the combat phase).
+      while engaged (p.13/#79) nor fire empty-handed. A dropped MELEE weapon in
+      reach is taken up in one step (option q; PICK_UP is engaged-legal, #285/#290
+      — no free hex needed). Failing that, if only a missile weapon lies in reach
+      and there's a free hex to step to, break away (option n) toward it and ready
+      it once free next turn (#278); otherwise hold (a grapple may still be
+      declared in the combat phase).
     * **free, a weapon lying in reach** — pick the best one up (option q; a
       fumbled weapon lands in the fumbler's own hex, so this is usually its
       own blade at its feet).
@@ -178,9 +180,21 @@ def _rearm_or_close(state: GameState, figure: Figure, target: Figure) -> None:
         if melee is not None:
             state.move(figure, Option.CHANGE_WEAPONS, facing=facing,
                        ready=melee.name)
+            return
+        # Carrying only a missile weapon (unreadyable and unfireable while
+        # engaged, p.13/#79). A dropped MELEE weapon in reach is the best
+        # recovery: PICK_UP is engaged-legal (#285), so it re-arms in ONE step —
+        # no free hex needed — where the old two-step disengage could silently
+        # no-op when the only "free" hex was blocked by a downed figure (#290).
+        dropped_melee = [weapon for weapon in state.dropped_in_reach(figure)
+                         if weapon.kind != WeaponKind.MISSILE]
+        if dropped_melee:
+            state.move(figure, Option.PICK_UP,
+                       ready=max(dropped_melee, key=_weapon_power).name)
         elif state.dropped_in_reach(figure) and _has_free_adjacent_hex(state, figure):
-            # Only missile weapons carried but a blade in reach: disengage toward
-            # it (the step happens in the combat phase), then pick it up next turn.
+            # Only a missile weapon lies in reach — useless to pick up while
+            # engaged. Disengage toward it (the step happens in the combat phase),
+            # then ready it once free next turn.
             state.move(figure, Option.DISENGAGE)
         else:
             state.set_do_nothing(figure)
