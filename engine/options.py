@@ -35,6 +35,7 @@ class Option(str, Enum):
     STAND_UP = "stand_up"            # (g) rise from prone/kneeling
     CRAWL = "crawl"                  # (g) crawl <= 2 hexes instead of standing
     # engaged options (j, k, l, m, n)
+    ATTACK = "attack"                # (j) stand still, strike an adjacent foe (no missile)
     SHIFT_ATTACK = "shift_attack"    # (j) shift 1, attack (no missile)
     SHIFT_DEFEND = "shift_defend"    # (k) shift 1, defend
     ONE_LAST_SHOT = "one_last_shot"  # (l) one last missile shot if it was ready
@@ -72,6 +73,11 @@ _SPECS: dict[Option, OptionSpec] = {
         Option.MISSILE_ATTACK, DISENGAGED, "one", True, True, False),
     Option.STAND_UP: OptionSpec(Option.STAND_UP, ANY, "none", False, False, False),
     Option.CRAWL: OptionSpec(Option.CRAWL, ANY, "two", False, False, False),
+    # A plain stand-still strike: option (j) without the optional 1-hex shift.
+    # No movement cap ("none"), so it grants no shift positioning and — being a
+    # non-charge attack — no charge bonus either (those hang off CHARGE_ATTACK).
+    Option.ATTACK: OptionSpec(
+        Option.ATTACK, ENGAGED, "none", True, False, False),
     Option.SHIFT_ATTACK: OptionSpec(
         Option.SHIFT_ATTACK, ENGAGED, "one", True, False, False),
     Option.SHIFT_DEFEND: OptionSpec(

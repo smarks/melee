@@ -2475,3 +2475,57 @@ def test_end_turn_stand_up_is_cancelled_when_the_figure_is_knocked_out() -> None
     assert not downed.can_act()
     state.end_turn()
     assert downed.posture == Posture.PRONE
+
+
+# ---- plain stand-still Attack option (#300) --------------------------------
+# Melee option (j) is "shift one hex (staying engaged) OR stand still, and
+# attack" -- the shift is optional, so a figure adjacent to a foe may strike
+# without moving. That stand-still strike used to be reachable only as a
+# zero-shift SHIFT_ATTACK; #300 promotes it to its own labelled ATTACK option.
+# A shift confers no combat bonus (only CHARGE_ATTACK does), so ATTACK is the
+# same blow minus the step -- and it must never earn a charge bonus.
+
+
+def test_plain_attack_is_offered_to_an_engaged_figure() -> None:
+    state, attacker, _target = _duel()
+    assert Option.ATTACK in state.legal_options(attacker)   # stand and strike is legal
+
+
+def test_plain_attack_applies_and_deals_damage() -> None:
+    # A clean hit then solid damage: 3d6 to-hit = 9 (a hit for adjDX 12), 2d6 = 8.
+    state, attacker, target = _duel(Dice(scripted=[3, 3, 3, 4, 4]))
+    before = target.current_st
+    state.move(attacker, Option.ATTACK, facing=attacker.facing)
+    assert attacker.current_option == Option.ATTACK
+    assert attacker.moved_this_turn == 0                    # it did not shift a hex
+    assert attacker.position == Hex(5, 5)                   # stayed put
+    state.queue_attack(attacker, target)
+    results = state.resolve_combat()
+    assert results and results[0].hit
+    assert target.current_st < before                       # the blow landed
+
+
+def test_plain_attack_grants_no_charge_or_shift_bonus() -> None:
+    # A pole weapon earns its +1 damage die (and strikes first) only IN a charge
+    # (attacker chose CHARGE_ATTACK) or AGAINST one (p.12). A plain ATTACK is
+    # neither, so the queued blow carries no charge bonus and no strike-first
+    # priority -- and, standing still, no shift either.
+    from engine.rules_data import SPEAR
+
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    spearman = create_human("Spear", 13, 11, "a", weapons=[SPEAR], ready_weapon=SPEAR)
+    foe = create_human("Foe", 11, 13, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    spearman.position = Hex(5, 5)
+    foe.position = layout.neighbor(Hex(5, 5), 0)
+    spearman.facing = layout.direction_to(spearman.position, foe.position)
+    foe.facing = layout.direction_to(foe.position, spearman.position)
+    foe.current_option = Option.ATTACK                     # NOT charging
+    state = GameState(arena, [spearman, foe])
+
+    state.move(spearman, Option.ATTACK, facing=spearman.facing)
+    assert spearman.moved_this_turn == 0                   # no shift
+    state.queue_attack(spearman, foe)
+    pending = state._pending[0]
+    assert pending.damage_dice_bonus == 0                  # no pole-charge extra die
+    assert pending.charge_resolve_first is False           # no strike-first priority

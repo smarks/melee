@@ -527,3 +527,54 @@ def test_active_figure_token_is_highlighted_on_the_map(live_server, page: Page) 
     _start_inline_game(page, human=True)
     expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
     expect(page.locator("#svg .fig .activering")).to_have_count(1)
+
+
+@pytest.mark.django_db
+def test_sole_legal_target_is_auto_queued_and_clears_the_resolve_gate(
+        live_server, page: Page) -> None:
+    """#299: a committed attacker with exactly ONE legal target has its shot
+    queued automatically -- the player never clicks the target -- and the
+    must-attack Resolve gate (#212) clears on its own. The queued target shows in
+    the checklist (persistent, clearable state -- no transient UI) and stays
+    enemies-only, so the #229 friendly-fire guard is untouched.
+
+    Pre-seeds a two-fighter combat directly in the in-process game registry so the
+    single-target scenario is deterministic, then loads it via the deep link.
+    """
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    grid = arena.layout
+    red = create_human("Redcap", 12, 12, "red",
+                       weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue = create_human("Bluecap", 12, 12, "blue",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue.position = Hex(3, 3)
+    red.position = grid.neighbor(blue.position, 0)
+    red.facing = next(direction for direction in range(6)
+                      if grid.neighbor(red.position, direction) == blue.position)
+    red.current_option = Option.ATTACK        # committed to a plain strike -> must_attack
+    GAMES["auto-target-e2e"] = {
+        "state": GameState(arena, [red, blue]), "layout": board_layout(arena),
+        "phase": "combat",
+        "controllers": {"red": "human", "blue": "human"}, "combat_prepared": True,
+    }
+    try:
+        page.goto(f"{live_server.url}/game/auto-target-e2e")
+        expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+        # Red's sole target (blue) is queued without a click: the checklist shows a
+        # committed strike at Bluecap...
+        done = page.locator("#controls .checklist .done")
+        expect(done).to_contain_text("Attack Bluecap", timeout=20_000)
+        # ...and the Resolve gate is clear (no untargeted must-attack figure left).
+        expect(page.get_by_role(
+            "button", name=re.compile("Resolve"))).to_be_enabled()
+    finally:
+        del GAMES["auto-target-e2e"]

@@ -263,6 +263,7 @@ async function refresh() {
   }
   LAYOUT = data.layout; S = data.state; captureOwnership(data); optCache = {};
   GAME_ACTIVE = true; syncGameControl(); render();
+  maybeAutoTarget();   // #299: sole-target auto-queue on a fresh (deep-link) load
 }
 // The server no longer holds this match (it was never persisted and a restart
 // lost it, or the link is stale). Show ONE persistent notice — the banner is
@@ -336,7 +337,7 @@ const PHASE_LABEL = {select: "Action selection", combat: "Combat"};
 const OPTION_LABEL = {
   move: "Full move", half_move: "Half move", charge_attack: "⚔ Charge & Attack", dodge: "Dodge",
   ready_weapon: "Ready Weapon", missile_attack: "🏹 Missile Attack", stand_up: "Stand Up", crawl: "Crawl 2",
-  shift_attack: "⚔ Attack (may shift 1)", shift_defend: "Shift & Defend",
+  attack: "⚔ Attack", shift_attack: "⚔ Shift & Attack", shift_defend: "Shift & Defend",
   one_last_shot: "🏹 One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
   hth_attack: "🤼 Grapple", pick_up: "Pick up weapon",
   go_prone: "Drop prone", kneel: "Kneel",
@@ -1175,6 +1176,53 @@ async function queuePendingShotAt(enemy) {
     }
   }
   return false;
+}
+
+// #299: auto-queue the shot for a committed must-attack figure that has exactly
+// ONE legal target, so the player needn't click it. This preserves the resolve
+// gate's guarantees (#212/#217/#220): a figure with more than one target still
+// needs an explicit pick (we skip it), a figure with no target never blocks (the
+// server keeps it out of must_attack), and only the exactly-one case auto-fills.
+// The queued target shows in the plan/checklist and stays clearable — no
+// transient UI. It is enemies-only: _targets is already the server's enemy-only
+// list, so the #229 friendly-fire guard is untouched. An off-hand main-gauche
+// jab is a genuine second choice, so a figure that could add one is left for the
+// player to decide rather than auto-committing the plain blow.
+let _autoTargetBusy = false;
+async function maybeAutoTarget() {
+  if (_autoTargetBusy) return;
+  if (!S || S.phase !== "combat" || combatResolvedTurn === S.turn) return;
+  const mustAttack = new Set(S.must_attack || []);
+  const pending = S.figures.filter(
+    f => myControlled(f) && mustAttack.has(f.uid) && !PLAN[f.uid]);
+  if (!pending.length) return;
+  _autoTargetBusy = true;
+  let queued = false;
+  try {
+    for (const shooter of pending) {
+      // Probe options WITHOUT warming optCache (loadOptions would): this is a
+      // background pass, and a pre-warmed cache changes the timing of the hover/
+      // click menu-open elsewhere. Reuse an already-cached entry when present, but
+      // never write one. ``_targets`` mirrors loadOptions' union of the missile and
+      // melee target lists (a throwable weapon can both strike and be hurled).
+      const info = optCache[shooter.uid]
+        || await api(`/api/game/${GID}/options?uid=${shooter.uid}`);
+      const targets = [...new Set([...(info.missile_targets || []),
+                                   ...(info.melee_targets || [])])];
+      if (targets.length === 1 && !info.main_gauche_jab) {
+        // Set the plan directly — this is a background pass, so it must NOT hijack
+        // the player's current selection (sel) or cached options (optInfo); doing
+        // so would yank an open token menu out from under them. setAttack reads
+        // neither, so a bare call is safe and keeps one source of truth for the
+        // plan shape/label.
+        setAttack(shooter, targets[0]);   // sets PLAN[shooter] + re-renders the gate
+        queued = true;
+      }
+    }
+  } finally {
+    _autoTargetBusy = false;
+  }
+  if (queued) render();
 }
 
 // Select a figure purely to view its sheet: no action menu, no placement flow.
@@ -2143,6 +2191,7 @@ const POLL = setInterval(async () => {
   // when the server actually sent one (first load / reconnect) (#256).
   if (data.layout) LAYOUT = data.layout;
   S = data.state; captureOwnership(data); optCache = {}; render();
+  maybeAutoTarget();   // #299: sole-target auto-queue when new state arrives
   } finally {
     pollBusy = false;
   }
