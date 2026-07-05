@@ -73,6 +73,15 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
                 # The running log swaps this line for :func:`narrate_fumble`'s
                 # drop/shatter story; this rendering still tells the miss.
                 body = f"{approach} — and fumbles, the blow flailing wide"
+        elif result.note == "whiff":
+            # A blow that never reached a roll — the foe slipped out of reach or
+            # fled before a slower attacker could catch it (#147/#270). Narrate
+            # the truth with NO needed/rolled clause: no dice were thrown, and a
+            # fabricated number would print the wrong roll direction in a Tarmar
+            # game (#270). "misses" keeps the miss-word the log invariant needs.
+            return _cap(
+                f"{approach} — and misses, the blow finding only air as "
+                f"{_name(target)} slips out of reach.")
         elif getattr(target, "dodging", False) or getattr(target, "defending", False):
             body = f"{approach}, who dodges clear"
         else:

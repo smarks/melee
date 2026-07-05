@@ -927,7 +927,15 @@ class _HthMixin:
         return DamageDice(1, -4)            # outmuscled
 
     def _grapple_bare(self, figure: Figure) -> None:
-        """Drop a non-dagger ready weapon and shield to grapple bare-handed."""
+        """Drop a non-dagger ready weapon and shield to grapple bare-handed.
+
+        On a defense roll of 1-4 the defender "drops his ready weapon and/or
+        shield" (Melee p.17 / ITL p.116) — dropped to the *ground*, not merely
+        slung. Every HTH strike is forced to REAR (the +4 grapple rule), and a
+        slung (unready) shield stops rear attacks, so leaving ``figure.shield``
+        in place would let a "dropped" large shield keep absorbing every grapple
+        blow. Shed the shield to NO_SHIELD as well so it cannot count while
+        grappling (#251)."""
         if figure.ready_weapon is None or figure.ready_weapon.name not in self._DAGGERS:
             if figure.ready_weapon is not None:
                 if figure.ready_weapon in figure.weapons:
@@ -935,6 +943,7 @@ class _HthMixin:
                 self._drop_to_ground(figure.ready_weapon, figure.position)
             figure.ready_weapon = None
             figure.shield_ready = False
+            figure.shield = NO_SHIELD
 
     def _link_hth(self, attacker: Figure, defender: Figure) -> None:
         attacker.position = defender.position
@@ -1679,8 +1688,30 @@ class _CombatMixin:
                 if shot_index < self._shot_count(pending):
                     self._resolve_attack_shot(pending, shot_index, results)
         self._pending.clear()
+        self._drop_bows_after_last_shot()
         self._announce_victory()
         return results
+
+    def _drop_bows_after_last_shot(self) -> None:
+        """Enforce the parting-shot rule: a figure engaged in melee "can get off
+        one shot if suddenly engaged, but must then drop the missile weapon"
+        (ITL p.116 / Melee p.7 option l). After the one last shot resolves the
+        bow leaves the hand and lands on the ground, so it cannot fire again on a
+        later engaged turn (a bow has no reload cooldown to gate it). The figure
+        is left weaponless in hand and must Change Weapons or Pick Up next turn;
+        option_availability then greys ONE_LAST_SHOT out (no missile ready). This
+        matches the rulebook Combat Example, where Wulf shoots once then readies
+        his two-handed sword (p.23-24) (#241)."""
+        for figure in self.figures:
+            if figure.current_option != Option.ONE_LAST_SHOT:
+                continue
+            weapon = figure.ready_weapon
+            if weapon is None or weapon.kind != WeaponKind.MISSILE:
+                continue
+            if weapon in figure.weapons:
+                figure.weapons.remove(weapon)
+            self._drop_to_ground(weapon, figure.position)
+            figure.ready_weapon = None
 
     def _resolve_attack_shot(
         self, pending: PendingAttack, shot_index: int, results: list
@@ -1824,20 +1855,20 @@ class _CombatMixin:
 
         It consumes the attack and logs a clean miss, but rolls no dice (so a
         deterministic dice stream stays in step) and deals no damage.
+
+        No to-hit number is computed: the blow never reached a roll, so inventing
+        a ``rolled``/``needed`` pair would print a die check that never happened —
+        and in a Tarmar (roll-over d20) game it would print a classic roll-under
+        number in the wrong direction entirely (#270, the #229 log-truthfulness
+        class). The ``"whiff"`` note tells :func:`narrate_attack` to say the blow
+        found only air, with no numbers clause.
         """
-        needed = self.rules.to_hit_number(
-            attacker, zone=pending.zone, ignore_facing=pending.ignore_facing,
-            range_penalty=pending.range_penalty, situational=pending.situational)
         result = AttackResult(
-            hit=False, rolled=needed + 1, needed=needed,
+            hit=False, rolled=0, needed=0,
             dice_count=self.rules.attack_dice_count(target, ranged=False),
             multiplier=1, raw_damage=0, damage=0,
             dropped_weapon=False, broke_weapon=False, weapon=weapon,
-            zone=pending.zone,
-            to_hit_breakdown=self.rules.to_hit_breakdown(
-                attacker, zone=pending.zone, ignore_facing=pending.ignore_facing,
-                range_penalty=pending.range_penalty,
-                situational_note=pending.situational_note),
+            zone=pending.zone, note="whiff",
         )
         self._apply(attacker, target, result)
         results.append(result)
