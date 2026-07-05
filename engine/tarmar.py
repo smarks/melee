@@ -184,6 +184,12 @@ class TarmarRuleset(Ruleset):
             return self._resolve_hth(
                 dice, attacker, target, zone, weapon, hth_damage, blunted=blunted)
         weapon_class = WEAPON_CLASS.get(weapon.name) if weapon else None
+        # A javelin carries two weapon classes: Thrusting in melee, Missile —
+        # Bows when thrown, "and the GM picks by how it's used" (d20-combat-
+        # resolution-spec.md §5). WEAPON_CLASS holds only its melee class, so a
+        # thrown use (ranged) reclasses onto the Bows tier here (#262).
+        if ranged and weapon is not None and weapon.name == "Javelin":
+            weapon_class = "Missile — Bows"
         if weapon_class is None:
             return AttackResult(
                 hit=False, rolled=0, needed=0, dice_count=1, multiplier=1,

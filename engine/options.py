@@ -85,7 +85,7 @@ _SPECS: dict[Option, OptionSpec] = {
     Option.HTH_ATTACK: OptionSpec(
         Option.HTH_ATTACK, ANY, "one", True, False, False),
     Option.PICK_UP: OptionSpec(
-        Option.PICK_UP, DISENGAGED, "none", False, False, False),
+        Option.PICK_UP, ANY, "none", False, False, False),
     Option.GO_PRONE: OptionSpec(
         Option.GO_PRONE, DISENGAGED, "none", False, False, False),
     Option.KNEEL: OptionSpec(

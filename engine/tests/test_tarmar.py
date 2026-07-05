@@ -215,6 +215,27 @@ def test_dodge_and_defend_are_attack_type_specific() -> None:
     assert defend_melee - defend_ranged == DEFEND_TN_BONUS  # +4 only vs the melee blow
 
 
+def test_thrown_javelin_resolves_on_the_missile_bows_tier() -> None:
+    """Spec §5: a javelin carries two weapon classes — Thrusting in melee,
+    Missile — Bows when thrown ("the GM picks by how it's used"). Melee's
+    WEAPON_CLASS holds only its melee class, so a thrown use (ranged) must
+    reclass onto the Bows tier — one Target Number harder than Thrusting (#262).
+    Pre-fix the thrown javelin resolved on Thrusting and this assert failed."""
+    from engine.rules_data import CHAINMAIL, JAVELIN
+
+    rules = TarmarRuleset()
+    attacker = _attacker(JAVELIN, skill=0)
+    target = _target(armor=CHAINMAIL)                       # Medium tier
+    melee_use = rules.resolve_attack(
+        Dice(scripted=[10, 3]), attacker, target, zone=FRONT, ranged=False)
+    thrown_use = rules.resolve_attack(
+        Dice(scripted=[10, 3]), attacker, target, zone=FRONT, ranged=True)
+    expected_gap = (tarmar_rules.target_number("Missile — Bows", "Medium")
+                    - tarmar_rules.target_number("Thrusting", "Medium"))
+    assert expected_gap == 1                                # 17 (Bows) vs 16 (Thrusting)
+    assert thrown_use.needed == melee_use.needed + expected_gap
+
+
 def test_profiles_pair_model_with_ruleset() -> None:
     assert isinstance(CLASSIC.ruleset, Ruleset) and not isinstance(
         CLASSIC.ruleset, TarmarRuleset)

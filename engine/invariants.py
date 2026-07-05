@@ -334,6 +334,17 @@ def assert_log_truthful(results: list[AttackResult], *, context: str = "") -> No
         if not result.hit and has_hit_word:
             _fail("log-miss-narrated-as-hit", f"miss narrated as a hit: {line!r}", where)
 
+        if result.note == "whiff":
+            # A whiff never reached a roll (the foe slipped out of reach / fled),
+            # so it must narrate as a miss with NO fabricated needed/rolled clause
+            # — a synthesized number would print a die check that never happened,
+            # and in a Tarmar (roll-over) game it would read in the wrong
+            # direction entirely (#270, the #229 log-truthfulness class).
+            if result.hit:
+                _fail("whiff-is-a-hit", f"whiff result claims a hit: {line!r}", where)
+            if "rolled" in line or "needed" in line:
+                _fail("whiff-shows-roll", f"whiff narrates a bogus roll: {line!r}", where)
+
         if result.auto_hit:
             if not result.hit:
                 _fail("auto-hit-not-a-hit", f"auto_hit result did not hit: {line!r}", where)

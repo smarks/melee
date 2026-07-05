@@ -2333,3 +2333,89 @@ def test_selection_flow_does_not_disturb_the_seeded_combat_stream() -> None:
     assert [r.rolled for r in play_results] == [r.rolled for r in ref_results]
     assert [(r.hit, r.damage, r.needed) for r in play_results] \
         == [(r.hit, r.damage, r.needed) for r in ref_results]
+
+
+def test_one_last_shot_drops_the_bow_and_cannot_repeat() -> None:
+    """ITL p.116 / Melee p.7 option (l): a figure engaged in melee "can get off
+    one shot ... but must then drop the missile weapon". Pre-fix an engaged
+    archer fired One Last Shot every turn (a bow has no reload cooldown); the
+    parting shot must now drop the bow so the option cannot repeat (#241)."""
+    from engine.rules_data import DAGGER, SMALL_BOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 9, 15, "a", weapons=[SMALL_BOW, DAGGER],
+                          ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    foe = create_human("Foe", 14, 10, "b", weapons=[SHORTSWORD],
+                       ready_weapon=SHORTSWORD, armor=NO_ARMOR)
+    archer.position = Hex(5, 5)
+    archer.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)            # adjacent -> engaged
+    foe.facing = LAYOUT.direction_to(foe.position, archer.position)
+    state = GameState(arena, [archer, foe], dice=Dice(scripted=[3, 3, 3] + [3] * 12))
+    assert Option.ONE_LAST_SHOT in state.legal_options(archer)   # the parting shot
+    archer.current_option = Option.ONE_LAST_SHOT
+    state.queue_attack(archer, foe)
+    state.resolve_combat()
+    assert archer.ready_weapon is None                          # bow left the hand
+    assert "Small bow" not in [weapon.name for weapon in archer.weapons]
+    assert "Small bow" in [weapon.name for _, weapon in state.dropped]   # on the ground
+    # A fresh engaged turn: no missile ready, so One Last Shot is no longer offered.
+    archer.current_option = None
+    archer.attacked_this_turn = False
+    assert Option.ONE_LAST_SHOT not in state.legal_options(archer)
+
+
+def test_grapple_bare_sheds_the_shield_so_it_cannot_absorb_hth_strikes() -> None:
+    """Melee p.17 / ITL p.116: a figure dropped into hand-to-hand drops its ready
+    weapon AND shield to the GROUND. Every HTH strike is forced to REAR and a
+    slung shield stops rear hits, so leaving the shield in place let a "dropped"
+    large shield keep absorbing every grapple blow; _grapple_bare must shed it
+    (#251)."""
+    from engine.rules_data import BROADSWORD, LARGE_SHIELD
+    arena = Arena(cols=9, rows=15)
+    fighter = create_human("Shieldman", 13, 11, "a",
+                           weapons=[BROADSWORD], ready_weapon=BROADSWORD,
+                           shield=LARGE_SHIELD, armor=NO_ARMOR)
+    fighter.position = Hex(5, 5)
+    state = GameState(arena, [fighter])
+    state._grapple_bare(fighter)
+    assert fighter.shield.name == "None"                       # shed to the ground
+    assert not fighter.shield_ready
+    # A grapple strike is forced REAR; with the shield gone nothing absorbs it.
+    assert fighter.hits_stopped(from_front=False, from_rear=True) == NO_ARMOR.stops
+    assert "Broadsword" in [weapon.name for _, weapon in state.dropped]
+
+
+def test_engaged_figure_may_pick_up_a_dropped_weapon() -> None:
+    """ITL p.102: option (q) PICK UP DROPPED WEAPON is listed under Options for
+    ENGAGED figures. Pre-fix PICK_UP was disengaged-only, so an engaged fighter
+    who fumbled his weapon could never re-arm from the ground (#252)."""
+    from engine.rules_data import BROADSWORD, DAGGER
+    arena = Arena(cols=9, rows=15)
+    fighter = create_human("Fighter", 13, 11, "a", weapons=[DAGGER], ready_weapon=DAGGER)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    fighter.position = Hex(5, 5)
+    fighter.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    foe.facing = LAYOUT.direction_to(foe.position, fighter.position)
+    state = GameState(arena, [fighter, foe])
+    assert state.engaged(fighter)                             # standing toe to toe
+    state.dropped.append((Hex(5, 5), BROADSWORD))            # a sword lies in reach
+    assert Option.PICK_UP in state.legal_options(fighter)     # now offered while engaged
+    state.move(fighter, Option.PICK_UP, ready="Broadsword")
+    assert fighter.ready_weapon.name == "Broadsword"          # re-armed from the ground
+
+
+def test_a_disengage_whiff_narrates_no_fabricated_die_roll() -> None:
+    """#270: a whiffed blow reached no to-hit roll, so its narration must not
+    invent a needed/rolled clause — which in a Tarmar (roll-over d20) game would
+    also print a classic roll-under number in the wrong direction. Pre-fix _whiff
+    built rolled=needed+1 and the line read '(needed 12 or less, rolled 13)'."""
+    from engine.invariants import assert_log_truthful
+    from engine.narrative import narrate_attack
+    runner, foe, results = _disengage_under_attack(foe_dx=8)
+    whiff = results[0]
+    assert whiff.hit is False and whiff.note == "whiff"
+    line = narrate_attack(foe, runner, whiff)
+    assert "needed" not in line and "rolled" not in line      # no fabricated roll
+    assert "out of reach" in line                             # the truthful miss line
+    assert_log_truthful(results, context="disengage-whiff")   # invariant now guards it
