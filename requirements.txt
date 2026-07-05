@@ -23,5 +23,5 @@ tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@v0.2.1
 # deliberately when a new release is cut. origami-common is origami-auth's own
 # dependency, but pip does not resolve a git dependency's transitive git deps
 # automatically, so it must be listed explicitly here (and before origami-auth).
-origami-common @ git+https://github.com/smarks/origami-common.git@v0.2.0
-origami-auth @ git+https://github.com/smarks/origami-auth.git@v0.3.1
+origami-common @ git+https://github.com/smarks/origami-common.git@v0.2.1
+origami-auth @ git+https://github.com/smarks/origami-auth.git@v0.3.2

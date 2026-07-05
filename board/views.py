@@ -863,7 +863,13 @@ def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
     # link; #86 adds an admin override.
     seats = {side: ("computer" if side in computer_sides else owner_key)
              for side in state.sides}
-    gid = secrets.token_hex(4)
+    # A game id doubles as the capability token for the unauthenticated spectate
+    # endpoints (api_state, api_debug) and the shareable /game/<gid> deep link, so
+    # it must be as hard to guess as the 128-bit player ids -- not the old 32-bit
+    # token_hex(4), which a determined attacker could enumerate (#311). Widening
+    # is backward-compatible: the URL patterns match <str:gid> with no length
+    # constraint, so any already-saved 8-char gid still resolves.
+    gid = secrets.token_hex(16)
     GAMES[gid] = {
         "state": state,
         "layout": layout(arena),

@@ -15,6 +15,7 @@ from engine.profile import CLASSIC, TARMAR
 from engine.rules_data import (
     BATTLEAXE,
     BROADSWORD,
+    DamageDice,
     MAIN_GAUCHE,
     NO_ARMOR,
     PLATE,
@@ -38,6 +39,31 @@ def _attacker(weapon, *, st=12, dx=12, skill=3, **kw):
 
 def _target(*, st=10, dx=10, **kw):
     return create_tarmar_fighter("Def", strength=st, dexterity=dx, side="blue", **kw)
+
+
+def test_off_balance_penalty_drags_a_grapple_strike() -> None:
+    # A fumbler left off-balance carries the -2 into its NEXT action even when that
+    # action is a hand-to-hand grapple, not an armed swing (#311). apply_attack_
+    # side_effects consumes the off_balance flag for the grapple result too, so if
+    # _resolve_hth ignored the flag the penalty vanished unspent. With DEX 12 (+1)
+    # a rear grapple (+4) needs a d20 of 6 to reach TN 11 while steady (6+5=11);
+    # the -2 off-balance penalty drops that same roll to 9 -- a miss.
+    rules = TarmarRuleset()
+    grappler = create_tarmar_fighter("Grappler", strength=12, dexterity=12,
+                                     side="red", armor=NO_ARMOR)
+    victim = create_tarmar_fighter("Victim", strength=10, dexterity=10,
+                                   side="blue", armor=NO_ARMOR)
+    hth_damage = DamageDice(1, -2)
+
+    grappler.off_balance = False
+    steady = rules._resolve_hth(Dice(scripted=[6, 4]), grappler, victim,
+                                REAR, None, hth_damage)
+    assert steady.hit, "a steady rear grapple at DX 12 hits on a 6 (6+5 vs 11)"
+
+    grappler.off_balance = True
+    dragged = rules._resolve_hth(Dice(scripted=[6, 4]), grappler, victim,
+                                 REAR, None, hth_damage)
+    assert not dragged.hit, "the -2 off-balance penalty turns the same 6 into a miss"
 
 
 def test_fatigue_and_body_pools() -> None:

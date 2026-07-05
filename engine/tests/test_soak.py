@@ -44,7 +44,15 @@ from engine.invariants import (
 from engine.monsters import create_monster
 from engine.options import Option
 from engine.profile import CLASSIC, TARMAR, RulesProfile
-from engine.rules_data import DAGGER, LONGBOW, NO_ARMOR, SHORTSWORD, SPEAR, WeaponKind
+from engine.rules_data import (
+    DAGGER,
+    LONGBOW,
+    NO_ARMOR,
+    PLATE,
+    SHORTSWORD,
+    SPEAR,
+    WeaponKind,
+)
 from engine.state import GameState
 
 # CI plays this many games (bounded so the pytest job stays under ~1 minute);
@@ -194,6 +202,10 @@ def _play_one_game(
                 for one_result in results:
                     on_result(one_result)
             assert_log_truthful(results, context=f"{context} resolve")
+            # Audit the whole turn's narrated attacks, not just resolve_combat's
+            # return: applied_results also holds the select-phase HTH free-hits
+            # (auto-hit lines) that never enter the combat results list (#311).
+            assert_log_truthful(state.applied_results, context=f"{context} applied")
             assert_state_invariants(state, profile, context=f"{context} resolved", phase="combat")
             state.end_turn()
             phase = "select"
@@ -765,3 +777,65 @@ def test_same_seed_gives_the_same_outcome() -> None:
     second_events, second_pools = run()
     assert first_events == second_events
     assert first_pools == second_pools
+
+
+def test_select_phase_hth_free_hit_reaches_the_log_audit() -> None:
+    """A defender's 1d6 grapple-defense roll of 6 grants an automatic hit and
+    throws the attacker back (p.17). That free-hit builds a real auto-hit
+    AttackResult narrated during the SELECT phase; it never enters
+    resolve_combat's returned list, so it went unaudited before #311. It must now
+    land in ``state.applied_results`` and read as truthful.
+
+    A head-on grapple (front zone, needed so the defense 6 is NOT ignored as a
+    rear grab is) is legal against a lower-MA foe (p.17 case c): the plate-clad
+    Mark has MA 6 to the Wrestler's 10."""
+    arena = Arena(cols=7, rows=9)
+    wrestler = create_human("Wrestler", 12, 12, "red",
+                            weapons=[DAGGER], ready_weapon=DAGGER, armor=NO_ARMOR)
+    mark = create_human("Mark", 12, 12, "blue",
+                        weapons=[DAGGER], ready_weapon=DAGGER, armor=PLATE)
+    wrestler.position, wrestler.facing = Hex(3, 3), 0
+    mark.position, mark.facing = Hex(3, 4), 0          # faces the wrestler -> front
+    assert mark.movement_allowance < wrestler.movement_allowance
+    # Scripted: d6=6 (free hit), then plenty for the forced counter's dice.
+    state = GameState(arena, [wrestler, mark], dice=Dice(scripted=[6] + [3] * 15))
+    wrestler.current_option = Option.HTH_ATTACK
+
+    assert state.hth_attack(wrestler, mark) == "free_hit"
+    free_hits = [result for result in state.applied_results if result.auto_hit]
+    assert len(free_hits) == 1, "the select-phase free-hit was not captured"
+    assert free_hits[0].hit, "a free-hit must never whiff"
+    # The whole turn's narrated attacks -- including this select-phase free-hit --
+    # now pass the log-truthfulness audit.
+    assert_log_truthful(state.applied_results, context="free-hit audit")
+
+
+def test_disperse_relocates_a_boxed_in_survivor_past_the_first_ring() -> None:
+    """When a 3+ ally pile's vacated hex has every immediate neighbour occupied,
+    each freed survivor past the first must still get a DISTINCT hex -- a two-step
+    relocation, not a silent stack that would trip 'shared-hex' (#311)."""
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    center = Hex(4, 7)
+    survivors = [
+        create_human(f"Ally{index}", 12, 12, "red",
+                     weapons=[DAGGER], ready_weapon=DAGGER, armor=NO_ARMOR)
+        for index in range(3)
+    ]
+    for ally in survivors:                       # stacked on the vacated hex
+        ally.position, ally.facing = center, 0
+    blockers = []
+    for index, neighbor in enumerate(arena.neighbors(center)):
+        blocker = create_human(f"Wall{index}", 12, 12, "blue",
+                               weapons=[DAGGER], ready_weapon=DAGGER, armor=NO_ARMOR)
+        blocker.position, blocker.facing = neighbor, 0
+        blockers.append(blocker)
+    state = GameState(arena, survivors + blockers, dice=Dice(seed=1))
+
+    state._disperse_pile_survivors(survivors)
+
+    positions = [ally.position for ally in survivors]
+    assert len(set(positions)) == 3, "two freed survivors still share a hex"
+    for ally in survivors:
+        assert all(arena.contains(cell) for cell in ally.footprint(layout))
+    assert_state_invariants(state, CLASSIC, context="boxed-in disperse", phase="combat")

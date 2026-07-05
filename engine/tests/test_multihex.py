@@ -253,3 +253,34 @@ def test_shield_rush_has_no_effect_on_a_giant() -> None:
     state = GameState(arena, [giant, rusher], dice=Dice(scripted=[3] * 12))
     # ST 30 giant is > 2x the ST 12 rusher, so the rush cannot move it.
     assert state.shield_rush(rusher, giant) == "no_effect"
+
+
+# ---- force retreat honours the whole footprint ------------------------------
+def test_force_retreat_never_pushes_a_giant_partly_off_board() -> None:
+    """A shove computes destinations from the anchor hex, but a giant is only
+    legally placed where its WHOLE tri-hex footprint fits. With the attacker
+    below-and-right, the naive furthest anchor (Hex(4,1)) would carry the giant's
+    top hex off the arena; force_retreat must reject that anchor and choose a
+    fully in-bounds one instead -- never leave part of the giant off-board (#311).
+    """
+    arena = Arena(cols=9, rows=15)
+    layout = arena.layout
+    giant = create_monster("Giant", "Grond", "wild")
+    giant.position, giant.facing = Hex(4, 2), 0
+    attacker = _human("Hero", "a", Hex(5, 3))       # adjacent to the giant anchor
+    _aim(attacker, giant.position)
+    state = GameState(arena, [giant, attacker], dice=Dice(seed=1))
+    # Arm the push directly, isolating destination choice from combat.
+    attacker.dealt_st_damage_this_turn = True
+    attacker.force_retreat_targets_this_turn = [giant.uid]
+    attacker.hits_this_turn = 0
+    assert state.can_force_retreat(attacker, giant)
+
+    destination = state.force_retreat(attacker, giant)
+    assert destination != Hex(4, 1)                 # the off-board-footprint anchor
+    footprint = giant.footprint(layout)
+    assert all(arena.contains(cell) for cell in footprint), (
+        "the shoved giant has a footprint hex off the arena")
+    occupied_by_others = set(state.occupied(exclude=giant))
+    assert not (set(footprint) & occupied_by_others), (
+        "the shoved giant overlaps another figure")

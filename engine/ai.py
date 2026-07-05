@@ -309,6 +309,16 @@ def take_action(state: GameState, figure: Figure) -> None:
                       if w.kind != WeaponKind.MISSILE and w is not weapon), None)
         if melee is not None:
             state.move(figure, Option.CHANGE_WEAPONS, facing=turn_facing, ready=melee.name)
+            return
+        # No carried melee weapon — but a dropped one may lie within reach. PICK_UP
+        # is engaged-legal (#285/#290), so re-arm from the ground in one step
+        # rather than holding uselessly with an unfightable bow (mirrors
+        # _rearm_or_close's engaged branch above).
+        dropped_melee = [w for w in state.dropped_in_reach(figure)
+                         if w.kind != WeaponKind.MISSILE]
+        if dropped_melee:
+            state.move(figure, Option.PICK_UP,
+                       ready=max(dropped_melee, key=_weapon_power).name)
         else:
             state.set_do_nothing(figure)
         return
