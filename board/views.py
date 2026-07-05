@@ -1446,6 +1446,29 @@ def _act_force_retreat(game: dict, body: dict, *, is_admin: bool = False):
 
 
 def _act_end_turn(game: dict, body: dict, *, is_admin: bool = False):
+    """End the turn — but no-op a stale duplicate (#242).
+
+    ``end_turn`` runs in any phase (the post-victory "Start next round" reuses
+    it), so nothing else stops a second end_turn from landing in the fresh select
+    phase the first one just opened. A double-click or a retried POST on a flaky
+    connection would then call :func:`state.end_turn` twice for one player
+    intent: it would skip a whole turn, erase the per-turn injury flags (a
+    figure's mandatory -2 DX wounded penalty vanishes), grant a free missile
+    reload, and re-roll the computer's already-committed actions off the seeded
+    dice stream.
+
+    Guard it with an expected-turn token: the client sends ``expected_turn`` =
+    the turn it means to end. If the game has already moved past it, the request
+    is a stale duplicate — do NOT end again. Return the current authoritative
+    state (a 200, not an error) so the client simply re-renders; a benign
+    duplicate must not flash an error. The token is optional: a request that
+    omits it keeps the legacy unconditional behavior, so trusted server-side and
+    test callers are unaffected.
+    """
+    state: GameState = game["state"]
+    expected_turn = body.get("expected_turn")
+    if expected_turn is not None and expected_turn != state.turn_number:
+        return {"end_turn_noop": True, "turn": state.turn_number}
     _do_end_turn(game)
     return None
 

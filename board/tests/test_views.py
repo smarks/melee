@@ -1430,3 +1430,68 @@ def test_debug_trail_survives_a_registry_wipe(client: Client) -> None:
     extended = client.get(f"/api/game/{gid}/debug").json()["trail"]
     seqs = [entry["seq"] for entry in extended]
     assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+
+
+# ---- end_turn idempotency (#242) --------------------------------------------
+# end_turn is registered with phase None (the post-victory "Start next round"
+# reuses it), so nothing else stops a second end_turn from landing in the fresh
+# select phase the first one opened. A double-click or a retried POST would then
+# advance the turn twice for one player intent. The expected-turn token makes a
+# stale duplicate a safe no-op.
+
+
+def test_duplicate_end_turn_is_a_safe_noop_242(client: Client) -> None:
+    # One player intent must advance at most one turn. A fresh game sits in turn 1
+    # (select); an end_turn carrying expected_turn=1 opens turn 2, and a duplicate
+    # still carrying the now-stale expected_turn=1 must NOT advance again.
+    data = _new(client)
+    gid = data["gid"]
+    starting_turn = data["state"]["turn"]
+
+    advanced = _post(client, gid, {"type": "end_turn", "expected_turn": starting_turn})
+    assert advanced.get("error") is None
+    assert advanced["state"]["turn"] == starting_turn + 1
+
+    duplicate = _post(client, gid, {"type": "end_turn", "expected_turn": starting_turn})
+    assert duplicate.get("error") is None          # a benign duplicate is not an error
+    assert duplicate.get("result", {}).get("end_turn_noop") is True
+    # Pre-fix this second, stale end_turn skipped straight to turn 3.
+    assert duplicate["state"]["turn"] == starting_turn + 1
+
+
+def test_duplicate_end_turn_preserves_per_turn_injury_flags_242(client: Client) -> None:
+    # The concrete harm: a duplicate end_turn recomputes wounded_last_turn from
+    # hits_this_turn, which the first end_turn already reset to 0 — so a figure's
+    # mandatory -2 DX wounded penalty for the coming turn silently vanishes.
+    from board.views import GAMES
+
+    data = _new(client)
+    gid = data["gid"]
+    starting_turn = data["state"]["turn"]
+
+    state = GAMES[gid]["state"]
+    wounded = state.figures[0]
+    wounded.hits_this_turn = wounded.wound_hits_threshold      # took enough to wound
+
+    advanced = _post(client, gid, {"type": "end_turn", "expected_turn": starting_turn})
+    assert advanced.get("error") is None
+    assert wounded.wounded_last_turn is True                   # penalty is set for the new turn
+
+    _post(client, gid, {"type": "end_turn", "expected_turn": starting_turn})   # stale duplicate
+    # Pre-fix the duplicate erased the flag (recomputed from the reset counter).
+    assert wounded.wounded_last_turn is True
+
+
+def test_one_end_turn_request_never_skips_a_turn_242(client: Client) -> None:
+    # Invariant: no single end_turn request advances the turn by more than one.
+    # Fire several stale-token duplicates after one real end_turn; the turn must
+    # settle exactly one past the start no matter how many duplicates arrive.
+    data = _new(client)
+    gid = data["gid"]
+    starting_turn = data["state"]["turn"]
+
+    _post(client, gid, {"type": "end_turn", "expected_turn": starting_turn})
+    for _ in range(5):
+        latest = _post(client, gid, {"type": "end_turn", "expected_turn": starting_turn})
+        assert latest.get("error") is None
+    assert latest["state"]["turn"] == starting_turn + 1
