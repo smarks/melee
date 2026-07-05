@@ -1213,10 +1213,11 @@ async function onFigureHover(f) {
 }
 
 function missileReady(f, info) {
+  // A figure shoots (bow/crossbow) rather than strikes when the server reports
+  // its readied weapon is a missile weapon (#272). Derive it from that flag, not
+  // a client-side copy of the weapon taxonomy.
   info = info || optInfo;
-  return info && info.missile_targets && info.missile_targets.length >= 0
-    && f.weapon && ["Longbow","Small bow","Horse bow","Sling","Thrown rock",
-                    "Light crossbow","Heavy crossbow"].includes(f.weapon);
+  return !!(f && f.weapon && info && info.is_missile);
 }
 
 function onReachClick(label) {
@@ -1388,9 +1389,17 @@ let gameCatBusy = false;
 async function ensureGameCatalog() {
   if (gameCatBusy || !PROFILE || (CAT && RULES && CAT.profile === PROFILE)) return;
   gameCatBusy = true;
-  CAT = await api(`/api/catalog?profile=${encodeURIComponent(PROFILE)}`);
-  RULES = CAT.stat_rules;
-  gameCatBusy = false;
+  try {
+    // A rejected fetch (network blip, 500) must not leave gameCatBusy stuck true
+    // -- that permanently blocks every retry and hides the live-edit button
+    // (#272). Reset the flag in finally; leave CAT/RULES unset so the next render
+    // retries the load.
+    const catalog = await api(`/api/catalog?profile=${encodeURIComponent(PROFILE)}`);
+    CAT = catalog;
+    RULES = catalog.stat_rules;
+  } finally {
+    gameCatBusy = false;
+  }
   render();
 }
 
@@ -2102,8 +2111,14 @@ let _lastStateJSON = "";
 // the editable pre-game Game Control (no auto-boot -- New Game starts a match).
 const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
 if (urlGid) { GID = urlGid; refresh(); } else { showPreGame(); }
+let pollBusy = false;                                // a poll's fetch is in flight
 const POLL = setInterval(async () => {
   if (!GID) return;
+  // Skip this tick if the previous poll's fetch has not resolved yet: on a slow
+  // connection setInterval would otherwise stack overlapping requests (#272).
+  if (pollBusy) return;
+  pollBusy = true;
+  try {
   const polledGid = GID;                             // pin the game we're polling for
   // The hex layout is immutable after game creation, so once we have it, ask the
   // server to skip re-shipping it on every 2s poll (#256). If we somehow don't
@@ -2128,6 +2143,9 @@ const POLL = setInterval(async () => {
   // when the server actually sent one (first load / reconnect) (#256).
   if (data.layout) LAYOUT = data.layout;
   S = data.state; captureOwnership(data); optCache = {}; render();
+  } finally {
+    pollBusy = false;
+  }
 }, 2000);
 // Arriving from login (LOGIN_REDIRECT_URL = "/?setup") opens the wizard straight away.
 if (new URLSearchParams(location.search).has("setup")) openSetup();

@@ -182,6 +182,44 @@ def test_invite_link_shows_in_a_mixed_human_and_computer_game(live_server, page:
 
 
 @pytest.mark.django_db
+def test_a_second_human_joins_from_another_browser_via_the_invite(
+        live_server, page: Page) -> None:
+    # #272: the second-human JOIN flow (open the invite URL from a separate browser
+    # context, claim the open seat, and take control) had no e2e — only same-process
+    # Django client coverage. Drive it across two real browser contexts here.
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)                          # host holds both human seats
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    invite_url = page.url                                          # /game/<gid> (history.replaceState)
+    assert "/game/" in invite_url
+
+    # The host frees one of its two same-screen seats so a remote player can take
+    # it (a seat is claimable only once opened; #85).
+    host_open = page.get_by_role("button", name="Open").first
+    expect(host_open).to_be_visible(timeout=20_000)
+    host_open.click()
+
+    # A second player opens the invite link in a fresh context (its own cookies ->
+    # a different player id) and claims the now-open seat.
+    joiner_context = page.context.browser.new_context()
+    try:
+        joiner = joiner_context.new_page()
+        joiner.goto(invite_url)
+        claim = joiner.get_by_role("button", name="Claim")
+        expect(claim).to_have_count(1, timeout=20_000)            # an open seat to take
+        claim.click()
+        # The joiner now owns a seat: nothing left to claim, and the board is drawn.
+        expect(joiner.get_by_role("button", name="Claim")).to_have_count(0, timeout=20_000)
+        expect(joiner.locator("#svg circle").first).to_be_visible()   # in the game
+        expect(joiner.get_by_text("— you")).to_have_count(1, timeout=20_000)  # owns a seat
+        # The host gave that seat away, so it now controls a single seat and its
+        # per-seat "Open" control is gone (it polls the seat change every 2s).
+        expect(page.get_by_role("button", name="Open")).to_have_count(0, timeout=20_000)
+    finally:
+        joiner_context.close()
+
+
+@pytest.mark.django_db
 def test_generated_fighter_starts_with_a_missile_weapon(live_server, page: Page) -> None:
     # regression: a generated fighter must start with a hand weapon AND a missile
     # weapon (bow/crossbow), not two hand weapons. The missile weapon is now the

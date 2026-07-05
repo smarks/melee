@@ -56,10 +56,39 @@ def test_an_auto_hit_is_narrated_as_unavoidable_not_a_bogus_roll():
 
 
 def test_a_defended_miss_reads_as_a_dodge():
+    # A defend raises the difficulty of a MELEE blow, so a melee miss vs a
+    # defender reads as a dodge (type-aware, #272).
+    red, blue = _duo()
+    blue.defending = True
+    line = narrate_attack(red, blue, _result(BROADSWORD, hit=False, rolled=16))
+    assert "who dodges clear" in line and line.startswith("Knight (red) swings")
+
+
+def test_a_dodge_is_credited_only_against_a_ranged_miss():
+    # A dodge forces four dice only vs a missile/thrown attack (ruleset.py), so a
+    # dodging target credits the dodge on a ranged miss (#272).
+    red, blue = _duo(LONGBOW)
+    blue.dodging = True
+    line = narrate_attack(red, blue, _result(LONGBOW, hit=False, rolled=16))
+    assert "who dodges clear" in line
+
+
+def test_a_melee_miss_vs_a_dodger_is_not_credited_as_a_dodge():
+    # Dodge does not help vs a melee blow, so a melee miss vs a (only) dodging
+    # target must read as a plain miss, not "dodges clear" (#272).
     red, blue = _duo()
     blue.dodging = True
     line = narrate_attack(red, blue, _result(BROADSWORD, hit=False, rolled=16))
-    assert "who dodges clear" in line and line.startswith("Knight (red) swings")
+    assert "who dodges clear" not in line and "and misses" in line
+
+
+def test_a_ranged_miss_vs_a_defender_is_not_credited_as_a_dodge():
+    # Defend does not help vs a missile attack, so a ranged miss vs a (only)
+    # defending target must read as a plain miss (#272).
+    red, blue = _duo(LONGBOW)
+    blue.defending = True
+    line = narrate_attack(red, blue, _result(LONGBOW, hit=False, rolled=16))
+    assert "who dodges clear" not in line and "and misses" in line
 
 
 def test_a_crit_is_a_crushing_blow():

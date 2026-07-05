@@ -114,3 +114,25 @@ def test_admin_endpoints_404_on_missing_targets(client, django_user_model) -> No
     assert client.get("/api/admin/users/99999/characters").status_code == 404
     assert client.post("/api/admin/users/99999/delete").status_code == 404
     assert client.post("/api/admin/characters/99999/delete").status_code == 404
+
+
+@pytest.mark.django_db
+def test_admin_user_list_does_not_run_a_count_query_per_user(
+        client, django_user_model) -> None:
+    # #272: the admin user list annotates character counts in a single query
+    # instead of one COUNT per user, so the query total must not grow with the
+    # number of users listed.
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    _admin(django_user_model)
+    _login_admin(client)
+    _player(django_user_model, "p1")
+    _player(django_user_model, "p2")
+    with CaptureQueriesContext(connection) as with_two:
+        assert client.get("/api/admin/users").status_code == 200
+    for index in range(6):
+        _player(django_user_model, f"extra{index}")
+    with CaptureQueriesContext(connection) as with_eight:
+        assert client.get("/api/admin/users").status_code == 200
+    assert len(with_eight.captured_queries) == len(with_two.captured_queries)

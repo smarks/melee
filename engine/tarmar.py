@@ -204,13 +204,19 @@ class TarmarRuleset(Ruleset):
         # nullify flanking against a shielded foe.
         shield = (SHIELD_BONUS.get(target.shield.name, 0)
                   if target.shield_ready and zone == FRONT else 0)
+        # A ready off-hand main-gauche parries as a +1 shield-style bonus on the
+        # Target Number in the Tarmar path (spec §6: "main_gauche +1 (parry)"),
+        # not the classic damage-absorbing parry. main_gauche_parry returns 1
+        # only for a qualifying frontal, one-handed, non-missile blow (p.13).
+        main_gauche = main_gauche_parry(target, weapon, zone)
         dodge = tarmar_rules.dodge_modifier(target.base_adj_dx)
         # Dodge raises the TN only against a missile/thrown attack; defend only
         # against a melee blow (Melee p.20) — type-aware like the classic profile.
         defends = (ranged and target.dodging) or (not ranged and target.defending)
         defend = DEFEND_TN_BONUS if defends else 0
         target_number = tarmar_rules.target_number(
-            weapon_class, tier, shield_bonus=shield, defender_dodge=dodge) + defend
+            weapon_class, tier, shield_bonus=shield + main_gauche,
+            defender_dodge=dodge) + defend
 
         skill = attacker.weapon_skill.get(weapon.name, 0)
         # A standing off-balance penalty (from a 1-3 fumble) drags this attack;
@@ -265,7 +271,6 @@ class TarmarRuleset(Ruleset):
                 from_front=(zone == FRONT), from_rear=(zone == REAR))
             damage = tarmar_rules.damage_after_armour(
                 raw_damage, stops, weapon_class, tier)
-            damage = max(0, damage - main_gauche_parry(target, weapon, zone))
 
         return AttackResult(
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
@@ -281,7 +286,8 @@ class TarmarRuleset(Ruleset):
             to_hit_breakdown=self._breakdown(
                 attacker, weapon, weapon_class, tier, shield, defends,
                 target_number, skill, zone, ignore_facing, range_penalty, bonus,
-                situational_note, off_balance=off_balance))
+                situational_note, off_balance=off_balance,
+                main_gauche=main_gauche))
 
     def _resolve_hth(self, dice, attacker, target, zone, weapon, hth_damage,
                      *, blunted=False) -> AttackResult:
@@ -321,12 +327,14 @@ class TarmarRuleset(Ruleset):
     @staticmethod
     def _breakdown(attacker, weapon, weapon_class, tier, shield, defending,
                    target_number, skill, zone, ignore_facing, range_penalty, bonus,
-                   situational_note="", off_balance=0) -> str:
+                   situational_note="", off_balance=0, main_gauche=0) -> str:
         """How the d20 to-hit was reached: the target number it needed, and the
         bonus added to the die (with its parts)."""
         target = f"need {target_number} ({weapon_class} vs {tier}"
         if shield:
             target += f", shield +{shield}"
+        if main_gauche:
+            target += f", main-gauche +{main_gauche}"
         if defending:
             target += ", defending"
         target += ")"

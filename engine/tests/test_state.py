@@ -2419,3 +2419,59 @@ def test_a_disengage_whiff_narrates_no_fabricated_die_roll() -> None:
     assert "needed" not in line and "rolled" not in line      # no fabricated roll
     assert "out of reach" in line                             # the truthful miss line
     assert_log_truthful(results, context="disengage-whiff")   # invariant now guards it
+
+
+def test_end_turn_stand_up_is_cancelled_by_a_same_turn_knockdown() -> None:
+    """#272: a figure that chose STAND UP but was knocked down (or knocked out) in
+    the SAME turn must not rise at end of turn — the fresh knockdown cancels the
+    pending stand (p.20)."""
+    arena = Arena(cols=9, rows=15)
+    faller = create_human("Faller", 12, 12, "a",
+                          weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    other = create_human("Other", 12, 12, "b",
+                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    faller.position, other.position = Hex(2, 2), Hex(7, 7)
+    state = GameState(arena, [faller, other])
+
+    # It picked STAND UP while prone, then took a knockdown this same turn.
+    faller.posture = Posture.PRONE
+    faller.current_option = Option.STAND_UP
+    faller.knocked_down_this_turn = True
+    state.end_turn()
+    assert faller.posture == Posture.PRONE            # the knockdown cancelled the rise
+
+
+def test_end_turn_stand_up_rises_when_not_freshly_felled() -> None:
+    """Control: with no same-turn knockdown and still able to act, the pending
+    STAND UP completes at end of turn (p.6-7)."""
+    arena = Arena(cols=9, rows=15)
+    riser = create_human("Riser", 12, 12, "a",
+                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    other = create_human("Other", 12, 12, "b",
+                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    riser.position, other.position = Hex(2, 2), Hex(7, 7)
+    state = GameState(arena, [riser, other])
+
+    riser.posture = Posture.PRONE
+    riser.current_option = Option.STAND_UP
+    state.end_turn()
+    assert riser.posture == Posture.STANDING
+
+
+def test_end_turn_stand_up_is_cancelled_when_the_figure_is_knocked_out() -> None:
+    """#272: a figure knocked unconscious (ST 0) the turn it chose STAND UP must
+    not rise — it can no longer act."""
+    arena = Arena(cols=9, rows=15)
+    downed = create_human("Downed", 12, 12, "a",
+                          weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    other = create_human("Other", 12, 12, "b",
+                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    downed.position, other.position = Hex(2, 2), Hex(7, 7)
+    state = GameState(arena, [downed, other])
+
+    downed.posture = Posture.PRONE
+    downed.current_option = Option.STAND_UP
+    downed.damage_taken = downed.strength             # ST 0 -> collapsed, can't act
+    assert not downed.can_act()
+    state.end_turn()
+    assert downed.posture == Posture.PRONE

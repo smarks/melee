@@ -40,7 +40,11 @@ TARMAR_STATS = ("strength", "dexterity", "intelligence",
                 "wisdom", "constitution", "charisma")
 TARMAR_MIN, TARMAR_MAX = 3, 18
 TARMAR_BUDGET = 65
-TARMAR_SKILL_MAX = 5
+# The spec's skill ladder stops at Master (level 3, +6 to hit); its locked §4
+# hit-surface tables define nothing above it. Capping the editor at 3 keeps every
+# buildable fighter inside the ladder tarmar_rules.skill_bonus is derived from,
+# so no player can field an undefined +8/+10 skill (audit round 3).
+TARMAR_SKILL_MAX = 3
 
 
 def _required(spec: dict, key: str):

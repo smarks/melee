@@ -1802,8 +1802,34 @@ def test_api_options_reports_two_shots_for_a_high_dx_archer(client: Client) -> N
     try:
         data = client.get("/api/game/options-shots/options?uid=archer").json()
         assert data["missile_shots"] >= 2
+        # #272: the client labels shoot-vs-attack rows from this server flag rather
+        # than a hard-coded weapon-name list — a bow archer reads is_missile=True.
+        assert data["is_missile"] is True
     finally:
         del GAMES["options-shots"]
+
+
+def test_api_options_reports_is_missile_false_for_a_melee_fighter(
+        client: Client) -> None:
+    # #272: a readied hand weapon is not a missile weapon, so is_missile is False.
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD, NO_ARMOR
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=15, rows=15)
+    knight = create_human("Knight", 12, 12, "red",
+                          weapons=[BROADSWORD], ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    knight.position, knight.uid = Hex(5, 5), "knight"
+    GAMES["options-melee"] = {"state": GameState(arena, [knight]),
+                              "profile": "Classic Melee", "phase": "combat"}
+    try:
+        data = client.get("/api/game/options-melee/options?uid=knight").json()
+        assert data["is_missile"] is False
+    finally:
+        del GAMES["options-melee"]
 
 
 def test_poll_can_omit_the_immutable_layout(client: Client) -> None:
