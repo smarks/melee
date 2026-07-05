@@ -414,6 +414,36 @@ def test_grapple_pile_formation_passes_invariants() -> None:
     assert_state_invariants(state, CLASSIC, context="grapple pile formed", phase="combat")
 
 
+def test_grapple_pile_dispersed_on_foe_death_stays_invariant_clean() -> None:
+    """Two allies pile one foe, kill it, and the freed survivors end on distinct
+    legal hexes -- the #287 pile-dispersal regression.
+
+    Both red allies (Rook, Bishop) grapple the lone blue Pawn onto its hex, then
+    finish it. When the grappled foe dies the hand-to-hand lock dissolves, so the
+    survivors are no longer in HTH and can no longer share the vacated hex; the
+    engine must un-stack them (one stays on the corpse's hex, the other steps off,
+    p.17-19). Before the fix this left two conscious same-side figures on one hex
+    and tripped 'shared-hex'; this asserts the full gate stays green post-fatal."""
+    for seed in range(50):
+        state, _knight, rook, pawn = _grapple_pile(CLASSIC, seed=seed)
+        bishop = next(figure for figure in state.figures if figure.name == "Bishop")
+        if not (rook.in_hth and bishop.in_hth and pawn.in_hth):
+            continue                                   # this seed shrugged a grab off
+        for side in state.sides:
+            ai.queue_attacks(state, side)
+        state.resolve_combat()
+        if pawn.is_dead:
+            break
+    assert pawn.is_dead, "no seed drove the piled foe to death for the audit"
+    # The lock dissolved: both former grapplers are out of hand-to-hand...
+    assert not rook.in_hth and not bishop.in_hth, "the pile did not release on death"
+    # ...and the two conscious survivors no longer share a hex.
+    assert rook.position != bishop.position, (
+        "the freed grapplers are still stacked on one hex (#287)")
+    # The full invariant gate is green after the fatal pile resolution.
+    assert_state_invariants(state, CLASSIC, context="grapple pile dispersed", phase="combat")
+
+
 def _lone_grapple(profile: RulesProfile, seed: int) -> tuple[GameState, Figure, Figure]:
     """One red grappler (Wrestler) locked with one blue foe (Mark) on a shared hex."""
     arena = Arena(cols=7, rows=9)
@@ -436,9 +466,9 @@ def test_hth_strike_resolves_and_stays_invariant_clean() -> None:
     exemption through both :func:`assert_log_truthful` and
     :func:`assert_state_invariants` (#266).
 
-    Uses a single grappler vs one foe so the pile never leaves two same-side
-    figures stacked on one hex (that pile-dispersal bug is filed as #287); the point
-    here is that the HTH combat path itself audits clean."""
+    Uses a single grappler vs one foe to isolate the HTH combat/attribution path
+    itself; the two-ally pile's fatal dispersal (once #287) has its own guard in
+    :func:`test_grapple_pile_dispersed_on_foe_death_stays_invariant_clean`."""
     for seed in range(50):
         state, wrestler, mark = _lone_grapple(CLASSIC, seed=seed)
         if wrestler.in_hth and mark.in_hth:
