@@ -2164,32 +2164,46 @@ function resetTheme() {
 
 applyTheme();
 
-// ---- draggable panels (#319, Stage 1: move-only, with snapping) -------------
+// ---- draggable panels (#319 Stage 1 move+snap; #321 Stage 2 resize+controls) --
 // The four UI panels start as flex children (see .wrap in board.html). At load we
 // measure their current geometry -- those measurements ARE the default layout, so
 // nothing shifts -- then flip .wrap into .floating (each panel position:absolute)
-// and let the user drag any panel by its .panel-titlebar. Positions persist to
-// localStorage and survive reloads; Reset layout restores the measured defaults.
+// and let the user drag any panel by its .panel-titlebar. Positions/sizes persist
+// to localStorage and survive reloads; Reset layout restores the defaults.
 // Below 1100px we stay in the stacked flex layout (no floating, no persistence).
-// The pure helpers (clampGeom / mergeLayout / snapGeom) are kept small so their
-// behaviour is easy to reason about and to exercise from e2e.
-const LAYOUT_KEY = "melee.layout.v1";  // persisted {map,log,control,tracker}:{x,y,w,h}
+//
+// Stage 2 adds, per panel: drag-to-resize (edge + corner handles) and four
+// titlebar controls -- Fit-to-content, Minimize/Expand, Maximize/Restore -- driven
+// by a per-panel sizing-mode state machine:
+//   content    (default) auto-fit to the inner content's natural size, re-fitting
+//              whenever the content changes (a MutationObserver on each panel).
+//   manual     a drag-resize froze the size; auto-fit stops until Fit is pressed.
+//   maximized  filling the available .wrap area; Restore returns to the saved geom.
+//   minimized  collapsed to the titlebar; Expand returns to the saved geom.
+// The pure helpers (clampGeom / mergeLayout / snapGeom / fitGeom / resizeGeom /
+// snapResizeGeom) are kept small so they are easy to reason about and to e2e-test.
+const LAYOUT_KEY = "melee.layout.v2";  // {key:{x,y,w,h,mode,restoreGeom}}
+const LAYOUT_KEY_V1 = "melee.layout.v1";  // Stage 1 {key:{x,y,w,h}} -- migrated on load
 const LAYOUT_SNAP_PX = 9;              // snap when an edge is within this many px
 const LAYOUT_MIN_VISIBLE = 48;         // px of a panel that must stay grabbable
+const LAYOUT_RESIZE_MIN_W = 96;        // smallest width a drag-resize allows
 const LAYOUT_Z_BASE = 10;              // bring-to-front band: 10..40, below overlays@50
 const LAYOUT_Z_MAX = 40;
-// Registry of the draggable panels. All drag/persist/reset/snap logic iterates
-// this, so Stage 2 (resize) extends the same records rather than special-casing.
+const LAYOUT_MODES = new Set(["content", "manual", "maximized", "minimized"]);
+const LAYOUT_RESIZE_DIRS = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+// Registry of the draggable panels. All drag/resize/persist/reset/snap/fit logic
+// iterates this, so behaviour is uniform rather than special-cased per panel.
 const LAYOUT_PANELS = [
-  {key: "map",     selector: ".arena"},
-  {key: "log",     selector: ".logcol"},
-  {key: "control", selector: "#gameControl"},
-  {key: "tracker", selector: ".tracker"},
+  {key: "map",     selector: ".arena",     label: "Map"},
+  {key: "log",     selector: ".logcol",    label: "Game status"},
+  {key: "control", selector: "#gameControl", label: "Game Control"},
+  {key: "tracker", selector: ".tracker",   label: "Characters"},
 ];
 const LAYOUT_NARROW = window.matchMedia("(max-width: 1100px)");
 let DEFAULT_LAYOUT = null;             // {key: {x,y,w,h}} measured once from flex
 let layoutZTop = LAYOUT_Z_BASE;        // monotonic front-most z within the band
 let layoutSaveTimer = null;
+const resizeMinH = panel => (panel.handle ? Math.round(panel.handle.offsetHeight) : 32);
 
 const layoutStacked = () => LAYOUT_NARROW.matches;
 const layoutWrap = () => document.querySelector(".wrap");
@@ -2218,6 +2232,17 @@ function clampGeom(geom, bounds) {
 // Per-field merge of a persisted layout over the measured defaults: a missing,
 // non-numeric, or corrupt field falls back to its default, so partial/garbage
 // saved data can never strand a panel.
+function sanitizeRestore(restore) {
+  // A persisted restore target is {geom:{x,y,w,h}, mode}; anything malformed drops
+  // to null so a corrupt field can never strand a panel on Expand/Restore.
+  if (!restore || typeof restore !== "object") return null;
+  const geom = restore.geom;
+  if (!geom || typeof geom !== "object") return null;
+  if (!["x", "y", "w", "h"].every(k => typeof geom[k] === "number" && isFinite(geom[k]))) return null;
+  const mode = LAYOUT_MODES.has(restore.mode) ? restore.mode : "content";
+  return {geom: {x: geom.x, y: geom.y, w: geom.w, h: geom.h}, mode};
+}
+
 function mergeLayout(defaults, saved) {
   const merged = {};
   for (const panel of LAYOUT_PANELS) {
@@ -2226,6 +2251,8 @@ function mergeLayout(defaults, saved) {
     merged[panel.key] = {
       x: numberOr(over.x, base.x), y: numberOr(over.y, base.y),
       w: numberOr(over.w, base.w), h: numberOr(over.h, base.h),
+      mode: LAYOUT_MODES.has(over.mode) ? over.mode : "content",
+      restoreGeom: sanitizeRestore(over.restoreGeom),
     };
   }
   return merged;
@@ -2258,6 +2285,60 @@ function snapGeom(geom, others, bounds) {
   const dx = nearestSnapDelta([geom.x, geom.x + geom.w], xLines);
   const dy = nearestSnapDelta([geom.y, geom.y + geom.h], yLines);
   return {x: geom.x + dx, y: geom.y + dy, w: geom.w, h: geom.h};
+}
+
+// Cap a measured natural content size to what fits in the wrap from the panel's
+// current top-left, keeping x/y put and never dropping below the grabbable floor.
+function fitGeom(current, natural, bounds, minW, minH) {
+  const availW = Math.max(minW, bounds.width - current.x);
+  const availH = Math.max(minH, bounds.height - current.y);
+  return {
+    x: current.x, y: current.y,
+    w: Math.max(minW, Math.min(natural.w, availW)),
+    h: Math.max(minH, Math.min(natural.h, availH)),
+  };
+}
+
+// The geometry that fills the whole available wrap area (used by Maximize).
+function maximizeGeom(bounds) {
+  return {x: 0, y: 0, w: bounds.width, h: bounds.height};
+}
+
+// New geometry for a drag on the `dir` edge/corner: only the pulled edges move,
+// each clamped so the opposite edge stays put and the box keeps its min size and
+// stays within the wrap. Pure so the resize maths is unit-reasoned and e2e-testable.
+function resizeGeom(start, dir, dx, dy, minW, minH, bounds) {
+  let {x, y, w, h} = start;
+  if (dir.includes("e")) w = Math.min(Math.max(minW, start.w + dx), bounds.width - start.x);
+  if (dir.includes("s")) h = Math.min(Math.max(minH, start.h + dy), bounds.height - start.y);
+  if (dir.includes("w")) {
+    const right = start.x + start.w;
+    x = Math.max(0, Math.min(start.x + dx, right - minW));
+    w = right - x;
+  }
+  if (dir.includes("n")) {
+    const bottom = start.y + start.h;
+    y = Math.max(0, Math.min(start.y + dy, bottom - minH));
+    h = bottom - y;
+  }
+  return {x, y, w, h};
+}
+
+// Snap only the edges the drag is moving to nearby viewport / other-panel lines,
+// reusing the move-snap threshold and candidate-line logic.
+function snapResizeGeom(geom, dir, others, bounds) {
+  const xLines = [0, bounds.width];
+  const yLines = [0, bounds.height];
+  for (const other of others) {
+    xLines.push(other.x, other.x + other.w);
+    yLines.push(other.y, other.y + other.h);
+  }
+  const out = {...geom};
+  if (dir.includes("e")) out.w += nearestSnapDelta([out.x + out.w], xLines);
+  if (dir.includes("s")) out.h += nearestSnapDelta([out.y + out.h], yLines);
+  if (dir.includes("w")) { const d = nearestSnapDelta([out.x], xLines); out.x += d; out.w -= d; }
+  if (dir.includes("n")) { const d = nearestSnapDelta([out.y], yLines); out.y += d; out.h -= d; }
+  return out;
 }
 
 function measureDefaults(wrap) {
@@ -2300,18 +2381,35 @@ function clearInlineGeom(panel) {
   style.left = style.top = style.width = style.height = style.zIndex = "";
 }
 
-function loadSavedLayout() {
-  const raw = localStorage.getItem(LAYOUT_KEY);
-  if (!raw) return {};
+function parseStoredLayout(raw) {
+  if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
-    return (parsed && typeof parsed === "object") ? parsed : {};
+    return (parsed && typeof parsed === "object") ? parsed : null;
   } catch (parseError) {
     // Corrupt JSON -> fall back to defaults (documented behaviour), and note it
     // so a real storage problem isn't silently invisible.
     dbg("LAYOUT", "ignoring corrupt saved layout: " + parseError.message);
-    return {};
+    return null;
   }
+}
+
+// Load the v2 layout, falling back to a one-way v1 migration: a Stage 1 save had
+// no mode, so a user who had positioned panels wanted THAT geometry -- we load it
+// as mode "manual" so it is honoured rather than auto-shrunk away on first paint.
+function loadSavedLayout() {
+  const fromV2 = parseStoredLayout(localStorage.getItem(LAYOUT_KEY));
+  if (fromV2) return fromV2;
+  const fromV1 = parseStoredLayout(localStorage.getItem(LAYOUT_KEY_V1));
+  if (!fromV1) return {};
+  const migrated = {};
+  for (const panel of LAYOUT_PANELS) {
+    const geom = fromV1[panel.key];
+    if (geom && typeof geom === "object") {
+      migrated[panel.key] = {...geom, mode: "manual", restoreGeom: null};
+    }
+  }
+  return migrated;
 }
 
 function saveLayout() {
@@ -2319,7 +2417,9 @@ function saveLayout() {
   clearTimeout(layoutSaveTimer);
   layoutSaveTimer = setTimeout(() => {
     const out = {};
-    for (const panel of LAYOUT_PANELS) out[panel.key] = getInlineGeom(panel);
+    for (const panel of LAYOUT_PANELS) {
+      out[panel.key] = {...getInlineGeom(panel), mode: panel.mode, restoreGeom: panel.restore || null};
+    }
     localStorage.setItem(LAYOUT_KEY, JSON.stringify(out));
   }, 120);
 }
@@ -2341,6 +2441,151 @@ function bringToFront(panel) {
 function reclampAll() {
   const bounds = wrapBounds();
   for (const panel of LAYOUT_PANELS) applyGeom(panel, clampGeom(getInlineGeom(panel), bounds));
+}
+
+// Measure a panel's natural content size for fit-to-content.
+//   MAP: the SVG has a server-driven intrinsic size (drawArena is out of scope), so
+//        fit = the board's LAYOUT.width/height + the scroll padding + titlebar; before
+//        a board exists we keep the measured default so it isn't a sliver.
+//   OTHERS: keep the panel's design width (prose wraps there, so scrollWidth ≈ the
+//        design width anyway) and measure the natural HEIGHT at that width -- this is
+//        the auto-shrink axis ("a short log stays small, a full roster grows") and is
+//        stable, unlike a max-content width that jumps with the longest single line.
+function measureContent(panel) {
+  const base = DEFAULT_LAYOUT[panel.key];
+  if (panel.key === "map") {
+    if (LAYOUT && LAYOUT.width && LAYOUT.height) {
+      const pad = 32;                                   // .arena-scroll padding (16px x2)
+      return {w: Math.ceil(LAYOUT.width) + pad, h: Math.ceil(LAYOUT.height) + pad + resizeMinH(panel)};
+    }
+    return {w: base.w, h: base.h};
+  }
+  const style = panel.el.style;
+  const savedW = style.width, savedH = style.height;
+  style.width = base.w + "px";                           // measure height at the width we'll apply
+  style.height = "auto";
+  const naturalH = Math.ceil(panel.el.getBoundingClientRect().height);
+  style.width = savedW;
+  style.height = savedH;
+  return {w: base.w, h: naturalH};
+}
+
+// Size a content-mode panel to its content, keeping its top-left and staying on-screen.
+function fitPanel(panel) {
+  if (layoutStacked()) return;
+  const bounds = wrapBounds();
+  const geom = fitGeom(getInlineGeom(panel), measureContent(panel), bounds, LAYOUT_RESIZE_MIN_W, resizeMinH(panel));
+  applyGeom(panel, clampGeom(geom, bounds));
+}
+
+// A content change fired the observer: re-fit, but only if this panel is still
+// auto-fitting. Debounced so a burst of DOM writes (a full render) fits once.
+function scheduleFit(panel) {
+  if (layoutStacked() || panel.mode !== "content") return;
+  clearTimeout(panel.fitTimer);
+  panel.fitTimer = setTimeout(() => {
+    if (!layoutStacked() && panel.mode === "content") fitPanel(panel);
+  }, 140);
+}
+
+function setCtl(button, symbol, label) {
+  button.textContent = symbol;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
+// The Minimize/Expand and Maximize/Restore buttons flip label + glyph with mode,
+// so the toggle's restore side is always spelled out (accessible name + tooltip).
+function updateCtlButtons(panel) {
+  if (!panel.btnMin) return;
+  if (panel.mode === "minimized") setCtl(panel.btnMin, "▢", "Expand " + panel.label);
+  else setCtl(panel.btnMin, "–", "Minimize " + panel.label);
+  if (panel.mode === "maximized") setCtl(panel.btnMax, "❐", "Restore " + panel.label);
+  else setCtl(panel.btnMax, "◻", "Maximize " + panel.label);
+}
+
+function setMode(panel, mode) {
+  panel.mode = mode;
+  panel.el.classList.toggle("minimized", mode === "minimized");
+  updateCtlButtons(panel);
+}
+
+// Fit-to-content: re-enter content mode and size to content now.
+function fitToContent(panel) {
+  panel.restore = null;
+  setMode(panel, "content");
+  fitPanel(panel);
+  saveLayout();
+}
+
+// Toggle Minimize <-> Expand. Minimize saves the pre-collapse {geom,mode} and
+// shrinks to the titlebar; Expand returns to it.
+function toggleMinimize(panel) {
+  if (panel.mode === "minimized") { revertPanel(panel); return; }
+  panel.restore = {geom: getInlineGeom(panel), mode: panel.mode};
+  setMode(panel, "minimized");
+  const geom = getInlineGeom(panel);
+  applyGeom(panel, {x: geom.x, y: geom.y, w: geom.w, h: resizeMinH(panel)});
+  saveLayout();
+}
+
+// Toggle Maximize <-> Restore. Maximize saves the pre-maximize {geom,mode} and
+// fills the wrap; Restore returns to it.
+function toggleMaximize(panel) {
+  if (panel.mode === "maximized") { revertPanel(panel); return; }
+  panel.restore = {geom: getInlineGeom(panel), mode: panel.mode};
+  setMode(panel, "maximized");
+  bringToFront(panel);
+  const bounds = wrapBounds();
+  applyGeom(panel, clampGeom(maximizeGeom(bounds), bounds));
+  saveLayout();
+}
+
+// The restore side of both toggles: return to the exact saved previous
+// geometry+mode. We do NOT re-fit here even when the restored mode is "content"
+// -- restore means "put it back how it was"; content-mode auto-fit simply resumes
+// on the next content change (the observer), so the restore itself is deterministic.
+function revertPanel(panel) {
+  const saved = panel.restore || {geom: DEFAULT_LAYOUT[panel.key], mode: "content"};
+  panel.restore = null;
+  setMode(panel, saved.mode);
+  const bounds = wrapBounds();
+  applyGeom(panel, clampGeom(saved.geom, bounds));
+  saveLayout();
+}
+
+function onResizePointerDown(panel, dir, downEvent) {
+  if (layoutStacked() || downEvent.button !== 0) return;
+  downEvent.preventDefault();
+  downEvent.stopPropagation();          // never let a handle also start a titlebar drag
+  bringToFront(panel);
+  const start = getInlineGeom(panel);
+  const startClientX = downEvent.clientX;
+  const startClientY = downEvent.clientY;
+  const pointerId = downEvent.pointerId;
+  const handle = downEvent.currentTarget;
+  const minH = resizeMinH(panel);
+  handle.setPointerCapture(pointerId);
+
+  const onMove = (moveEvent) => {
+    const bounds = wrapBounds();
+    const others = LAYOUT_PANELS.filter(other => other !== panel).map(getInlineGeom);
+    let geom = resizeGeom(start, dir, moveEvent.clientX - startClientX,
+      moveEvent.clientY - startClientY, LAYOUT_RESIZE_MIN_W, minH, bounds);
+    geom = snapResizeGeom(geom, dir, others, bounds);
+    geom.w = Math.max(LAYOUT_RESIZE_MIN_W, geom.w);
+    geom.h = Math.max(minH, geom.h);
+    applyGeom(panel, clampGeom(geom, bounds));
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+    setMode(panel, "manual");            // a drag-resize freezes auto-fit
+    saveLayout();
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 function onPanelPointerDown(panel, downEvent) {
@@ -2381,26 +2626,74 @@ function applyResponsiveLayout() {
   const wrap = layoutWrap();
   if (layoutStacked()) {
     wrap.classList.remove("floating");
-    for (const panel of LAYOUT_PANELS) clearInlineGeom(panel);
+    for (const panel of LAYOUT_PANELS) {
+      panel.el.classList.remove("minimized");
+      clearInlineGeom(panel);
+    }
     return;
   }
   const merged = mergeLayout(DEFAULT_LAYOUT, loadSavedLayout());
   layoutZTop = LAYOUT_Z_BASE;
-  for (const panel of LAYOUT_PANELS) {
-    applyGeom(panel, merged[panel.key]);
-    panel.el.style.zIndex = LAYOUT_Z_BASE;
-  }
   wrap.classList.add("floating");
+  for (const panel of LAYOUT_PANELS) {
+    const record = merged[panel.key];
+    panel.restore = record.restoreGeom;
+    setMode(panel, record.mode);
+    applyGeom(panel, {x: record.x, y: record.y, w: record.w, h: record.h});
+    panel.el.style.zIndex = LAYOUT_Z_BASE;
+    if (panel.mode === "content") fitPanel(panel);   // default: size to content now
+  }
   reclampAll();
 }
 
 function resetLayout() {
   localStorage.removeItem(LAYOUT_KEY);
+  localStorage.removeItem(LAYOUT_KEY_V1);
   layoutZTop = LAYOUT_Z_BASE;
   if (layoutStacked()) return;   // stacked flow IS the default; nothing to place
   for (const panel of LAYOUT_PANELS) {
+    panel.restore = null;
+    setMode(panel, "content");                        // default mode, per #321
     applyGeom(panel, DEFAULT_LAYOUT[panel.key]);
     panel.el.style.zIndex = LAYOUT_Z_BASE;
+    fitPanel(panel);
+  }
+}
+
+// Build a titlebar control button. pointerdown is stopped so a click on a control
+// never also starts a titlebar drag; the <button> stays keyboard-focusable/clickable.
+function makeCtlButton(symbol, label, onActivate) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "panel-ctl";
+  setCtl(button, symbol, label);
+  button.addEventListener("pointerdown", event => event.stopPropagation());
+  button.addEventListener("click", event => { event.preventDefault(); onActivate(); });
+  return button;
+}
+
+function buildPanelChrome(panel) {
+  // Titlebar controls cluster (Fit / Minimize / Maximize). It goes on the LEFT of
+  // the titlebar on purpose: floating panels are laid out left-to-right with the
+  // right neighbour stacked on top, so right-edge controls would be covered by that
+  // neighbour once panels overlap (e.g. the map growing to the board's width). A
+  // panel's LEFT edge sits over its lower-z left neighbour, so left controls stay
+  // clickable. Activating a control also raises the panel, for good measure.
+  const controls = document.createElement("span");
+  controls.className = "panel-ctls";
+  panel.btnFit = makeCtlButton("⤢", "Fit " + panel.label + " to content",
+    () => { bringToFront(panel); fitToContent(panel); });
+  panel.btnMin = makeCtlButton("–", "Minimize " + panel.label,
+    () => { bringToFront(panel); toggleMinimize(panel); });
+  panel.btnMax = makeCtlButton("◻", "Maximize " + panel.label, () => toggleMaximize(panel));
+  controls.append(panel.btnFit, panel.btnMin, panel.btnMax);
+  panel.handle.insertBefore(controls, panel.handle.firstChild);
+  // Eight edge/corner resize handles (shown only in floating mode via CSS).
+  for (const dir of LAYOUT_RESIZE_DIRS) {
+    const handle = document.createElement("div");
+    handle.className = "rz rz-" + dir;
+    handle.addEventListener("pointerdown", event => onResizePointerDown(panel, dir, event));
+    panel.el.appendChild(handle);
   }
 }
 
@@ -2414,9 +2707,19 @@ function initLayout() {
   if (LAYOUT_PANELS.some(panel => !panel.el || !panel.handle)) return;  // markup missing
   DEFAULT_LAYOUT = measureDefaults(wrap);   // measure BEFORE floating (flex geometry)
   for (const panel of LAYOUT_PANELS) {
+    panel.mode = "content";
+    panel.restore = null;
+    buildPanelChrome(panel);
     panel.handle.addEventListener("pointerdown", event => onPanelPointerDown(panel, event));
   }
   applyResponsiveLayout();
+  // Auto-fit: watch each panel's content for changes and re-fit while in content
+  // mode. Observing childList/subtree/characterData -- NOT attributes -- means the
+  // inline style writes our own resizes make never re-trigger it (no feedback loop).
+  for (const panel of LAYOUT_PANELS) {
+    panel.observer = new MutationObserver(() => scheduleFit(panel));
+    panel.observer.observe(panel.el, {childList: true, subtree: true, characterData: true});
+  }
   // Crossing the breakpoint re-applies the correct mode; a resize within floating
   // re-clamps so a panel can't end up stranded off the smaller viewport.
   LAYOUT_NARROW.addEventListener("change", applyResponsiveLayout);
