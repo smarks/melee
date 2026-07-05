@@ -121,7 +121,9 @@ function dbgText() {
   const lines = DBG.map(dbgFormatEntry);
   const snapshot = "\n\n---- current state snapshot ----\n" + JSON.stringify({
     gid: GID, profile: PROFILE, you_control: YOU_CONTROL, open_seats: OPEN_SEATS,
-    is_admin: IS_ADMIN, plan: PLAN, combatResolvedTurn, sel, state: S,
+    is_admin: IS_ADMIN, plan: PLAN, combatResolvedTurn, sel,
+    pollActive: POLL !== null,   // live polling armed? (#308 diagnostic)
+    state: S,
   }, null, 2);
   return header + "\n" + lines.join("\n") + snapshot;
 }
@@ -156,8 +158,9 @@ async function startGame(query) {
   const data = await api(`/api/game/new?${query}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
-  optCache = {};
-  resetSelection(); ensureGameCatalog(); render();
+  optCache = {}; _lastStateJSON = "";
+  resetAll(); resetGameLifecycle(); ensureGameCatalog(); render();
+  startPolling();                 // re-arm live polling for the new game (#308)
   GAME_ACTIVE = true; syncGameControl();
 }
 // The setup controls are now an always-visible inline "Game Control" panel, so
@@ -229,7 +232,7 @@ async function newGame() {
 function showPreGame() {
   GID = null; S = null; LAYOUT = null; GAME_ACTIVE = false;
   PLAYERS = [{type: "human"}];         // fresh roster: just the local human (#192)
-  _lastStateJSON = ""; resetAll(); closeMenu();
+  _lastStateJSON = ""; resetAll(); resetGameLifecycle(); closeMenu();
   $("svg").innerHTML = "";
   $("phaseBanner").textContent = "No game — set up the players and press New Game.";
   $("hint").textContent = "";
@@ -1075,6 +1078,14 @@ function clearPlan(f) {
   render();
 }
 function resetAll() { PLAN = {}; warnKind = null; resetSelection(); closeMenu(); }
+// Per-game bookkeeping that must be cleared at every GAME boundary (a new game
+// or End Game) so nothing leaks into the next game in the same tab (no reload
+// happens between them): a stale combatResolvedTurn makes a fresh game silently
+// skip the Resolve step and discard queued attacks (#307), and a stale
+// lastPhase/frAdvance carries the old game's phase-change and follow-into
+// bookkeeping across. Kept OUT of resetAll(), which also runs mid-combat-turn
+// (executePlans) where combatResolvedTurn must survive to offer "End turn".
+function resetGameLifecycle() { combatResolvedTurn = -1; lastPhase = null; frAdvance = {}; }
 
 async function executePlans(kind) {
   // The combat phase still batches its attack plans (the selection phase submits
@@ -2060,7 +2071,9 @@ async function startCustom() {
   if (data.error) { $("editorErr").textContent = "Can't start: " + data.error; return; }
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
-  closeEditor(); closeSetup(); closeLiveEdit(); resetSelection(); render();
+  optCache = {}; _lastStateJSON = "";
+  closeEditor(); closeSetup(); closeLiveEdit(); resetAll(); resetGameLifecycle(); render();
+  startPolling();                 // re-arm live polling for the new game (#308)
   // Lock Game Control just like startGame does (#255): a custom match is a live
   // game, so profile/roster edits and New Game must be disabled and End Game live.
   GAME_ACTIVE = true; syncGameControl();
@@ -2160,7 +2173,13 @@ let _lastStateJSON = "";
 const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
 if (urlGid) { GID = urlGid; refresh(); } else { showPreGame(); }
 let pollBusy = false;                                // a poll's fetch is in flight
-const POLL = setInterval(async () => {
+// Live polling is (re)startable: a game-gone tick clears it (#275), and every
+// new-game entry point re-arms it (#308) so a match started in the same tab keeps
+// syncing. Clearing before setting guarantees we never stack overlapping timers.
+let POLL = null;
+function startPolling() {
+  if (POLL) clearInterval(POLL);
+  POLL = setInterval(async () => {
   if (!GID) return;
   // Skip this tick if the previous poll's fetch has not resolved yet: on a slow
   // connection setInterval would otherwise stack overlapping requests (#272).
@@ -2178,7 +2197,7 @@ const POLL = setInterval(async () => {
   // return to the pre-game state (#226). Drop the result unless it's still current.
   if (polledGid !== GID) return;
   if (data.error) {                                  // game gone — stop polling
-    clearInterval(POLL);
+    clearInterval(POLL); POLL = null;                // null so startPolling() can re-arm (#308)
     if (data.error === "unknown game") gameLost();   // and say so, persistently (#275)
     return;
   }
@@ -2195,7 +2214,9 @@ const POLL = setInterval(async () => {
   } finally {
     pollBusy = false;
   }
-}, 2000);
+  }, 2000);
+}
+startPolling();
 // Arriving from login (LOGIN_REDIRECT_URL = "/?setup") opens the wizard straight away.
 if (new URLSearchParams(location.search).has("setup")) openSetup();
 
