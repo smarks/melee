@@ -653,7 +653,17 @@ class _MovementMixin:
             situational_note=situational_note,
             ranged=True, blunted=self.practice)
         result.thrown = pending.thrown
-        self._apply(attacker, struck, result)
+        # A shot the pile roll redirected onto the shooter's OWN side is the
+        # p.18 rule working as written (like the melee miss-cascade): flag it so
+        # the recorded DamageEvent is not read as friendly fire (#231).
+        redirected_to_friend = struck is not target and struck.side == attacker.side
+        if redirected_to_friend:
+            self._same_side_hit_ok = True
+        try:
+            self._apply(attacker, struck, result)
+        finally:
+            if redirected_to_friend:
+                self._same_side_hit_ok = False
         results.append(result)
         if result.hit:
             self._land_flight(pending, struck.position)

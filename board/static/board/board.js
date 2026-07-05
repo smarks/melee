@@ -258,19 +258,34 @@ function syncGameControl() {
 async function refresh() {
   const data = await api(`/api/game/${GID}`);
   if (data.error) {                 // game gone (it ended or the dev server restarted)
-    $("phaseBanner").textContent = "Game not found — it ended or the server restarted. Start a New game.";
-    flash("This game is no longer available.");
+    gameLost();
     return;
   }
   LAYOUT = data.layout; S = data.state; captureOwnership(data); optCache = {};
   GAME_ACTIVE = true; syncGameControl(); render();
+}
+// The server no longer holds this match (it was never persisted and a restart
+// lost it, or the link is stale). Show ONE persistent notice — the banner is
+// state, not a toast; it stays until the player starts or joins another game —
+// instead of letting every button error forever with no explanation (#275: the
+// 🐞 log showed five End-turn retries against a game that had vanished).
+function gameLost() {
+  $("phaseBanner").textContent =
+    "Game not found — the server no longer has this match. Start a New game.";
+  flash("This game is no longer on the server.");
+  dbg("ERROR", "game lost server-side — the match is gone", {gid: GID});
 }
 async function act(body) {
   const data = await api(`/api/game/${GID}/action`, {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)
   });
-  if (data.error) { dbg("ERROR", `act rejected: ${data.error}`, {sent: body}); flash(data.error); return null; }
+  if (data.error) {
+    dbg("ERROR", `act rejected: ${data.error}`, {sent: body});
+    if (data.error === "unknown game") gameLost();
+    else flash(data.error);
+    return null;
+  }
   S = data.state; LAYOUT = data.layout; captureOwnership(data); optCache = {};
   return data;
 }
@@ -2023,7 +2038,11 @@ const POLL = setInterval(async () => {
   // must NOT repopulate S/board/banner over the reset -- that clobbered End Game's
   // return to the pre-game state (#226). Drop the result unless it's still current.
   if (polledGid !== GID) return;
-  if (data.error) { clearInterval(POLL); return; }   // game gone — stop polling
+  if (data.error) {                                  // game gone — stop polling
+    clearInterval(POLL);
+    if (data.error === "unknown game") gameLost();   // and say so, persistently (#275)
+    return;
+  }
   // Include the seat/ownership fields: opening or claiming a seat changes these
   // but NOT data.state, so a state-only signature would miss seat updates (#85).
   const sig = JSON.stringify([data.state, data.you_control, data.open_seats, data.is_admin]);

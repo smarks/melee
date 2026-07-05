@@ -1365,3 +1365,68 @@ def test_debug_trail_is_bounded(client: Client) -> None:
     seqs = [e["seq"] for e in trail]
     assert seqs == sorted(seqs)
     assert seqs[-1] > _DEBUG_TRAIL_CAP
+
+
+# ---- a live game survives the server losing its memory (#275) ----------------
+# Spencer's 🐞 log: mid-combat, every action suddenly answered "unknown game" —
+# the gunicorn worker had restarted and the in-memory registry died with it,
+# taking the (never-explicitly-saved) match along. Every mutating request now
+# autosaves the snapshot, so load-on-demand resurrects the game transparently.
+
+
+@pytest.mark.django_db
+def test_live_game_survives_a_registry_wipe_mid_combat(client: Client) -> None:
+    from board.views import GAMES
+
+    # The exact shape of the reported game: default skirmish, human red vs
+    # computer blue, both red figures committed to a missile attack -> combat.
+    data = client.get("/api/game/new?seed=7&computer=blue").json()
+    gid = data["gid"]
+    for _ in range(8):                    # commit red's actions; AI drives blue
+        state = client.get(f"/api/game/{gid}").json()["state"]
+        if state["phase"] != "select" or state["active_uid"] is None:
+            break
+        _post(client, gid, {"type": "move", "uid": state["active_uid"],
+                            "option": "missile_attack", "facing": "auto"})
+    assert client.get(f"/api/game/{gid}").json()["state"]["phase"] == "combat"
+
+    GAMES.clear()                         # the worker restart: memory wiped
+
+    # The next click must find the game again — not "unknown game".
+    after = client.get(f"/api/game/{gid}")
+    assert after.status_code == 200, after.json()
+    assert after.json()["state"]["phase"] == "combat"
+    resolved = client.post(f"/api/game/{gid}/action",
+                           data=json.dumps({"type": "resolve_combat"}),
+                           content_type="application/json")
+    assert resolved.status_code == 200, resolved.json()
+
+    # The reloaded game still knows its seats: the creator drives red.
+    assert "red" in after.json()["you_control"]
+
+
+@pytest.mark.django_db
+def test_debug_trail_survives_a_registry_wipe(client: Client) -> None:
+    # The post-mortem trail (#222) must outlive the game's residency, or the
+    # one diagnostic that explains a lost game dies with it (#275).
+    from board.views import GAMES
+
+    data = client.get("/api/game/new?seed=7&computer=blue").json()
+    gid = data["gid"]
+    state = data["state"]
+    _post(client, gid, {"type": "move", "uid": state["active_uid"],
+                        "option": "missile_attack", "facing": "auto"})
+    before = client.get(f"/api/game/{gid}/debug").json()["trail"]
+    assert any(entry["action"] == "move" for entry in before)
+
+    GAMES.clear()
+
+    after = client.get(f"/api/game/{gid}/debug")
+    assert after.status_code == 200
+    trail = after.json()["trail"]
+    assert any(entry["action"] == "move" for entry in trail)
+    # Sequence numbers keep climbing after the reload instead of restarting.
+    _post(client, gid, {"type": "end_turn"})
+    extended = client.get(f"/api/game/{gid}/debug").json()["trail"]
+    seqs = [entry["seq"] for entry in extended]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)

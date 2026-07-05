@@ -12,6 +12,7 @@ actions. This is same screen play -- every side is driven by a human.
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import threading
 import time
@@ -43,6 +44,8 @@ from . import persistence, scenario
 from .geometry import label_of, layout
 from .models import SavedCharacter, SavedGame
 from .serialize import _edit_spec, dump_game
+
+logger = logging.getLogger(__name__)
 
 # In-memory games are bounded so the registry can't grow without limit (a DoS)
 # and stale games are reclaimed. Active games are touched on every access, so
@@ -531,6 +534,26 @@ def _persist_game(gid: str, game: dict) -> None:
     )
 
 
+def _autosave_game(gid: str, game: dict) -> None:
+    """Persist ``game`` after a mutation so it survives a worker restart (#275).
+
+    Live games used to exist ONLY in the in-memory registry unless the player
+    pressed Save; a gunicorn worker restart (timeout kill, OOM, crash) or a
+    registry eviction then orphaned every running match — the client's next
+    action got "unknown game" and the game was simply gone (Spencer's 🐞 log,
+    issue #275). Snapshotting after every mutating request keeps
+    :func:`_resident_game`'s load-on-demand able to resurrect the match.
+
+    A failed write is logged loudly but does not fail the action: the move
+    already applied to the live in-memory game, and refusing to answer would
+    turn a durability hiccup into a broken game.
+    """
+    try:
+        _persist_game(gid, game)
+    except Exception:
+        logger.exception("autosave of game %s failed — play continues in memory", gid)
+
+
 # ---- views ------------------------------------------------------------------
 @ensure_csrf_cookie
 def index(request, gid=None):
@@ -770,6 +793,7 @@ def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
         "combat_prepared": False,
     }
     _advance_computer(GAMES[gid])
+    _autosave_game(gid, GAMES[gid])
     payload = _payload(GAMES[gid])
     payload["gid"] = gid
     payload["profile"] = profile.name
@@ -962,7 +986,7 @@ def api_game_save(request, gid):
     """Persist a resident game so it survives a server restart (#12)."""
     if request.method != "POST":
         return HttpResponse(status=405)
-    game = GAMES.get(gid)
+    game = _resident_game(gid)
     if not game:
         return JsonResponse({"error": "unknown game"}, status=404)
     _persist_game(gid, game)
@@ -1217,6 +1241,9 @@ def api_action(request, gid):
                       error=str(exc))
         return JsonResponse({"error": str(exc)}, status=403)
 
+    # Snapshot after every applied action so a worker restart or a registry
+    # eviction can never orphan a live match (#275).
+    _autosave_game(gid, game)
     payload = _payload(game)
     payload.update(_ownership_fields(game, _player_id(request)))
     payload["is_admin"] = _is_admin(request)
@@ -1251,7 +1278,7 @@ def api_seat(request, gid):
     Computer seats can't be reassigned. The per-figure-side authorization in
     :func:`_authorize_action` then enforces "control only your own figures".
     """
-    game = GAMES.get(gid)
+    game = _resident_game(gid)
     if not game:
         return JsonResponse({"error": "unknown game"}, status=404)
     if request.method != "POST":
@@ -1286,6 +1313,7 @@ def api_seat(request, gid):
     else:
         return JsonResponse({"error": f"unknown seat action {action!r}"}, status=400)
 
+    _autosave_game(gid, game)          # seats are part of the snapshot (#275)
     payload = _payload(game)
     payload.update(_ownership_fields(game, pid))
     response = JsonResponse(payload)

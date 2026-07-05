@@ -298,3 +298,84 @@ def test_ai_engaged_with_a_reloading_bow_and_no_blade_holds() -> None:
 
     ai.take_action(state, shooter)                        # must not raise
     assert shooter.current_option == Option.DO_NOTHING
+
+
+# ---- fumble-disarm recovery (#275, the #249 audit finding) -------------------
+# A natural-roll fumble (Tarmar's nat-1 table, classic Melee's 17/18) empties
+# ``ready_weapon``. An AI that never re-arms can neither attack nor be fought
+# into progress, and the whole game wedges into a stalemate that reads as a
+# hang. These guards pin the recovery behaviours; each FAILED before the fix.
+
+
+def test_disarmed_engaged_ai_readies_a_carried_blade() -> None:
+    # Engaged with a foe, sword gone, dagger still on the belt: swap to the
+    # dagger (option m) instead of committing to a bare attack it can never make.
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    fighter = create_human("Fighter", 12, 12, "red", weapons=[DAGGER],
+                           ready_weapon=None, armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    fighter.position, fighter.facing = Hex(3, 3), 0
+    foe.position = layout.neighbor(fighter.position, 0)
+    foe.facing = 3
+    state = GameState(arena, [fighter, foe], dice=Dice(seed=1))
+
+    assert state.engaged(fighter) and fighter.ready_weapon is None
+    ai.take_action(state, fighter)
+    assert fighter.current_option == Option.CHANGE_WEAPONS
+    assert fighter.ready_weapon is DAGGER
+
+
+def test_disarmed_ai_picks_its_dropped_weapon_back_up() -> None:
+    # Free of contact with its fumbled sword at its feet (a fumbled melee weapon
+    # drops in the fumbler's own hex): pick it back up (option q).
+    arena = Arena(cols=9, rows=9)
+    layout = arena.layout
+    fighter = create_human("Fighter", 12, 12, "red", weapons=[],
+                           ready_weapon=None, armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    fighter.position, fighter.facing = Hex(3, 3), 0
+    foe.position = Hex(7, 7)
+    foe.facing = 3
+    state = GameState(arena, [fighter, foe], dice=Dice(seed=1))
+    state._drop_to_ground(BROADSWORD, fighter.position)
+
+    ai.take_action(state, fighter)
+    assert fighter.current_option == Option.PICK_UP
+    assert fighter.ready_weapon is BROADSWORD
+
+
+def test_disarmed_ai_readies_a_carried_spare_when_nothing_lies_in_reach() -> None:
+    # Free of contact, nothing on the ground, a dagger still carried: ready it
+    # (option e) rather than charging with empty hands.
+    arena = Arena(cols=9, rows=9)
+    fighter = create_human("Fighter", 12, 12, "red", weapons=[DAGGER],
+                           ready_weapon=None, armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    fighter.position, fighter.facing = Hex(3, 3), 0
+    foe.position = Hex(7, 7)
+    foe.facing = 3
+    state = GameState(arena, [fighter, foe], dice=Dice(seed=1))
+
+    ai.take_action(state, fighter)
+    assert fighter.current_option == Option.READY_WEAPON
+    assert fighter.ready_weapon is DAGGER
+
+
+def test_barehanded_ai_grapples_in_combat_when_the_rules_allow() -> None:
+    # Nothing to recover at all, but a prone foe adjacent (HTH legal, p.17): the
+    # combat phase must produce a grapple, not silently skip the weaponless figure.
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    fighter = create_human("Fighter", 12, 12, "red", weapons=[],
+                           ready_weapon=None, armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    fighter.position, fighter.facing = Hex(3, 3), 0
+    foe.position = layout.neighbor(fighter.position, 0)
+    foe.facing = 3
+    foe.posture = Posture.PRONE                       # grapple-able (p.17)
+    state = GameState(arena, [fighter, foe], dice=Dice(seed=1))
+
+    assert state.hth_targets(fighter), "precondition: a legal grapple exists"
+    ai.queue_attacks(state, "red")
+    assert fighter.current_option == Option.HTH_ATTACK

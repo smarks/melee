@@ -33,7 +33,7 @@ from board.scenario import build_game, default_skirmish, tarmar_skirmish
 from engine import ai
 from engine.arena import Arena
 from engine.combat import AttackResult
-from engine.figure import create_human
+from engine.figure import Posture, create_human
 from engine.invariants import (
     InvariantError,
     assert_log_truthful,
@@ -41,7 +41,7 @@ from engine.invariants import (
 )
 from engine.options import Option
 from engine.profile import CLASSIC, TARMAR, RulesProfile
-from engine.rules_data import DAGGER, LONGBOW, NO_ARMOR
+from engine.rules_data import DAGGER, LONGBOW, NO_ARMOR, WeaponKind
 from engine.state import GameState
 
 # CI plays this many games (bounded so the pytest job stays under ~1 minute);
@@ -74,6 +74,45 @@ def _game_for_seed(seed: int) -> tuple[RulesProfile, Arena, list]:
     return TARMAR, arena, figures
 
 
+def _check_disarm_recovery(
+    state: GameState, streaks: dict[str, int], context: str
+) -> None:
+    """The game-progress guard for the fumble-disarm wedge (#275, audit #249).
+
+    A fumble (Tarmar's natural 1, classic Melee's 17/18) empties a figure's
+    ``ready_weapon``. Under AI play the very next selection pass must re-arm it
+    whenever a recovery exists — a carried melee weapon while engaged, or (free
+    of contact) any carried weapon or one lying in reach. A figure that stays
+    weaponless-with-a-recovery across consecutive turn boundaries is the wedge
+    that froze live games: it can neither attack nor be fought into progress.
+
+    Called after every ``end_turn``; ``streaks`` carries the per-figure count
+    of consecutive turn boundaries spent in that state (one is legitimate — the
+    fumble lands mid-combat, the re-arm comes next select — two means the AI
+    passed up the recovery). Only a STANDING figure counts: a grounded one
+    (e.g. fresh out of an HTH pile) must spend its action standing up first.
+    """
+    for figure in state.figures:
+        recoverable = False
+        if (figure.position is not None and figure.can_act()
+                and figure.ready_weapon is None and not figure.in_hth
+                and figure.posture == Posture.STANDING):
+            if state.engaged(figure):
+                recoverable = any(
+                    weapon.kind != WeaponKind.MISSILE for weapon in figure.weapons)
+            else:
+                recoverable = bool(figure.weapons or state.dropped_in_reach(figure))
+        streaks[figure.uid] = streaks.get(figure.uid, 0) + 1 if recoverable else 0
+        if streaks[figure.uid] >= 2:
+            raise InvariantError(
+                f"invariant 'disarmed-ai-never-rearms' broken [{context}]: "
+                f"{figure.name}({figure.side}) has stayed weaponless for "
+                f"{streaks[figure.uid]} turn boundaries with a recovery available "
+                f"(carried {[w.name for w in figure.weapons]}, "
+                f"in reach {[w.name for w in state.dropped_in_reach(figure)]})"
+            )
+
+
 def _play_one_game(
     profile: RulesProfile, arena: Arena, figures: list, seed: int, *, max_turns: int = MAX_TURNS
 ) -> tuple[GameState, list[str]]:
@@ -89,6 +128,7 @@ def _play_one_game(
     state.begin_selection()
     phase = "select"
     trail: list[str] = []
+    disarm_streaks: dict[str, int] = {}
     base = f"{profile.name} seed={seed}"
     # Generous absolute cap: even a long multi-team game can't exceed turns x
     # (an action per figure, plus phase transitions) — a stalemate hits max_turns.
@@ -121,6 +161,9 @@ def _play_one_game(
             assert_state_invariants(
                 state, profile, context=f"{base} turn={state.turn_number} post-end_turn",
                 phase="select")
+            _check_disarm_recovery(
+                state, disarm_streaks,
+                context=f"{base} turn={state.turn_number} post-end_turn")
     return state, trail
 
 

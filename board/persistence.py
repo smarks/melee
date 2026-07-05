@@ -294,6 +294,9 @@ def game_to_json(game: dict) -> dict:
         "controllers": dict(game.get("controllers", {})),
         "seats": dict(game.get("seats", {})),
         "combat_prepared": game.get("combat_prepared", False),
+        # The diagnostic action trail (#222) rides along so a post-mortem via
+        # GET /api/game/<gid>/debug survives a restart/eviction too (#275).
+        "debug": list(game.get("_debug", [])),
     }
 
 
@@ -308,4 +311,8 @@ def game_from_json(data: dict) -> dict:
         "controllers": dict(data.get("controllers", {})),
         "seats": dict(data.get("seats", {})),
         "combat_prepared": data.get("combat_prepared", False),
+        "_debug": list(data.get("debug", [])),
+        # Keep the trail's sequence numbers monotonic across the reload.
+        "_debug_seq": max(
+            (entry.get("seq", 0) for entry in data.get("debug", [])), default=0),
     }
