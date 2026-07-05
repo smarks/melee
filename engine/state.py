@@ -371,6 +371,12 @@ class _MovementMixin:
                 # A readied missile weapon has no melee blow (#79): a non-missile
                 # attack option (charge/shift-attack/grapple) is unavailable.
                 reason = "missile weapon ready — no melee attack"
+            elif option == Option.SHIFT_DEFEND and weapon is None:
+                # A figure defends only with a real weapon in hand to parry with
+                # (p.20; ITL p.117). A weaponless figure — disarmed on a 17, or an
+                # archer whose bow was auto-dropped after its one last shot — has
+                # nothing to parry with, so it earns no four-dice defense (#304).
+                reason = "nothing to parry with — no weapon ready"
             elif option == Option.SHIFT_DEFEND and has_missile:
                 reason = "nothing to parry with — missile weapon ready"
             elif option == Option.PICK_UP and not self.dropped_in_reach(figure):
@@ -1787,7 +1793,15 @@ class _CombatMixin:
                     return            # don't waste it on a foe already down
                 self._resolve_flight(pending, results, target=target)
             else:
+                if pending.target.is_dead or pending.target.collapsed:
+                    return            # a co-queued blow already downed it (#310)
                 self._resolve_flight(pending, results)
+            return
+        if pending.target.is_dead or pending.target.collapsed:
+            # A higher-adjDX attacker this phase may already have felled this foe;
+            # a corpse keeps its hex so the reach check would still pass. Don't
+            # land a blow on an already-dead/collapsed target (#310), mirroring the
+            # second-shot guard above and the shield-rush guard in _resolve_shield_rush.
             return
         self._resolve_one_melee(pending, weapon, results)
 
