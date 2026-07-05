@@ -236,6 +236,18 @@ def build_custom_skirmish(
     arena = Arena(cols=13, rows=13)
     by_team = {tid: [f for f in built if f.side == tid] for tid in team_ids}
     largest = max((len(team) for team in by_team.values()), default=1)
+    # Bound the roster to the same limits the setup wizard enforces (up to
+    # MAX_TEAMS sides, MAX_PER_TEAM combatants each). Without this an oversized
+    # side outnumbers the seats ``_start_zones`` can carve from the arena
+    # perimeter, and ``zones[team_index][combatant_index]`` below indexes past the
+    # end — an IndexError that escaped api_new_custom as a 500 rather than a clean
+    # 400 (#259). ValueError is the "bad fighter input" signal the view maps to 400.
+    if len(team_ids) > MAX_TEAMS:
+        raise ValueError(
+            f"too many teams: {len(team_ids)} (max {MAX_TEAMS})")
+    if largest > MAX_PER_TEAM:
+        raise ValueError(
+            f"too many fighters on one side: {largest} (max {MAX_PER_TEAM})")
     zones = _start_zones(arena, max(1, len(team_ids)), largest)
     figures: list[Figure] = []
     for team_index, team_id in enumerate(team_ids):

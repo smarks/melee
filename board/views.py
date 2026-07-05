@@ -35,7 +35,7 @@ from engine import ai, chargen, experience
 from engine.figure import PER_TURN_FLAGS
 from engine.options import Option, spec
 from engine.profile import PROFILES
-from engine.rules_data import WEAPONS, WeaponKind
+from engine.rules_data import WEAPONS, WeaponKind, max_missile_shots
 from engine.ruleset import has_offhand_main_gauche
 from engine.state import GameState, IllegalAction
 from engine.tarmar import WEAPON_CLASS, TarmarFigure
@@ -470,11 +470,19 @@ def _human_force_retreat_available(game: dict) -> bool:
     return False
 
 
-def _payload(game: dict) -> dict:
-    return {
-        "layout": game["layout"],
-        "state": dump_game(game["state"], meta=_meta(game)),
-    }
+def _payload(game: dict, *, include_layout: bool = True) -> dict:
+    """The client payload: the mutable game state, plus the immutable hex layout.
+
+    The layout (hex geometry, ~72% of the payload) never changes after game
+    creation, so a poll that already has it can omit it with ``include_layout=
+    False`` — the client caches it from first load and only re-requests when it's
+    missing. This keeps the 2s poll from re-shipping ~30 KB of identical bytes on
+    every tick (#256).
+    """
+    payload = {"state": dump_game(game["state"], meta=_meta(game))}
+    if include_layout:
+        payload["layout"] = game["layout"]
+    return payload
 
 
 # ---- diagnostic trail (#222) ------------------------------------------------
@@ -1006,7 +1014,11 @@ def api_state(request, gid):
         game = _resident_game(gid)
         if not game:
             return JsonResponse({"error": "unknown game"}, status=404)
-        payload = _payload(game)
+        # A client that already has the immutable layout polls with ``?layout=0``
+        # so the server skips re-serializing/re-shipping it every 2s (#256). The
+        # first load / deep-link / reconnect path omits the param and gets it.
+        include_layout = request.GET.get("layout") != "0"
+        payload = _payload(game, include_layout=include_layout)
         payload.update(_ownership_fields(game, _player_id(request)))
         payload["is_admin"] = _is_admin(request)
         return JsonResponse(payload)
@@ -1180,9 +1192,19 @@ def api_options(request, gid):
     # Attacks are chosen in the combat phase: targets depend on where the figure
     # stands and what it has ready, not on a movement-time declaration.
     targets = _attack_targets(state, figure)
+    # How many shots a ready missile weapon gets this turn: a high-adjDX archer
+    # gets two and "may fire at two different targets" (p.5, p.10), so the client
+    # can offer a split-second-arrow picker when this is >= 2 (#268). 1 for a
+    # single-shot bow or any non-missile weapon.
+    ready_weapon = figure.ready_weapon
+    if ready_weapon is not None and ready_weapon.kind == WeaponKind.MISSILE:
+        missile_shots = max_missile_shots(ready_weapon, figure.base_adj_dx)
+    else:
+        missile_shots = 1
     return JsonResponse({
         "uid": uid,
         "options": options,
+        "missile_shots": missile_shots,
         "melee_targets": targets.melee,
         "missile_targets": targets.ranged,
         "hth_targets": targets.hth,
@@ -1504,8 +1526,16 @@ def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False):
         if weapon.kind == WeaponKind.MISSILE or (weapon.throwable and distance > 1):
             _aim(state, attacker, target)      # turn to aim the shot (#117)
     _ensure_attack_option(state, attacker)
+    # A two-shot bow "may fire at two different targets" (p.5, p.10): thread an
+    # optional second_target through so a split shot is reachable from the web
+    # layer, not just the engine (#268). _figure raises IllegalAction (400) on an
+    # unknown uid; queue_attack validates shots>=2, missile-only, same-side, and
+    # front arc, each a clean 400 as well.
+    second_uid = body.get("second_target")
+    second_target = _figure(state, second_uid) if second_uid else None
     state.queue_attack(attacker, target,
-                       with_main_gauche=bool(body.get("main_gauche")))
+                       with_main_gauche=bool(body.get("main_gauche")),
+                       second_target=second_target)
     return None
 
 

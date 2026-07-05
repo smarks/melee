@@ -538,6 +538,38 @@ def test_new_custom_game_rejects_an_illegal_fighter(client: Client) -> None:
     assert resp.status_code == 400 and "error" in resp.json()
 
 
+def test_new_custom_rejects_oversized_side_with_a_clean_400(client: Client) -> None:
+    # #259: an oversized side has more fighters than the arena perimeter can seat,
+    # so scenario.build_custom_skirmish used to index past the start-zone list and
+    # raise an uncaught IndexError -> HTTP 500. It must now be a clean 400. Four
+    # legal fighters all on "red" is one past MAX_PER_TEAM (3).
+    fighters = [
+        {"name": f"Red{index}", "side": "red", "strength": 12, "dexterity": 12,
+         "weapon": "Broadsword", "armor": "None", "shield": "None"}
+        for index in range(4)
+    ]
+    body = {"profile": "Classic Melee", "fighters": fighters}
+    resp = client.post("/api/game/new_custom", data=json.dumps(body),
+                       content_type="application/json")
+    assert resp.status_code == 400
+    assert "too many" in resp.json()["error"].lower()
+
+
+def test_new_custom_rejects_too_many_teams_with_a_clean_400(client: Client) -> None:
+    # #259: more distinct sides than MAX_TEAMS (5) is also rejected up front.
+    sides = ["red", "blue", "green", "gold", "violet", "black"]  # 6 > MAX_TEAMS
+    fighters = [
+        {"name": f"{side}-A", "side": side, "strength": 12, "dexterity": 12,
+         "weapon": "Broadsword", "armor": "None", "shield": "None"}
+        for side in sides
+    ]
+    body = {"profile": "Classic Melee", "fighters": fighters}
+    resp = client.post("/api/game/new_custom", data=json.dumps(body),
+                       content_type="application/json")
+    assert resp.status_code == 400
+    assert "too many" in resp.json()["error"].lower()
+
+
 def test_move_can_switch_the_ready_weapon(client: Client) -> None:
     data = _new(client)            # same screen default skirmish
     gid = data["gid"]
@@ -1711,3 +1743,90 @@ def test_concurrent_actions_on_one_game_are_serialized(client: Client, monkeypat
 
     assert gid in GAMES
     assert concurrency["max"] == 1                          # never two at once inside the lock
+
+
+def test_queue_attack_view_threads_the_split_second_arrow(client: Client) -> None:
+    # #268: a two-shot bow "may fire at two different targets" (p.5, p.10). The
+    # engine has always supported PendingAttack.second_target, but the web handler
+    # _act_queue_attack never read it, so a split shot was unreachable through the
+    # API/UI. Pre-fix this test fails: no pending attack carries the second target.
+    from board.views import _act_queue_attack
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD, NO_ARMOR, SMALL_BOW
+    from engine.state import GameState
+    from hexarena.dice import Dice
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=15, rows=15)
+    archer = create_human("Archer", 9, 15, "red",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    archer.position, archer.facing, archer.uid = Hex(5, 5), 0, "archer"
+    foe_one = create_human("FoeOne", 12, 12, "blue",
+                           weapons=[BROADSWORD], ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    foe_one.position, foe_one.uid = Hex(5, 2), "foe-one"
+    foe_two = create_human("FoeTwo", 12, 12, "blue",
+                           weapons=[BROADSWORD], ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    foe_two.position, foe_two.uid = Hex(2, 3), "foe-two"
+    state = GameState(arena, [archer, foe_one, foe_two], dice=Dice(scripted=[3] * 16))
+    archer.current_option = Option.MISSILE_ATTACK
+    game = {"state": state, "profile": "Classic Melee"}
+
+    _act_queue_attack(game, {"uid": "archer", "target": "foe-one",
+                             "second_target": "foe-two"})
+
+    assert any(getattr(pending, "second_target", None) is foe_two
+               for pending in state._pending)
+    state.resolve_combat()
+    assert foe_one.damage_taken > 0 and foe_two.damage_taken > 0  # both arrows land
+
+
+def test_api_options_reports_two_shots_for_a_high_dx_archer(client: Client) -> None:
+    # #268: the UI needs the shot count to offer a split-fire picker. api_options
+    # reports missile_shots >= 2 for a bow archer whose adjusted DX earns two shots.
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import SMALL_BOW, NO_ARMOR, max_missile_shots
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=15, rows=15)
+    archer = create_human("Archer", 9, 15, "red",
+                          weapons=[SMALL_BOW], ready_weapon=SMALL_BOW, armor=NO_ARMOR)
+    archer.position, archer.uid = Hex(5, 5), "archer"
+    assert max_missile_shots(SMALL_BOW, archer.base_adj_dx) >= 2  # setup precondition
+    GAMES["options-shots"] = {"state": GameState(arena, [archer]),
+                              "profile": "Classic Melee", "phase": "combat"}
+    try:
+        data = client.get("/api/game/options-shots/options?uid=archer").json()
+        assert data["missile_shots"] >= 2
+    finally:
+        del GAMES["options-shots"]
+
+
+def test_poll_can_omit_the_immutable_layout(client: Client) -> None:
+    # #256: the hex layout never changes after game creation, so a poll that
+    # already has it requests ?layout=0 and the server omits it — while still
+    # returning the mutable state so the board keeps rendering. The full-payload
+    # path (first load / reconnect) still ships the layout.
+    started = _new(client)
+    gid = started["gid"]
+    assert "layout" in started and started["layout"]        # first load carries it
+
+    full = client.get(f"/api/game/{gid}").json()
+    assert "layout" in full and full["layout"]              # deep-link / reconnect: full
+
+    trimmed = client.get(f"/api/game/{gid}?layout=0").json()
+    assert "layout" not in trimmed                          # poll: layout dropped
+    assert trimmed["state"]["figures"]                      # but state still present -> renders
+
+
+def test_omitting_the_layout_meaningfully_shrinks_the_poll_payload(client: Client) -> None:
+    # #256: the layout is the bulk of the payload; dropping it must be a large win.
+    started = _new(client)
+    gid = started["gid"]
+    full_bytes = len(client.get(f"/api/game/{gid}").content)
+    trimmed_bytes = len(client.get(f"/api/game/{gid}?layout=0").content)
+    assert trimmed_bytes < full_bytes * 0.5                 # more than half the bytes gone

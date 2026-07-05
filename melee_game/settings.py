@@ -82,6 +82,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Compress responses (the poll JSON travels uncompressed otherwise — nginx
+    # gzips text/html but not application/json here). Placed high so it wraps the
+    # response body of the middleware below it (#256).
+    "django.middleware.gzip.GZipMiddleware",
     # Serves collected static files in production without a separate web server.
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
