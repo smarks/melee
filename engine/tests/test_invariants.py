@@ -49,3 +49,18 @@ def test_a_dead_figure_dealing_damage_trips_the_posthumous_check() -> None:
         attacker_uid=blue.uid, target_uid=red.uid, damage=2))
     with pytest.raises(InvariantError, match="posthumous-damage"):
         assert_state_invariants(state, CLASSIC)
+
+
+def test_a_blow_landing_on_an_already_downed_foe_trips_the_check() -> None:
+    # #310: red drives blue (ST 10) to collapse, then a second blow lands fresh
+    # damage on the corpse — a co-queued lower-adjDX blow the checker must catch.
+    state = _two_fighter_state()
+    red, blue = state.figures
+    state.damage_events.append(DamageEvent(       # blue driven to ST 0 (collapsed)
+        attacker_side="red", target_side="blue",
+        attacker_uid=red.uid, target_uid=blue.uid, damage=blue.strength))
+    state.damage_events.append(DamageEvent(       # ...then a blow lands on the corpse
+        attacker_side="red", target_side="blue",
+        attacker_uid=red.uid, target_uid=blue.uid, damage=2))
+    with pytest.raises(InvariantError, match="damage-to-downed-target"):
+        assert_state_invariants(state, CLASSIC)

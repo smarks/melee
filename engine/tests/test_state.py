@@ -1024,6 +1024,63 @@ def test_attack_ordering_is_highest_adjdx_first() -> None:
     assert a.damage_taken == 0
 
 
+def test_a_co_queued_blow_never_lands_on_an_already_downed_foe() -> None:
+    # #310: two allies attack one foe. The higher-adjDX ally kills it before the
+    # lower-adjDX ally's already-queued blow resolves; that stale blow must NOT
+    # land on the corpse (the corpse keeps its hex, so the reach check still passes).
+    from engine.invariants import assert_state_invariants
+    from engine.profile import CLASSIC
+    arena = Arena(cols=9, rows=15)
+    fast = create_human("Fast", 12, 12, "a",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    slow = create_human("Slow", 12, 12, "a",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD],
+                       ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    foe.position = Hex(5, 5)
+    foe.facing = 0
+    fast.position = LAYOUT.neighbor(Hex(5, 5), 2)
+    slow.position = LAYOUT.neighbor(Hex(5, 5), 4)
+    fast.facing = LAYOUT.direction_to(fast.position, foe.position)
+    slow.facing = LAYOUT.direction_to(slow.position, foe.position)
+    slow.wounded_last_turn = True  # -2 DX, so 'slow' strikes after 'fast'
+    # fast: to-hit total 3 -> triple, broadsword 2d = 12, x3 = 36 -> foe (ST 12) dies.
+    # The trailing dice are what a pre-fix run would have spent landing 'slow's
+    # blow on the corpse; post-fix the dead-target guard leaves them untouched.
+    state = GameState(arena, [fast, slow, foe],
+                      dice=Dice(scripted=[1, 1, 1, 6, 6, 3, 3, 3, 6, 6]))
+    fast.current_option = Option.SHIFT_ATTACK
+    slow.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(slow, foe)   # declared first, but lower adjDX
+    state.queue_attack(fast, foe)   # higher adjDX -> resolves first, kills the foe
+    results = state.resolve_combat()
+    assert foe.is_dead
+    assert len(results) == 1                             # 'slow's blow never resolved
+    foe_damage_events = [event for event in state.damage_events
+                         if event.target_uid == foe.uid]
+    assert len(foe_damage_events) == 1                   # the corpse took no second hit
+    assert_state_invariants(state, CLASSIC)             # the #310 invariant stays green
+
+
+def test_a_weaponless_figure_cannot_defend() -> None:
+    # #304: p.20 / ITL p.117 — a figure defends only with a real weapon in hand to
+    # parry with. A weaponless figure (disarmed, or an archer whose bow was dropped
+    # after its last shot) has nothing to parry with, so Shift & Defend is illegal.
+    arena = Arena(cols=9, rows=15)
+    weaponless = create_human("Weaponless", 12, 12, "a",
+                              weapons=[], ready_weapon=None, armor=NO_ARMOR)
+    foe = create_human("Foe", 14, 10, "b", weapons=[SHORTSWORD],
+                       ready_weapon=SHORTSWORD, armor=NO_ARMOR)
+    weaponless.position = Hex(5, 5)
+    weaponless.facing = 0
+    foe.position = LAYOUT.neighbor(Hex(5, 5), 0)
+    foe.facing = 3   # adjacent, engaged
+    state = GameState(arena, [weaponless, foe])
+    assert Option.SHIFT_DEFEND not in state.legal_options(weaponless)  # nothing to parry
+    assert dict(state.option_availability(weaponless))[Option.SHIFT_DEFEND] is not None
+    assert Option.SHIFT_DEFEND in state.legal_options(foe)             # a swordsman may parry
+
+
 def test_knockdown_on_eight_plus_hits() -> None:
     # 8 hits in one turn fells (but does not kill) the unarmored target.
     state, a, b = _duel(Dice(scripted=[

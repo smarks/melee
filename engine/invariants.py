@@ -277,6 +277,36 @@ def _check_no_posthumous_damage(state, context: str) -> None:
             damage_taken.get(event.target_uid, 0) + event.damage)
 
 
+def _check_no_damage_to_downed_target(state, context: str) -> None:
+    """No attack lands on a foe an earlier blow already felled this phase (#310).
+
+    Attacks are queued against living foes, then resolved from a frozen
+    adjDX-ordered list. A higher-adjDX attacker can kill or collapse a foe before
+    a lower-adjDX ally's already-queued blow resolves; the corpse keeps its hex,
+    so the reach check still passes and the stale blow would land on a downed
+    target. This replays the ordered ``damage_events`` trail and fails if any
+    event delivers fresh damage to a target that had already taken enough
+    cumulative damage to be at or below collapse — the mirror of
+    :func:`_check_no_posthumous_damage`, keyed on the target rather than the
+    attacker.
+    """
+    pools = {figure.uid: _collapse_pool(figure) for figure in state.figures}
+    damage_taken: dict[str, int] = {}
+    for event in state.damage_events:
+        pool = pools.get(event.target_uid)
+        if pool is not None and damage_taken.get(event.target_uid, 0) >= pool:
+            _fail(
+                "damage-to-downed-target",
+                f"figure {event.target_uid}({event.target_side}) took "
+                f"{event.damage} more damage after already having taken "
+                f"{damage_taken[event.target_uid]} (collapse pool {pool}) — a "
+                f"blow landed on an already-downed foe",
+                context,
+            )
+        damage_taken[event.target_uid] = (
+            damage_taken.get(event.target_uid, 0) + event.damage)
+
+
 def assert_state_invariants(
     state,
     profile: RulesProfile,
@@ -313,6 +343,7 @@ def assert_state_invariants(
     _check_missile_sanity(state, context)
     _check_weapon_kit(state, context)
     _check_no_posthumous_damage(state, context)
+    _check_no_damage_to_downed_target(state, context)
 
 
 # ---- combat-log truthfulness -----------------------------------------------
