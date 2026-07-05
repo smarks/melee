@@ -36,12 +36,19 @@
                  background-position: right 10px center, right 6px center;
                  background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
   #themePicker:hover { border-color: var(--accent); }
-  .wrap { display: flex; gap: 0; height: calc(100vh - 49px); }
+  /* position:relative makes .wrap the containing block for the floating panels
+     (#319): in .floating mode each panel is absolutely positioned within it. */
+  .wrap { display: flex; gap: 0; height: calc(100vh - 49px); position: relative; }
   /* Three columns: Map (largest) | Game Control | Characters. Each side column
      scrolls internally (min-height:0) so the right-column scroll bug (#181)
      can't recur and the Map keeps the lion's share of the width. */
-  .arena { flex: 1 1 auto; min-width: 0; overflow: auto; display: grid;
-           place-items: center; padding: 16px; position: relative; }
+  /* The map panel is a flex column: a pinned drag titlebar over an inner scroll
+     region (.arena-scroll) that keeps the SVG-centering + scroll behaviour the
+     arena had before the titlebar existed (grid place-items:center, overflow). */
+  .arena { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex;
+           flex-direction: column; position: relative; }
+  .arena-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid;
+                  place-items: center; padding: 16px; position: relative; }
   .col { width: 340px; flex: 0 0 340px; border-left: 1px solid var(--line);
          background: var(--panel); display: flex; flex-direction: column;
          overflow: hidden; min-height: 0; }
@@ -57,6 +64,25 @@
     .col { width: auto; flex: none; border-left: none; border-top: 1px solid var(--line); }
     .arena { min-height: 60vh; }
   }
+  /* Draggable panels (#319, Stage 1: move-only). Each panel carries a
+     .panel-titlebar drag grip; JS measures today's flex geometry as the default,
+     then flips .wrap into .floating so every panel is absolutely positioned and
+     can be dragged by its titlebar. Defaults reproduce the flex layout exactly. */
+  .panel-titlebar {
+    flex: 0 0 auto; padding: 7px 14px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+    background: color-mix(in srgb, var(--ink) 7%, var(--panel));
+    border-bottom: 1px solid var(--line);
+    cursor: move; user-select: none; -webkit-user-select: none; touch-action: none;
+    position: sticky; top: 0; z-index: 3;
+  }
+  .panel-titlebar:hover { color: var(--ink); }
+  /* Floating mode: absolutely position each panel from its inline left/top/
+     width/height (written by JS). z-index sits in a 10-40 band, strictly below
+     overlays@50, modals@55 and the token menu@60, so stacking never regresses. */
+  .wrap.floating { overflow: hidden; }
+  .wrap.floating > .arena,
+  .wrap.floating > .col { position: absolute; flex: none; z-index: 10; }
   /* Game Control panel (the former New-game modal, now always inline). */
   .gc-section { margin-top: 12px; }
   .gc-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
@@ -375,6 +401,8 @@
     <label class="themepick">Theme
       <select id="themePicker" title="Choose a colour theme"></select>
     </label>
+    <button id="resetLayout" onclick="resetLayout()"
+            title="Reset panel positions to the default layout">⟲ Reset layout</button>
     {% if request.user.is_authenticated %}
       <a href="{% url 'origami_auth:profile' %}" style="color:var(--accent)">{{ request.user.username }}</a>
     {% else %}
@@ -384,11 +412,14 @@
 </header>
 <div class="wrap">
   <div class="arena">
-    <input type="color" id="bgColor"   class="swatch" title="Background &amp; controls colour">
-    <input type="color" id="textColor" class="swatch" title="Text colour">
-    <input type="color" id="hexColor"  class="swatch" title="Hex / board colour">
-    <button id="resetColors" title="Reset colours to default" onclick="resetTheme()">⟲ reset</button>
-    <svg id="svg"></svg>
+    <div class="panel-titlebar">Map</div>
+    <div class="arena-scroll">
+      <input type="color" id="bgColor"   class="swatch" title="Background &amp; controls colour">
+      <input type="color" id="textColor" class="swatch" title="Text colour">
+      <input type="color" id="hexColor"  class="swatch" title="Hex / board colour">
+      <button id="resetColors" title="Reset colours to default" onclick="resetTheme()">⟲ reset</button>
+      <svg id="svg"></svg>
+    </div>
   </div>
   <!-- Dedicated Game-status log column (#227): the narrative log used to sit at
        the bottom of the Characters column, so you had to scroll to read it. It now
@@ -396,14 +427,14 @@
        seclabel is pinned at the top and #log fills the rest, scrolling internally
        for long histories (min-height:0 so the inner scroll engages, not the page). -->
   <aside class="col logcol">
-    <div class="seclabel">Game status</div>
+    <div class="panel-titlebar">Game status</div>
     <div id="log"></div>
   </aside>
   <!-- Middle column: Game Control (the former New-game modal, now always inline).
        Before a game it is editable with New Game enabled; once a game is running
        every setting locks read-only and End Game takes over. -->
   <aside class="col" id="gameControl">
-    <div class="seclabel">Game Control</div>
+    <div class="panel-titlebar">Game Control</div>
     <div class="pad">
       <div class="gc-lock">🔒 Settings locked while a game is in progress — press End Game to change them.</div>
       <label>Rule set
@@ -450,6 +481,7 @@
        merged), grouped by side, each row showing its chosen action this phase.
        The end-phase action button (#controls) is pinned at the bottom. -->
   <aside class="col tracker">
+    <div class="panel-titlebar">Characters</div>
     <div class="pad">
       <div class="banner" id="phaseBanner">Loading…</div>
       <div class="hint" id="hint"></div>
