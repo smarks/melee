@@ -114,6 +114,50 @@ def _check_legal_positions(state, context: str) -> None:
             claimed[cell] = figure
 
 
+def _check_hth_locks(state, context: str) -> None:
+    """Every hand-to-hand grapple is mutual and both grapplers share a hex (#271).
+
+    A hand-to-hand lock is two figures grabbing each other on the ground: the tie
+    must be symmetric (each lists the other in ``hth_opponents``) and the two must
+    occupy a common hex (footprints overlap -- position equality for man-sized
+    figures, an overlapping cell for a giant's tri-hex footprint). A relocation
+    that moved one grappler without clearing the lock (the force-retreat bug this
+    guards) leaves a *cross-hex* grapple: two figures still striking each other at
+    the +4 rear HTH adjustment across a gap, which the rules can never produce.
+    """
+    layout = state.arena.layout
+    by_uid = {figure.uid: figure for figure in state.figures}
+    for figure in state.figures:
+        if not figure.in_hth:
+            continue
+        own_cells = set(figure.footprint(layout)) if figure.position is not None else set()
+        for opponent_uid in figure.hth_opponents:
+            opponent = by_uid.get(opponent_uid)
+            if opponent is None:
+                _fail(
+                    "hth-dangling-link",
+                    f"{figure.name}({figure.side}) grapples missing uid {opponent_uid!r}",
+                    context,
+                )
+            if figure.uid not in opponent.hth_opponents:
+                _fail(
+                    "hth-asymmetric",
+                    f"{figure.name}({figure.side}) grapples "
+                    f"{opponent.name}({opponent.side}) but not the reverse",
+                    context,
+                )
+            opponent_cells = (set(opponent.footprint(layout))
+                              if opponent.position is not None else set())
+            if not (own_cells & opponent_cells):
+                _fail(
+                    "hth-cross-hex",
+                    f"{figure.name}({figure.side}) at {figure.position} and "
+                    f"{opponent.name}({opponent.side}) at {opponent.position} are "
+                    f"locked in hand-to-hand but share no hex",
+                    context,
+                )
+
+
 def _check_figure_bounds(state, context: str) -> None:
     """Facing stays in 0..5, damage counters never go negative, and remaining
     pools never exceed the figure's maximum — the basic legality of a stat block.
@@ -228,6 +272,7 @@ def assert_state_invariants(
         _fail("bad-phase", f"phase={phase!r} is not one of {sorted(VALID_PHASES)}", context)
     _check_no_same_side_damage(state, context)
     _check_legal_positions(state, context)
+    _check_hth_locks(state, context)
     _check_figure_bounds(state, context)
     _check_turn_selection(state, phase, context)
     _check_missile_sanity(state, context)

@@ -175,7 +175,11 @@ def _figure_from_json(data: dict) -> Figure:
     figure.posture = Posture(data["posture"])
     figure.damage_taken = data["damage_taken"]
     for flag, default in PER_TURN_FLAGS.items():
-        setattr(figure, flag, data.get(flag, default))
+        stored = data.get(flag, default)
+        # Copy list values so a reloaded figure owns its list outright -- never a
+        # shared alias of the PER_TURN_FLAGS default (pre-list snapshots) nor of a
+        # decoded structure.
+        setattr(figure, flag, list(stored) if isinstance(default, list) else stored)
     figure.wounded_last_turn = data["wounded_last_turn"]
     figure.unconscious = data["unconscious"]
     figure.dead = data["dead"]

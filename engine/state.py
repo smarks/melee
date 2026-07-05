@@ -263,7 +263,9 @@ class _TurnMixin:
                 figure.hits_this_turn >= figure.wound_hits_threshold
             )
             for flag, default in PER_TURN_FLAGS.items():
-                setattr(figure, flag, default)
+                # Copy list defaults so every figure gets its own fresh list, never
+                # a shared alias of the one literal in PER_TURN_FLAGS.
+                setattr(figure, flag, list(default) if isinstance(default, list) else default)
             figure.current_option = None
             # A crossbow reloads a turn closer — but an engaged figure cannot
             # reload (p.16), so its bolt stays unspent until it breaks free.
@@ -1935,6 +1937,13 @@ class _CombatMixin:
         if result.damage > 0 and not result.thrown and not (
                 result.weapon is not None and result.weapon.kind == WeaponKind.MISSILE):
             attacker.dealt_st_damage_this_turn = True
+            # Record WHICH enemy was struck so only that foe can be pushed (never a
+            # teammate or an untouched enemy) and so each push is spent once. Only
+            # an opposing-side hit grants a retreat ("inflicted hits on an enemy",
+            # p.20); a same-side HTH miss-cascade hit never arms one.
+            if (target.side != attacker.side
+                    and target.uid not in attacker.force_retreat_targets_this_turn):
+                attacker.force_retreat_targets_this_turn.append(target.uid)
         status = self.rules.status_after_hit(target)
         if status == DEAD:
             target.dead = True
@@ -1963,11 +1972,39 @@ class _CombatMixin:
 class _ForceRetreatMixin:
     # ---- force retreat (Section: Forcing Retreat) ----
     def can_force_retreat(self, attacker: Figure, target: Figure) -> bool:
+        """Whether ``attacker`` may still shove ``target`` back one hex this turn.
+
+        The authoritative rule (p.20, "Forcing Retreat"): a figure that put hits
+        on an *enemy* with a physical, non-missile attack and took no hits itself
+        may force that enemy to retreat one hex at the end of the turn. This gate
+        is the single source of truth -- both the option menu and the execution
+        path go through it, so the two can never desync (#229A).
+
+        Membership in ``attacker.force_retreat_targets_this_turn`` already encodes
+        four of the conditions at once: the attacker dealt qualifying melee damage,
+        it landed on THIS specific figure, that figure is on the opposing side, and
+        the push has not yet been spent (:meth:`force_retreat` removes the uid once
+        used, so no single hit yields an unbounded chain of pushes). The remaining
+        conditions are checked explicitly:
+
+        * the attacker took no hits this turn (from any source);
+        * the target is adjacent (a push is a one-hex shove);
+        * the target is neither dead nor collapsed (a fallen body is not pushed --
+          the menu never offers it, so execution must not accept it either); and
+        * the target is not locked in hand-to-hand -- the rules give no way to
+          force-retreat a grappler out of a pile (an HTH figure moves only by the
+          disengagement rules), and shoving it to a neighbouring hex would leave a
+          cross-hex grapple no invariant could reconcile.
+        """
+        if attacker.position is None or target.position is None:
+            return False
         return (
-            attacker.dealt_st_damage_this_turn
+            target.uid in attacker.force_retreat_targets_this_turn
             and attacker.hits_this_turn == 0
-            and self.arena.layout.distance(attacker.position, target.position) == 1
+            and not target.in_hth
+            and not target.collapsed
             and not target.is_dead
+            and self.arena.layout.distance(attacker.position, target.position) == 1
         )
 
     def force_retreat(self, attacker: Figure, target: Figure, *, advance: bool = False) -> Hex:
@@ -2001,6 +2038,11 @@ class _ForceRetreatMixin:
         target.position = chosen
         if advance:
             attacker.position = vacated
+        # Spend the push: this foe has been forced back its one hex for the turn
+        # (p.20). Removing the uid makes can_force_retreat False for this pair, so
+        # advancing into the vacated hex cannot re-arm an endless chain of shoves.
+        if target.uid in attacker.force_retreat_targets_this_turn:
+            attacker.force_retreat_targets_this_turn.remove(target.uid)
         self.log.append(narrate_retreat(attacker, target, advance))
         return target.position
 

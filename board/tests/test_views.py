@@ -640,6 +640,7 @@ def test_force_retreat_options_and_action_push_an_eligible_target(client: Client
     try:
         # Red dealt ST damage and took none this turn, adjacent to a living blue.
         red.dealt_st_damage_this_turn = True
+        red.force_retreat_targets_this_turn = [blue.uid]
         red.hits_this_turn = 0
 
         state = client.get("/api/game/duel-test").json()["state"]
