@@ -75,22 +75,31 @@ def _game_for_seed(seed: int) -> tuple[RulesProfile, Arena, list]:
 
 
 def _check_disarm_recovery(
-    state: GameState, streaks: dict[str, int], context: str
+    state: GameState, progress: dict[str, tuple[int, object]], context: str
 ) -> None:
-    """The game-progress guard for the fumble-disarm wedge (#275, audit #249).
+    """The game-progress guard for the fumble-disarm wedge (#275, audit #249/#278).
 
     A fumble (Tarmar's natural 1, classic Melee's 17/18) empties a figure's
-    ``ready_weapon``. Under AI play the very next selection pass must re-arm it
-    whenever a recovery exists — a carried melee weapon while engaged, or (free
-    of contact) any carried weapon or one lying in reach. A figure that stays
-    weaponless-with-a-recovery across consecutive turn boundaries is the wedge
-    that froze live games: it can neither attack nor be fought into progress.
+    ``ready_weapon``. Under AI play a recovery must always be pursued when one
+    exists:
 
-    Called after every ``end_turn``; ``streaks`` carries the per-figure count
-    of consecutive turn boundaries spent in that state (one is legitimate — the
-    fumble lands mid-combat, the re-arm comes next select — two means the AI
-    passed up the recovery). Only a STANDING figure counts: a grounded one
-    (e.g. fresh out of an HTH pile) must spend its action standing up first.
+    * **one-turn recoveries** — a carried melee weapon while engaged, or (free of
+      contact) any carried weapon / one lying in reach: the very next selection
+      re-arms it;
+    * **the two-step recovery** — engaged carrying only a missile weapon (which it
+      can neither ready while engaged, p.13/#79, nor fire empty-handed) with a
+      blade in reach and a free hex to step to: it DISENGAGES toward the blade,
+      then picks it up once free (#278).
+
+    A figure that stays weaponless-with-a-recovery and **does not make progress**
+    is the wedge that froze live games: it can neither attack nor be fought into
+    progress. Progress is either re-arming or moving (a disengage step changes its
+    hex), so the guard keys on a per-figure signature of ``(position, armed?)`` and
+    counts only *consecutive turn boundaries with no change* — a figure genuinely
+    working its two-step recovery moves each turn and never trips it, while one
+    that simply holds forever does. Two unchanged boundaries means the AI passed
+    up the recovery. Only a STANDING figure counts: a grounded one (fresh out of
+    an HTH pile) must spend its action standing up first.
     """
     for figure in state.figures:
         recoverable = False
@@ -98,16 +107,24 @@ def _check_disarm_recovery(
                 and figure.ready_weapon is None and not figure.in_hth
                 and figure.posture == Posture.STANDING):
             if state.engaged(figure):
-                recoverable = any(
-                    weapon.kind != WeaponKind.MISSILE for weapon in figure.weapons)
+                recoverable = (
+                    any(weapon.kind != WeaponKind.MISSILE for weapon in figure.weapons)
+                    or (bool(state.dropped_in_reach(figure))
+                        and ai._has_free_adjacent_hex(state, figure)))
             else:
                 recoverable = bool(figure.weapons or state.dropped_in_reach(figure))
-        streaks[figure.uid] = streaks.get(figure.uid, 0) + 1 if recoverable else 0
-        if streaks[figure.uid] >= 2:
+        signature = (figure.position, figure.ready_weapon is not None)
+        prior_streak, prior_signature = progress.get(figure.uid, (0, None))
+        if recoverable and signature == prior_signature:
+            streak = prior_streak + 1        # weaponless, and it neither re-armed nor moved
+        else:
+            streak = 0                       # armed, or made progress (re-armed / stepped)
+        progress[figure.uid] = (streak, signature)
+        if streak >= 2:
             raise InvariantError(
                 f"invariant 'disarmed-ai-never-rearms' broken [{context}]: "
-                f"{figure.name}({figure.side}) has stayed weaponless for "
-                f"{streaks[figure.uid]} turn boundaries with a recovery available "
+                f"{figure.name}({figure.side}) has stayed weaponless and immobile for "
+                f"{streak} turn boundaries with a recovery available "
                 f"(carried {[w.name for w in figure.weapons]}, "
                 f"in reach {[w.name for w in state.dropped_in_reach(figure)]})"
             )
@@ -128,7 +145,7 @@ def _play_one_game(
     state.begin_selection()
     phase = "select"
     trail: list[str] = []
-    disarm_streaks: dict[str, int] = {}
+    disarm_progress: dict[str, tuple[int, object]] = {}
     base = f"{profile.name} seed={seed}"
     # Generous absolute cap: even a long multi-team game can't exceed turns x
     # (an action per figure, plus phase transitions) — a stalemate hits max_turns.
@@ -162,7 +179,7 @@ def _play_one_game(
                 state, profile, context=f"{base} turn={state.turn_number} post-end_turn",
                 phase="select")
             _check_disarm_recovery(
-                state, disarm_streaks,
+                state, disarm_progress,
                 context=f"{base} turn={state.turn_number} post-end_turn")
     return state, trail
 

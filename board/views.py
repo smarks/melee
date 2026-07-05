@@ -249,6 +249,8 @@ def _advance_computer(game: dict) -> None:
     combat opens it queues the computer's attacks. It never PASSes.
     """
     state: GameState = game["state"]
+    if state.victor() is not None:
+        return                               # the fight is decided — nothing to drive (#277)
     controllers = game.get("controllers", {})
     for _ in range(256):  # bounded; one iteration per figure/transition
         phase = game["phase"]
@@ -419,6 +421,8 @@ def _auto_end_if_idle(game: dict) -> bool:
     """
     if game["phase"] != "combat":
         return False
+    if game["state"].victor() is not None:
+        return False                  # decided — don't churn turns past the win (#277)
     if game["state"]._pending or _human_has_attack_left(game):
         return False
     if _human_force_retreat_available(game):

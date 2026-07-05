@@ -6,9 +6,10 @@ from hexarena.hex import Hex
 
 from engine import ai
 from engine.arena import Arena
+from engine.experience import CombatType
 from engine.figure import Posture, create_human
 from engine.options import Option, spec
-from engine.rules_data import BROADSWORD, DAGGER, NO_ARMOR, SMALL_BOW
+from engine.rules_data import BROADSWORD, DAGGER, NO_ARMOR, SMALL_BOW, WeaponKind
 from engine.state import GameState
 
 
@@ -360,6 +361,174 @@ def test_disarmed_ai_readies_a_carried_spare_when_nothing_lies_in_reach() -> Non
     ai.take_action(state, fighter)
     assert fighter.current_option == Option.READY_WEAPON
     assert fighter.ready_weapon is DAGGER
+
+
+def _face_toward(layout, figure, target_position) -> None:
+    """Point ``figure`` at ``target_position`` (its front hex holds the target)."""
+    figure.facing = next(direction for direction in range(6)
+                         if layout.neighbor(figure.position, direction) == target_position)
+
+
+# ---- #239: the practice-bout missile ban ------------------------------------
+# No missile may be loosed in a practice bout (p.22). The AI's can_fire omitted
+# that gate, so an AI archer requested MISSILE_ATTACK/ONE_LAST_SHOT and the engine
+# rejected it — 500-ing practice-vs-computer creation or wedging the select phase.
+
+
+def test_practice_bout_ai_archer_takes_up_its_blade_instead_of_firing() -> None:
+    arena = Arena(cols=7, rows=9)
+    layout = arena.layout
+    archer = create_human("Archer", 12, 12, "red",
+                          weapons=[SMALL_BOW, BROADSWORD], ready_weapon=SMALL_BOW,
+                          armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    archer.position = Hex(3, 4)
+    foe.position = archer.position
+    for _ in range(3):                       # foe three hexes down range
+        foe.position = layout.neighbor(foe.position, 0)
+    foe.facing = 3
+    archer.missile_cooldown = 0              # loaded — it WOULD fire in a death match
+    state = GameState(arena, [archer, foe], dice=Dice(seed=1),
+                      combat_type=CombatType.PRACTICE)
+    assert state.practice and not state.engaged(archer)
+
+    ai.take_action(state, archer)            # must not raise IllegalAction
+    assert archer.current_option not in (Option.MISSILE_ATTACK, Option.ONE_LAST_SHOT)
+    assert archer.current_option == Option.READY_WEAPON
+    assert archer.ready_weapon.name == "Broadsword"
+
+
+def test_practice_bout_engaged_ai_archer_swaps_to_its_blade() -> None:
+    arena = Arena(cols=7, rows=7)
+    layout = arena.layout
+    archer = create_human("Archer", 12, 12, "red",
+                          weapons=[SMALL_BOW, BROADSWORD], ready_weapon=SMALL_BOW,
+                          armor=NO_ARMOR)
+    foe = _fighter("Foe", "blue")
+    archer.position, archer.facing = Hex(3, 3), 0
+    foe.position = layout.neighbor(archer.position, 0)   # engaged, in the front hex
+    _face_toward(layout, foe, archer.position)
+    archer.missile_cooldown = 0                          # loaded
+    state = GameState(arena, [archer, foe], dice=Dice(seed=1),
+                      combat_type=CombatType.PRACTICE)
+    assert state.practice and state.engaged(archer)
+
+    ai.take_action(state, archer)                        # must not raise
+    assert archer.current_option == Option.CHANGE_WEAPONS
+    assert archer.ready_weapon.name == "Broadsword"
+
+
+# ---- #240: an engaged fighter must not turn its back on its engager ----------
+
+
+def test_engaged_ai_faces_and_strikes_the_foe_engaging_it() -> None:
+    # An engaged fighter used to pick the globally weakest enemy — even one far
+    # behind it — turning its back on the foe actually engaging it (presenting its
+    # rear, +4 to be hit) and queueing zero attacks. Engaged, it must focus on an
+    # ADJACENT foe: face it and strike.
+    arena = Arena(cols=7, rows=13)
+    layout = arena.layout
+    me = _fighter("Me", "red")
+    engager = _fighter("Engager", "blue")            # full ST, in my front hex
+    distant = _fighter("Distant", "blue")            # weaker, but far to my rear
+    me.position, me.facing = Hex(3, 3), 0
+    engager.position = layout.neighbor(me.position, 0)   # adjacent, engaging me
+    _face_toward(layout, engager, me.position)
+    distant.position = Hex(3, 11)                     # far off, off my facing
+    distant.facing = 0
+    distant.damage_taken = 8                          # the weakest figure on the field
+    state = GameState(arena, [me, engager, distant], dice=Dice(seed=1))
+    assert state.engaged(me)
+
+    ai.take_action(state, me)
+    assert spec(me.current_option).is_attack          # it committed to a real attack
+    ai.queue_attacks(state, "red")
+    assert state._pending and state._pending[-1].target is engager   # struck the engager
+
+
+# ---- #250: an engaged multi-hex figure must never request a blocked turn -----
+
+
+def test_engaged_multihex_ai_never_requests_a_blocked_turn() -> None:
+    # An engaged giant used to pass a facing change unconditionally in its
+    # stationary branches; move() routes a size>1 turn through
+    # _validate_multihex_turn, which raises when the rotated footprint hits an
+    # occupied hex — crashing take_action and breaking the #153 "the AI can never
+    # pick an illegal option" guarantee. Config found by brute force (probe): giant
+    # at (7,7) facing 0, two foes engaging it; facing the weaker one would rotate
+    # the footprint onto the other.
+    from engine.monsters import create_monster
+    arena = Arena(cols=15, rows=15)
+    layout = arena.layout
+    giant = create_monster("Giant", "Grond", "red")
+    giant.position, giant.facing = Hex(7, 7), 0
+    footprint = set(giant.footprint(layout))
+    near = create_human("Near", 12, 12, "blue", weapons=[BROADSWORD],
+                        ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    far = create_human("Far", 12, 12, "blue", weapons=[BROADSWORD],
+                       ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    near.position = Hex(7, 5)
+    far.position = Hex(6, 6)
+    near.facing = next(d for d in range(6) if layout.neighbor(near.position, d) in footprint)
+    far.facing = next(d for d in range(6) if layout.neighbor(far.position, d) in footprint)
+    far.damage_taken = 8                              # the weaker foe pulls the facing
+    state = GameState(arena, [giant, near, far], dice=Dice(seed=1))
+    assert giant.size > 1 and state.engaged(giant)
+
+    ai.take_action(state, giant)                     # must NOT raise IllegalAction
+    assert giant.current_option is not None          # a real, legal action was set
+
+
+# ---- #278: an engaged missile-only fighter disengages to re-arm --------------
+# Post-#276 residual stalemate: a fumble that leaves an engaged figure carrying
+# only a missile weapon (which it can neither ready while engaged, p.13/#79, nor
+# fire empty-handed) with its blade underfoot used to hold forever. It must take
+# the two-step recovery the rules allow: DISENGAGE (option n) toward the dropped
+# weapon, then PICK_UP once free.
+
+
+def _engaged_missile_only_with_blade_underfoot():
+    """A disarmed blue fighter engaged by a red foe, carrying only a bow, with a
+    fumbled dagger lying in its own hex — the #278 wedge."""
+    arena = Arena(cols=9, rows=9)
+    layout = arena.layout
+    stuck = create_human("Stuck", 12, 12, "blue", weapons=[SMALL_BOW],
+                         ready_weapon=None, armor=NO_ARMOR)
+    foe = _fighter("Foe", "red")
+    stuck.position, stuck.facing = Hex(4, 4), 0
+    foe.position = layout.neighbor(stuck.position, 0)     # in the front hex -> engaged
+    _face_toward(layout, foe, stuck.position)
+    state = GameState(arena, [stuck, foe], dice=Dice(seed=1))
+    state._drop_to_ground(DAGGER, stuck.position)         # fumbled blade underfoot
+    return state, stuck, foe, layout
+
+
+def test_engaged_missile_only_ai_disengages_toward_its_dropped_blade() -> None:
+    state, stuck, foe, layout = _engaged_missile_only_with_blade_underfoot()
+    assert state.engaged(stuck) and stuck.ready_weapon is None
+    assert all(weapon.kind == WeaponKind.MISSILE for weapon in stuck.weapons)
+    assert state.dropped_in_reach(stuck)                  # its blade is in reach
+
+    ai.take_action(state, stuck)
+    assert stuck.current_option == Option.DISENGAGE      # chose to break away
+
+
+def test_engaged_missile_only_ai_completes_the_recovery_in_two_turns() -> None:
+    # Turn 1: DISENGAGE step (combat phase) breaks contact but keeps the blade in
+    # reach. Turn 2: free of contact, it picks the blade back up.
+    state, stuck, foe, layout = _engaged_missile_only_with_blade_underfoot()
+
+    ai.take_action(state, stuck)                          # turn 1 selection: disengage
+    assert stuck.current_option == Option.DISENGAGE
+    ai.queue_attacks(state, "blue")                       # turn 1 combat: step away
+    assert stuck.attacked_this_turn                       # the step replaced its attack
+    assert not state.engaged(stuck)                       # broke contact
+    assert state.dropped_in_reach(stuck)                  # blade still within reach
+    state.end_turn()
+
+    ai.take_action(state, stuck)                          # turn 2 selection: recover
+    assert stuck.current_option == Option.PICK_UP
+    assert stuck.ready_weapon is DAGGER                   # re-armed with a real weapon
 
 
 def test_barehanded_ai_grapples_in_combat_when_the_rules_allow() -> None:
