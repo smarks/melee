@@ -86,13 +86,14 @@ def _check_disarm_recovery(
     ``ready_weapon``. Under AI play a recovery must always be pursued when one
     exists:
 
-    * **one-turn recoveries** — a carried melee weapon while engaged, or (free of
-      contact) any carried weapon / one lying in reach: the very next selection
-      re-arms it;
+    * **one-turn recoveries** — a carried melee weapon while engaged, a dropped
+      melee weapon in reach while engaged (PICK_UP is engaged-legal, #285/#290, so
+      no free hex is needed), or (free of contact) any carried weapon / one lying
+      in reach: the very next selection re-arms it;
     * **the two-step recovery** — engaged carrying only a missile weapon (which it
-      can neither ready while engaged, p.13/#79, nor fire empty-handed) with a
-      blade in reach and a free hex to step to: it DISENGAGES toward the blade,
-      then picks it up once free (#278).
+      can neither ready while engaged, p.13/#79, nor fire empty-handed) with only
+      a MISSILE weapon in reach and a free hex to step to: it DISENGAGES toward it,
+      then readies it once free (#278).
 
     A figure that stays weaponless-with-a-recovery and **does not make progress**
     is the wedge that froze live games: it can neither attack nor be fought into
@@ -110,8 +111,14 @@ def _check_disarm_recovery(
                 and figure.ready_weapon is None and not figure.in_hth
                 and figure.posture == Posture.STANDING):
             if state.engaged(figure):
+                dropped_melee_in_reach = any(
+                    weapon.kind != WeaponKind.MISSILE
+                    for weapon in state.dropped_in_reach(figure))
                 recoverable = (
                     any(weapon.kind != WeaponKind.MISSILE for weapon in figure.weapons)
+                    # A dropped melee weapon can be taken up in one step even while
+                    # engaged and boxed in (PICK_UP is engaged-legal, #285/#290).
+                    or dropped_melee_in_reach
                     or (bool(state.dropped_in_reach(figure))
                         and ai._has_free_adjacent_hex(state, figure)))
             else:
@@ -216,6 +223,24 @@ def _soak(game_count: int) -> None:
 def test_soak_randomized_full_games() -> None:
     """Many randomized full games, both rulesets — the core net (bounded for CI)."""
     _soak(CI_GAME_COUNT)
+
+
+def test_seed_239_disarmed_engaged_ai_rearms_by_pickup() -> None:
+    """Regression for #290: an engaged, fumble-disarmed figure re-arms by PICK_UP.
+
+    At Tarmar seed 239 a figure carrying only a (missile) Light crossbow — which it
+    can neither ready nor fire while engaged (p.13/#79) — sat engaged with melee
+    weapons dropped in reach, yet wedged: its only free adjacent hex held a downed
+    figure, so ``disengage_destinations`` (which ignores the unconscious) offered it
+    while ``_disengage_step`` (which sees any figure) refused it, and the chosen
+    DISENGAGE silently no-opped every turn. It never re-armed and tripped
+    'disarmed-ai-never-rearms'. The fix has the AI PICK_UP a dropped melee weapon —
+    engaged-legal since #285 and a one-step recovery needing no free hex. This
+    full-game replay tripped the invariant before the fix and runs clean after."""
+    profile, arena, figures = _game_for_seed(239)
+    assert profile.name == TARMAR.name, "seed 239 must select the Tarmar profile"
+    # Must complete without raising InvariantError (the wedge is gone).
+    _play_one_game(profile, arena, figures, 239)
 
 
 @pytest.mark.slow
