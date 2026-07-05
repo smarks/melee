@@ -50,7 +50,12 @@ def test_tarmar_validation():
     assert chargen.validate("Tarmar", _tarmar(strength=18, dexterity=18,
                                               constitution=18))  # over 65
     assert chargen.validate("Tarmar", _tarmar(strength=99))     # out of range
-    assert chargen.validate("Tarmar", _tarmar(skill=9))         # skill > 5
+    assert chargen.validate("Tarmar", _tarmar(skill=9))         # skill > cap
+    # #272: the spec's skill ladder stops at Master (level 3, +6). Levels 4-5 (the
+    # old cap of 5) exposed undefined +8/+10 fighters, so the editor now caps at 3.
+    assert chargen.validate("Tarmar", _tarmar(skill=3)) == []   # Master is legal
+    assert chargen.validate("Tarmar", _tarmar(skill=4))         # above the ladder
+    assert chargen.validate("Tarmar", _tarmar(skill=5))         # above the ladder
     # under-strength is allowed in Tarmar (penalty, not block)
     assert chargen.validate("Tarmar", _tarmar(weapon="Battleaxe")) == []
 

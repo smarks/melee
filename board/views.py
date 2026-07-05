@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from django.contrib.auth import get_user_model
 from django.core.signing import BadSignature
+from django.db.models import Count
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
@@ -697,12 +698,18 @@ def _require_admin(request):
 
 
 def _user_dict(user) -> dict:
+    # Prefer a queryset annotation so the admin user list resolves every count in
+    # one query (api_admin_users annotates with Count); fall back to a direct
+    # COUNT for a lone, un-annotated user (e.g. one just created by POST).
+    character_count = getattr(user, "character_count", None)
+    if character_count is None:
+        character_count = user.saved_characters.count()
     return {
         "id": user.id,
         "username": user.username,
         "is_staff": user.is_staff,
         "is_active": user.is_active,
-        "character_count": user.saved_characters.count(),
+        "character_count": character_count,
     }
 
 
@@ -714,8 +721,10 @@ def api_admin_users(request):
         return denied
     user_model = get_user_model()
     if request.method == "GET":
-        users = user_model.objects.all().order_by("username")
-        return JsonResponse({"users": [_user_dict(u) for u in users]})
+        users = (user_model.objects
+                 .annotate(character_count=Count("saved_characters"))
+                 .order_by("username"))
+        return JsonResponse({"users": [_user_dict(user) for user in users]})
     if request.method == "POST":
         try:
             body = json.loads(request.body or "{}")
@@ -1197,13 +1206,17 @@ def api_options(request, gid):
     # can offer a split-second-arrow picker when this is >= 2 (#268). 1 for a
     # single-shot bow or any non-missile weapon.
     ready_weapon = figure.ready_weapon
-    if ready_weapon is not None and ready_weapon.kind == WeaponKind.MISSILE:
+    is_missile = ready_weapon is not None and ready_weapon.kind == WeaponKind.MISSILE
+    if is_missile:
         missile_shots = max_missile_shots(ready_weapon, figure.base_adj_dx)
     else:
         missile_shots = 1
     return JsonResponse({
         "uid": uid,
         "options": options,
+        # The readied weapon fires (bow/crossbow) rather than strikes — the client
+        # labels shoot-vs-attack rows from this instead of a hard-coded name list.
+        "is_missile": is_missile,
         "missile_shots": missile_shots,
         "melee_targets": targets.melee,
         "missile_targets": targets.ranged,

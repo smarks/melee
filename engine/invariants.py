@@ -242,6 +242,41 @@ def _check_weapon_kit(state, context: str) -> None:
             )
 
 
+def _collapse_pool(figure) -> int:
+    """The cumulative damage that puts ``figure`` at or below collapse.
+
+    A Tarmar figure collapses when its Fatigue pool is exhausted; a classic
+    figure when its ST reaches 0. Damage-event totals are read against this.
+    """
+    fatigue = getattr(figure, "fatigue", None)
+    return fatigue if fatigue is not None else figure.strength
+
+
+def _check_no_posthumous_damage(state, context: str) -> None:
+    """No figure deals damage after an earlier hit already felled it (#231).
+
+    The runtime guard ``if not attacker.can_act(): return`` refuses an action
+    from a collapsed/dead figure, but only in the instant it runs. This replays
+    the ordered ``damage_events`` stream and fails if any event's attacker had
+    already taken enough cumulative damage to be at or below collapse before it
+    struck — a dead figure landing a blow, checkable straight off the trail.
+    """
+    pools = {figure.uid: _collapse_pool(figure) for figure in state.figures}
+    damage_taken: dict[str, int] = {}
+    for event in state.damage_events:
+        pool = pools.get(event.attacker_uid)
+        if pool is not None and damage_taken.get(event.attacker_uid, 0) >= pool:
+            _fail(
+                "posthumous-damage",
+                f"figure {event.attacker_uid}({event.attacker_side}) dealt "
+                f"{event.damage} damage after already taking "
+                f"{damage_taken[event.attacker_uid]} (collapse pool {pool})",
+                context,
+            )
+        damage_taken[event.target_uid] = (
+            damage_taken.get(event.target_uid, 0) + event.damage)
+
+
 def assert_state_invariants(
     state,
     profile: RulesProfile,
@@ -277,6 +312,7 @@ def assert_state_invariants(
     _check_turn_selection(state, phase, context)
     _check_missile_sanity(state, context)
     _check_weapon_kit(state, context)
+    _check_no_posthumous_damage(state, context)
 
 
 # ---- combat-log truthfulness -----------------------------------------------

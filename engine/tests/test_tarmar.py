@@ -12,7 +12,14 @@ from hexarena.dice import Dice
 
 from engine.facing import FRONT, REAR
 from engine.profile import CLASSIC, TARMAR
-from engine.rules_data import BATTLEAXE, BROADSWORD, NO_ARMOR, PLATE, SMALL_SHIELD
+from engine.rules_data import (
+    BATTLEAXE,
+    BROADSWORD,
+    MAIN_GAUCHE,
+    NO_ARMOR,
+    PLATE,
+    SMALL_SHIELD,
+)
 from engine.ruleset import DEAD, KNOCKDOWN, Ruleset
 from engine.tarmar import (
     FUMBLE_BREAK,
@@ -135,6 +142,22 @@ def test_repeated_severe_crits_eventually_kill_via_body() -> None:
         if status == DEAD:
             break
     assert tgt.current_body <= 0 and status == DEAD
+
+
+def test_off_hand_main_gauche_raises_the_frontal_target_number_by_one() -> None:
+    # spec §6: a ready off-hand main-gauche parries as a +1 on the frontal Target
+    # Number (like a shield), NOT the classic damage-absorbing parry (#272).
+    rules = TarmarRuleset()
+    atk = _attacker(BROADSWORD)                       # frontal, one-handed blow
+    plain = _target(armor=NO_ARMOR, weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    duelist = _target(armor=NO_ARMOR, weapons=[BROADSWORD, MAIN_GAUCHE],
+                      ready_weapon=BROADSWORD)         # main-gauche in the free hand
+    plain_front = rules.resolve_attack(Dice(scripted=[10, 4, 3]), atk, plain, zone=FRONT)
+    mg_front = rules.resolve_attack(Dice(scripted=[10, 4, 3]), atk, duelist, zone=FRONT)
+    mg_rear = rules.resolve_attack(Dice(scripted=[10, 4, 3]), atk, duelist, zone=REAR)
+    assert mg_front.needed == plain_front.needed + 1  # +1 to the frontal TN
+    assert mg_rear.needed == plain_front.needed       # no parry from the flank/rear
+    assert "main-gauche +1" in mg_front.to_hit_breakdown
 
 
 def test_shield_to_hit_bonus_only_applies_to_the_front() -> None:

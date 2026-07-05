@@ -52,7 +52,9 @@ class Weapon:
         throwable: may be thrown with the thrown-weapon rules.
         notes: rulebook note text.
         reload: base turns to reload after firing (crossbows; 0 = fires every
-            turn). Reduced by 1 at adjDX 14+ — see :func:`missile_reload_turns`.
+            turn). Reduced by 1 once adjDX reaches ``fast_reload_dx`` — see
+            :func:`missile_reload_turns`.
+        fast_reload_dx: adjDX at/above which reload drops by one turn (0 = never).
     """
 
     name: str
@@ -64,6 +66,7 @@ class Weapon:
     throwable: bool = False
     notes: str = ""
     reload: int = 0
+    fast_reload_dx: int = 0   # adjDX at/above which reload drops by one turn (0 = never)
     double_shot_dx: int = 0   # adjDX at/above which a bow fires twice/turn (0 = never)
     reach: int = 1            # hexes it can strike (pole weapons jab at 2; p.12)
 
@@ -73,7 +76,7 @@ class Weapon:
 DAGGER = Weapon("Dagger", DamageDice(1, -1), 0, throwable=True,
                 hth_damage=DamageDice(1, 2), notes="1d+2 in HTH combat")
 MAIN_GAUCHE = Weapon("Main-Gauche", DamageDice(1, -1), 0,
-                     hth_damage=DamageDice(1, -1), notes="parries 1 hit/attack")
+                     hth_damage=DamageDice(1, 2), notes="parries 1 hit/attack")
 RAPIER = Weapon("Rapier", DamageDice(1, 0), 9)
 CLUB = Weapon("Club", DamageDice(1, 0), 9, throwable=True)
 HAMMER = Weapon("Hammer", DamageDice(1, 1), 10, throwable=True)
@@ -109,10 +112,12 @@ LONGBOW = Weapon("Longbow", DamageDice(1, 2), 11, kind=WeaponKind.MISSILE,
                  two_handed=True, double_shot_dx=18, notes="2 shots/turn if adjDX 18+")
 LIGHT_CROSSBOW = Weapon("Light crossbow", DamageDice(2, 0), 12,
                         kind=WeaponKind.MISSILE, two_handed=True, reload=1,
+                        fast_reload_dx=14,
                         notes="fires every other turn, or every turn if adjDX 14+")
 HEAVY_CROSSBOW = Weapon("Heavy crossbow", DamageDice(3, 0), 15,
                         kind=WeaponKind.MISSILE, two_handed=True, reload=2,
-                        notes="fires every 3rd turn, or every other if adjDX 14+")
+                        fast_reload_dx=16,
+                        notes="fires every 3rd turn, or every other if adjDX 16+")
 
 
 def max_missile_shots(weapon: Weapon | None, adj_dx: int) -> int:
@@ -126,11 +131,14 @@ def max_missile_shots(weapon: Weapon | None, adj_dx: int) -> int:
 def missile_reload_turns(weapon: Weapon | None, adj_dx: int) -> int:
     """Turns a missile weapon needs to reload before it can fire again (p.16).
 
-    Crossbows reload one turn faster at adjDX 14+; bows reload as they fire (0).
+    A crossbow reloads one turn faster once adjDX reaches its own
+    ``fast_reload_dx`` threshold (light crossbow 14, heavy crossbow 16 per the
+    ITL p.109 Weapon Table); bows reload as they fire (0).
     """
     if weapon is None or weapon.kind != WeaponKind.MISSILE:
         return 0
-    return max(0, weapon.reload - (1 if adj_dx >= 14 else 0))
+    fast = weapon.fast_reload_dx and adj_dx >= weapon.fast_reload_dx
+    return max(0, weapon.reload - (1 if fast else 0))
 
 
 WEAPONS: dict[str, Weapon] = {

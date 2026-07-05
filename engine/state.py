@@ -255,9 +255,14 @@ class _TurnMixin:
             # Option (g): a STAND UP chosen in movement takes effect now, at the
             # end of the combat phase (p.6-7). The figure stayed prone/kneeling
             # through this turn's combat and only now rises to its feet. (Crawl
-            # keeps it grounded and never sets this option.)
+            # keeps it grounded and never sets this option.) But a figure knocked
+            # down THIS turn — or knocked out / killed — cannot complete the rise:
+            # the fresh knockdown cancels the pending stand (p.20), so gate it on
+            # a figure that was not just felled and can still act.
             if (figure.current_option == Option.STAND_UP
-                    and figure.posture != Posture.STANDING):
+                    and figure.posture != Posture.STANDING
+                    and not figure.knocked_down_this_turn
+                    and figure.can_act()):
                 figure.posture = Posture.STANDING
             figure.wounded_last_turn = (
                 figure.hits_this_turn >= figure.wound_hits_threshold

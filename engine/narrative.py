@@ -54,6 +54,21 @@ def _approach(attacker: Figure, target: Figure, weapon, zone: str | None = None,
     return f"{_name(attacker)} {verb} {_article(weapon.name)} at {spot}{_name(target)}"
 
 
+def _defense_beat_this_attack(target: Figure, result: AttackResult) -> bool:
+    """Whether the target's dodge/defend actually raised THIS attack's difficulty.
+
+    A dodge only helps against a missile or thrown attack; a defend only against
+    a melee blow (Melee p.20; the engine forces four dice on the matching type).
+    Crediting the wrong type would narrate "dodges clear" on a miss the defense
+    never influenced.
+    """
+    ranged = getattr(result, "thrown", False) or (
+        result.weapon is not None and result.weapon.kind == WeaponKind.MISSILE)
+    if ranged:
+        return getattr(target, "dodging", False)
+    return getattr(target, "defending", False)
+
+
 def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> str:
     """One vivid line for an attack's outcome (hit, miss, dodge, crit)."""
     approach = _approach(attacker, target, result.weapon, result.zone,
@@ -82,7 +97,10 @@ def narrate_attack(attacker: Figure, target: Figure, result: AttackResult) -> st
             return _cap(
                 f"{approach} — and misses, the blow finding only air as "
                 f"{_name(target)} slips out of reach.")
-        elif getattr(target, "dodging", False) or getattr(target, "defending", False):
+        elif _defense_beat_this_attack(target, result):
+            # Only credit the dodge/defend when it actually raised the difficulty:
+            # dodge helps only against a missile/thrown attack, defend only against
+            # a melee blow (ruleset.py forces four dice on the matching type).
             body = f"{approach}, who dodges clear"
         else:
             body = f"{approach} — and misses"

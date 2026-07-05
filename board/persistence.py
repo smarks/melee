@@ -50,7 +50,15 @@ from engine.experience import CombatType
 from engine.figure import PER_TURN_FLAGS, Figure, Posture, Race
 from engine.options import Option
 from engine.profile import PROFILES
-from engine.rules_data import ARMORS, SHIELDS, WEAPONS, DamageDice
+from engine.rules_data import (
+    ARMORS,
+    SHIELDS,
+    WEAPONS,
+    Armor,
+    DamageDice,
+    Weapon,
+    WeaponKind,
+)
 from engine.ruleset import Ruleset
 from engine.state import GameState, PendingAttack
 from engine.tarmar import TarmarFigure, TarmarRuleset
@@ -80,6 +88,104 @@ def _arena_from_json(data: dict) -> Arena:
 
 
 # ---- figures ----------------------------------------------------------------
+# Monster / quirk fields that default to ordinary single-hex behaviour on a plain
+# figure (engine.figure.Figure) but carry a creature's traits when set by
+# engine.monsters.create_monster. Listed once so the save and load halves cannot
+# drift; each round-trips only when present, so pre-monster snapshots load
+# unchanged at the dataclass defaults.
+_MONSTER_FIELDS: tuple[str, ...] = (
+    "size", "needs_two_to_engage", "flying", "fly_movement_allowance",
+    "all_front", "hard_to_hit", "wound_hits_threshold", "knockdown_hits_threshold",
+)
+
+
+def _damage_to_json(damage: DamageDice | None) -> list[int] | None:
+    return None if damage is None else [damage.count, damage.modifier]
+
+
+def _damage_from_json(value: list[int] | None) -> DamageDice | None:
+    return None if value is None else DamageDice(value[0], value[1])
+
+
+def _weapon_to_json(weapon: Weapon) -> str | dict:
+    """Serialize a weapon: a catalog weapon by name (restored as the shared
+    singleton), a non-catalog weapon (a monster's ad-hoc natural attack, built in
+    engine.monsters) by value so it round-trips instead of raising ``KeyError``."""
+    if WEAPONS.get(weapon.name) is weapon:
+        return weapon.name
+    return {
+        "name": weapon.name,
+        "damage": _damage_to_json(weapon.damage),
+        "min_strength": weapon.min_strength,
+        "kind": weapon.kind.value,
+        "two_handed": weapon.two_handed,
+        "hth_damage": _damage_to_json(weapon.hth_damage),
+        "throwable": weapon.throwable,
+        "notes": weapon.notes,
+        "reload": weapon.reload,
+        "fast_reload_dx": weapon.fast_reload_dx,
+        "double_shot_dx": weapon.double_shot_dx,
+        "reach": weapon.reach,
+    }
+
+
+def _weapon_from_json(value: str | dict) -> Weapon:
+    if isinstance(value, str):
+        return WEAPONS[value]
+    return Weapon(
+        name=value["name"],
+        damage=_damage_from_json(value["damage"]),
+        min_strength=value["min_strength"],
+        kind=WeaponKind(value["kind"]),
+        two_handed=value["two_handed"],
+        hth_damage=_damage_from_json(value["hth_damage"]),
+        throwable=value["throwable"],
+        notes=value["notes"],
+        reload=value["reload"],
+        fast_reload_dx=value["fast_reload_dx"],
+        double_shot_dx=value["double_shot_dx"],
+        reach=value["reach"],
+    )
+
+
+def _armor_to_json(armor: Armor) -> str | dict:
+    """A catalog armor by name; a creature's natural hide (engine.monsters) by
+    value, so a monster's non-catalog armour also round-trips."""
+    if ARMORS.get(armor.name) is armor:
+        return armor.name
+    return {
+        "name": armor.name,
+        "stops": armor.stops,
+        "movement_allowance": armor.movement_allowance,
+        "dx_penalty": armor.dx_penalty,
+    }
+
+
+def _armor_from_json(value: str | dict) -> Armor:
+    if isinstance(value, str):
+        return ARMORS[value]
+    return Armor(
+        name=value["name"],
+        stops=value["stops"],
+        movement_allowance=value["movement_allowance"],
+        dx_penalty=value["dx_penalty"],
+    )
+
+
+def _resolve_ready_weapon(
+    ready_spec: str | dict | None, weapons: list[Weapon]
+) -> Weapon | None:
+    """The readied weapon as the SAME object already in ``weapons`` (the identity
+    the engine relies on for ``ready_weapon in figure.weapons``)."""
+    if ready_spec is None:
+        return None
+    ready_name = ready_spec if isinstance(ready_spec, str) else ready_spec["name"]
+    for carried in weapons:
+        if carried.name == ready_name:
+            return carried
+    return _weapon_from_json(ready_spec)
+
+
 def _figure_to_json(figure: Figure) -> dict:
     data: dict = {
         "type": "tarmar" if isinstance(figure, TarmarFigure) else "melee",
@@ -90,11 +196,15 @@ def _figure_to_json(figure: Figure) -> dict:
         "strength": figure.strength,
         "dexterity": figure.dexterity,
         "race": figure.race.value,
-        "armor": figure.armor.name,
+        "armor": _armor_to_json(figure.armor),
         "shield": figure.shield.name,
-        "weapons": [weapon.name for weapon in figure.weapons],
-        "ready_weapon": figure.ready_weapon.name if figure.ready_weapon else None,
+        "weapons": [_weapon_to_json(weapon) for weapon in figure.weapons],
+        "ready_weapon": (_weapon_to_json(figure.ready_weapon)
+                         if figure.ready_weapon else None),
         "shield_ready": figure.shield_ready,
+        # Monster / quirk traits (defaults on an ordinary figure); round-tripped
+        # so a saved monster reloads with its size, flight, and injury thresholds.
+        **{field: getattr(figure, field) for field in _MONSTER_FIELDS},
         # ---- mutable fight state ----
         "position": [figure.position.col, figure.position.row]
         if figure.position is not None else None,
@@ -134,13 +244,13 @@ def _figure_to_json(figure: Figure) -> dict:
 
 
 def _figure_from_json(data: dict) -> Figure:
-    weapons = [WEAPONS[name] for name in data["weapons"]]
-    ready_name = data["ready_weapon"]
-    # Reuse the catalog singleton so ``ready_weapon is weapons[i]`` holds, matching
-    # the identity comparisons in engine.state (e.g. ``ready in figure.weapons``).
-    ready = WEAPONS[ready_name] if ready_name is not None else None
+    weapons = [_weapon_from_json(spec) for spec in data["weapons"]]
+    # Reuse the catalog singleton (or the just-rebuilt non-catalog instance) so
+    # ``ready_weapon is weapons[i]`` holds, matching the identity comparisons in
+    # engine.state (e.g. ``ready in figure.weapons``).
+    ready = _resolve_ready_weapon(data["ready_weapon"], weapons)
     gear = dict(
-        armor=ARMORS[data["armor"]],
+        armor=_armor_from_json(data["armor"]),
         shield=SHIELDS[data["shield"]],
         weapons=weapons,
         ready_weapon=ready,
@@ -193,6 +303,11 @@ def _figure_from_json(data: dict) -> Figure:
     figure.experience = data.get("experience", 0)
     figure.added_st = data.get("added_st", 0)
     figure.added_dx = data.get("added_dx", 0)
+    # Monster / quirk traits: restore only what the snapshot carries, so a
+    # pre-monster save keeps the ordinary single-hex defaults.
+    for field in _MONSTER_FIELDS:
+        if field in data:
+            setattr(figure, field, data[field])
     return figure
 
 

@@ -347,3 +347,48 @@ def test_experience_progression_round_trips_through_saved_game() -> None:
     reloaded_fighter = reloaded["state"].figures[1]
     assert reloaded_fighter.experience == 50
     assert reloaded_fighter.added_dx == 3
+
+
+def test_monster_figure_round_trips_by_value() -> None:
+    """#272: a monster's quirk fields (size, flight, injury thresholds) and its
+    non-catalog natural weapon/hide must survive save/load. Before the fix
+    _figure_from_json rebuilt weapons via WEAPONS[name] and KeyError'd on a
+    monster's ad-hoc weapon, and the quirk fields were silently dropped."""
+    from engine.monsters import create_monster
+
+    snake = create_monster("Giant snake", "Ssss", "b")
+    snake.position = Hex(4, 4)
+    restored = persistence._figure_from_json(persistence._figure_to_json(snake))
+
+    # quirk fields
+    assert restored.all_front is True
+    assert restored.hard_to_hit == 3
+    assert restored.size == snake.size
+    assert restored.wound_hits_threshold == snake.wound_hits_threshold
+    assert restored.knockdown_hits_threshold == snake.knockdown_hits_threshold
+    # the non-catalog natural weapon and hide came back by value
+    assert restored.ready_weapon.name == "Snake bite"
+    assert restored.ready_weapon.damage == snake.ready_weapon.damage
+    assert restored.ready_weapon in restored.weapons          # identity preserved
+    assert restored.armor.name == snake.armor.name
+    assert restored.armor.movement_allowance == snake.armor.movement_allowance
+
+
+def test_giant_and_gargoyle_quirks_round_trip() -> None:
+    """A tri-hex giant (size 3, two-to-engage, raised thresholds) and a flying
+    gargoyle keep their traits across save/load (#272)."""
+    from engine.monsters import create_monster
+
+    giant = create_monster("Giant", "Grond", "a")
+    restored_giant = persistence._figure_from_json(persistence._figure_to_json(giant))
+    assert restored_giant.size == 3
+    assert restored_giant.needs_two_to_engage is True
+    assert restored_giant.wound_hits_threshold == 9
+    assert restored_giant.knockdown_hits_threshold == 16
+
+    gargoyle = create_monster("Gargoyle", "Stone", "b")
+    gargoyle.take_off()                                        # airborne
+    restored_gargoyle = persistence._figure_from_json(
+        persistence._figure_to_json(gargoyle))
+    assert restored_gargoyle.fly_movement_allowance == 16
+    assert restored_gargoyle.flying is True
