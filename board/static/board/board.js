@@ -2163,6 +2163,271 @@ function resetTheme() {
 }
 
 applyTheme();
+
+// ---- draggable panels (#319, Stage 1: move-only, with snapping) -------------
+// The four UI panels start as flex children (see .wrap in board.html). At load we
+// measure their current geometry -- those measurements ARE the default layout, so
+// nothing shifts -- then flip .wrap into .floating (each panel position:absolute)
+// and let the user drag any panel by its .panel-titlebar. Positions persist to
+// localStorage and survive reloads; Reset layout restores the measured defaults.
+// Below 1100px we stay in the stacked flex layout (no floating, no persistence).
+// The pure helpers (clampGeom / mergeLayout / snapGeom) are kept small so their
+// behaviour is easy to reason about and to exercise from e2e.
+const LAYOUT_KEY = "melee.layout.v1";  // persisted {map,log,control,tracker}:{x,y,w,h}
+const LAYOUT_SNAP_PX = 9;              // snap when an edge is within this many px
+const LAYOUT_MIN_VISIBLE = 48;         // px of a panel that must stay grabbable
+const LAYOUT_Z_BASE = 10;              // bring-to-front band: 10..40, below overlays@50
+const LAYOUT_Z_MAX = 40;
+// Registry of the draggable panels. All drag/persist/reset/snap logic iterates
+// this, so Stage 2 (resize) extends the same records rather than special-casing.
+const LAYOUT_PANELS = [
+  {key: "map",     selector: ".arena"},
+  {key: "log",     selector: ".logcol"},
+  {key: "control", selector: "#gameControl"},
+  {key: "tracker", selector: ".tracker"},
+];
+const LAYOUT_NARROW = window.matchMedia("(max-width: 1100px)");
+let DEFAULT_LAYOUT = null;             // {key: {x,y,w,h}} measured once from flex
+let layoutZTop = LAYOUT_Z_BASE;        // monotonic front-most z within the band
+let layoutSaveTimer = null;
+
+const layoutStacked = () => LAYOUT_NARROW.matches;
+const layoutWrap = () => document.querySelector(".wrap");
+const numberOr = (value, fallback) =>
+  (typeof value === "number" && isFinite(value)) ? value : fallback;
+
+function wrapBounds() {
+  const wrap = layoutWrap();
+  return {width: wrap.clientWidth, height: wrap.clientHeight};
+}
+
+// Clamp a panel so a grabbable strip of its titlebar always stays on-screen: it
+// can never be pushed above the wrap top, nor slid so far that < MIN_VISIBLE px
+// remain horizontally. This is what guarantees a panel can never be lost.
+function clampGeom(geom, bounds) {
+  const minX = LAYOUT_MIN_VISIBLE - geom.w;
+  const maxX = bounds.width - LAYOUT_MIN_VISIBLE;
+  const maxY = bounds.height - LAYOUT_MIN_VISIBLE;
+  return {
+    x: Math.max(minX, Math.min(geom.x, maxX)),
+    y: Math.max(0, Math.min(geom.y, maxY)),
+    w: geom.w, h: geom.h,
+  };
+}
+
+// Per-field merge of a persisted layout over the measured defaults: a missing,
+// non-numeric, or corrupt field falls back to its default, so partial/garbage
+// saved data can never strand a panel.
+function mergeLayout(defaults, saved) {
+  const merged = {};
+  for (const panel of LAYOUT_PANELS) {
+    const base = defaults[panel.key];
+    const over = (saved && saved[panel.key]) || {};
+    merged[panel.key] = {
+      x: numberOr(over.x, base.x), y: numberOr(over.y, base.y),
+      w: numberOr(over.w, base.w), h: numberOr(over.h, base.h),
+    };
+  }
+  return merged;
+}
+
+// The smallest shift (within the snap threshold) that lands one of `edges` onto
+// one of the candidate `lines`; 0 when nothing is close enough.
+function nearestSnapDelta(edges, lines) {
+  let bestDelta = 0;
+  let bestDistance = LAYOUT_SNAP_PX + 1;
+  for (const line of lines) {
+    for (const edge of edges) {
+      const distance = Math.abs(edge - line);
+      if (distance < bestDistance) { bestDistance = distance; bestDelta = line - edge; }
+    }
+  }
+  return bestDistance <= LAYOUT_SNAP_PX ? bestDelta : 0;
+}
+
+// Soft snap-assist: independently on each axis, nudge the dragged panel so its
+// leading/trailing edge aligns with a viewport edge or another panel's edge when
+// within the threshold. The user can still position/overlap freely away from an edge.
+function snapGeom(geom, others, bounds) {
+  const xLines = [0, bounds.width];
+  const yLines = [0, bounds.height];
+  for (const other of others) {
+    xLines.push(other.x, other.x + other.w);
+    yLines.push(other.y, other.y + other.h);
+  }
+  const dx = nearestSnapDelta([geom.x, geom.x + geom.w], xLines);
+  const dy = nearestSnapDelta([geom.y, geom.y + geom.h], yLines);
+  return {x: geom.x + dx, y: geom.y + dy, w: geom.w, h: geom.h};
+}
+
+function measureDefaults(wrap) {
+  const wrapRect = wrap.getBoundingClientRect();
+  const defaults = {};
+  for (const panel of LAYOUT_PANELS) {
+    const rect = panel.el.getBoundingClientRect();
+    defaults[panel.key] = {
+      x: Math.round(rect.left - wrapRect.left),
+      y: Math.round(rect.top - wrapRect.top),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height),
+    };
+  }
+  return defaults;
+}
+
+function getInlineGeom(panel) {
+  const parsePx = value => parseFloat(value) || 0;
+  const style = panel.el.style;
+  const fallback = DEFAULT_LAYOUT[panel.key];
+  return {
+    x: style.left ? parsePx(style.left) : fallback.x,
+    y: style.top ? parsePx(style.top) : fallback.y,
+    w: style.width ? parsePx(style.width) : fallback.w,
+    h: style.height ? parsePx(style.height) : fallback.h,
+  };
+}
+
+function applyGeom(panel, geom) {
+  const style = panel.el.style;
+  style.left = Math.round(geom.x) + "px";
+  style.top = Math.round(geom.y) + "px";
+  style.width = Math.round(geom.w) + "px";
+  style.height = Math.round(geom.h) + "px";
+}
+
+function clearInlineGeom(panel) {
+  const style = panel.el.style;
+  style.left = style.top = style.width = style.height = style.zIndex = "";
+}
+
+function loadSavedLayout() {
+  const raw = localStorage.getItem(LAYOUT_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === "object") ? parsed : {};
+  } catch (parseError) {
+    // Corrupt JSON -> fall back to defaults (documented behaviour), and note it
+    // so a real storage problem isn't silently invisible.
+    dbg("LAYOUT", "ignoring corrupt saved layout: " + parseError.message);
+    return {};
+  }
+}
+
+function saveLayout() {
+  if (layoutStacked()) return;   // never persist positions while stacked
+  clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = setTimeout(() => {
+    const out = {};
+    for (const panel of LAYOUT_PANELS) out[panel.key] = getInlineGeom(panel);
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(out));
+  }, 120);
+}
+
+function bringToFront(panel) {
+  layoutZTop += 1;
+  if (layoutZTop > LAYOUT_Z_MAX) {
+    // Renormalise back into the band by current stacking order so we never drift
+    // above the overlay/menu layers.
+    const ordered = LAYOUT_PANELS.slice().sort((a, b) =>
+      (parseInt(a.el.style.zIndex || LAYOUT_Z_BASE, 10)) -
+      (parseInt(b.el.style.zIndex || LAYOUT_Z_BASE, 10)));
+    layoutZTop = LAYOUT_Z_BASE;
+    for (const other of ordered) other.el.style.zIndex = ++layoutZTop;
+  }
+  panel.el.style.zIndex = layoutZTop;
+}
+
+function reclampAll() {
+  const bounds = wrapBounds();
+  for (const panel of LAYOUT_PANELS) applyGeom(panel, clampGeom(getInlineGeom(panel), bounds));
+}
+
+function onPanelPointerDown(panel, downEvent) {
+  if (layoutStacked() || downEvent.button !== 0) return;
+  downEvent.preventDefault();
+  bringToFront(panel);
+  const start = getInlineGeom(panel);
+  const startClientX = downEvent.clientX;
+  const startClientY = downEvent.clientY;
+  const pointerId = downEvent.pointerId;
+  panel.handle.setPointerCapture(pointerId);
+
+  const onMove = (moveEvent) => {
+    const bounds = wrapBounds();
+    const others = LAYOUT_PANELS.filter(other => other !== panel).map(getInlineGeom);
+    let geom = {
+      x: start.x + (moveEvent.clientX - startClientX),
+      y: start.y + (moveEvent.clientY - startClientY),
+      w: start.w, h: start.h,
+    };
+    geom = snapGeom(geom, others, bounds);
+    geom = clampGeom(geom, bounds);
+    applyGeom(panel, geom);
+  };
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    if (panel.handle.hasPointerCapture(pointerId)) panel.handle.releasePointerCapture(pointerId);
+    saveLayout();
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+}
+
+// Apply the right layout for the current width: floating (measured defaults ⊕
+// persisted) when wide, or the plain stacked flex flow when narrow.
+function applyResponsiveLayout() {
+  const wrap = layoutWrap();
+  if (layoutStacked()) {
+    wrap.classList.remove("floating");
+    for (const panel of LAYOUT_PANELS) clearInlineGeom(panel);
+    return;
+  }
+  const merged = mergeLayout(DEFAULT_LAYOUT, loadSavedLayout());
+  layoutZTop = LAYOUT_Z_BASE;
+  for (const panel of LAYOUT_PANELS) {
+    applyGeom(panel, merged[panel.key]);
+    panel.el.style.zIndex = LAYOUT_Z_BASE;
+  }
+  wrap.classList.add("floating");
+  reclampAll();
+}
+
+function resetLayout() {
+  localStorage.removeItem(LAYOUT_KEY);
+  layoutZTop = LAYOUT_Z_BASE;
+  if (layoutStacked()) return;   // stacked flow IS the default; nothing to place
+  for (const panel of LAYOUT_PANELS) {
+    applyGeom(panel, DEFAULT_LAYOUT[panel.key]);
+    panel.el.style.zIndex = LAYOUT_Z_BASE;
+  }
+}
+
+function initLayout() {
+  const wrap = layoutWrap();
+  if (!wrap) return;
+  for (const panel of LAYOUT_PANELS) {
+    panel.el = document.querySelector(panel.selector);
+    panel.handle = panel.el && panel.el.querySelector(".panel-titlebar");
+  }
+  if (LAYOUT_PANELS.some(panel => !panel.el || !panel.handle)) return;  // markup missing
+  DEFAULT_LAYOUT = measureDefaults(wrap);   // measure BEFORE floating (flex geometry)
+  for (const panel of LAYOUT_PANELS) {
+    panel.handle.addEventListener("pointerdown", event => onPanelPointerDown(panel, event));
+  }
+  applyResponsiveLayout();
+  // Crossing the breakpoint re-applies the correct mode; a resize within floating
+  // re-clamps so a panel can't end up stranded off the smaller viewport.
+  LAYOUT_NARROW.addEventListener("change", applyResponsiveLayout);
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (!layoutStacked()) reclampAll(); }, 100);
+  });
+}
+initLayout();
+
 // Shared view: poll so every browser on this game sees moves as they happen.
 // Re-render only when the server state actually changed, to avoid flicker.
 // (Declared before the boot dispatch below, which calls showPreGame() ->
@@ -2233,5 +2498,5 @@ Object.assign(window, {
   adminDeleteChar, adminCreateCharFor,
   openEditor, closeEditor, startCustom,
   copyLink, seatAction, closeLiveEdit, resetTheme,
-  downloadDebugLog,
+  downloadDebugLog, resetLayout,
 });

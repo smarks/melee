@@ -84,8 +84,9 @@ def test_status_log_has_its_own_always_visible_column(
     expect(log).to_have_count(1)
     assert page.locator(".tracker #log").count() == 0
 
-    # The log's own seclabel header sits in that column too.
-    expect(page.locator(".logcol .seclabel")).to_have_text("Game status")
+    # The log column's own header (the draggable panel titlebar, #319) sits in
+    # that column too and names it.
+    expect(page.locator(".logcol .panel-titlebar")).to_have_text("Game status")
 
     # Play a few steps so the log gains entries, then assert it's on-screen without
     # scrolling: its top is within the viewport and it has a real height.
