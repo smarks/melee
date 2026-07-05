@@ -540,9 +540,14 @@ def test_update_figure_rebuilds_in_place_preserving_board_state() -> None:
         del GAMES["upd-test"]
 
 
-def test_update_figure_action_applies_new_stats_to_running_game(client: Client) -> None:
+def test_update_figure_action_applies_new_stats_to_running_game(
+        client: Client, django_user_model) -> None:
     """Editing a fighter mid-game writes the new stats back to the live figure,
-    so the rest of the match uses them (issue #69)."""
+    so the rest of the match uses them (issue #69). The live re-spec is admin-only
+    (#323), so this drives it as an admin."""
+    admin_user = django_user_model.objects.create_user(
+        username="gm-edit", password="gm-pass-12345", is_staff=True)
+    client.force_login(admin_user)
     roster = {"profile": "Classic Melee", "computer": "", "seed": 1, "fighters": [
         {"name": "Hero", "side": "red", "strength": 12, "dexterity": 12,
          "weapon": "Dagger", "armor": "None", "shield": "None"},
@@ -1113,8 +1118,9 @@ def test_spectator_sees_open_seat_then_claims_and_can_play(client: Client) -> No
 
 @pytest.mark.django_db
 def test_admin_can_edit_a_figure_outside_the_rules(client: Client, django_user_model) -> None:
-    # #86: an admin may edit a fighter past the point budget; a regular owner is
-    # still held to the rules.
+    # #86/#323: a live figure re-spec is admin-only. A regular owner is refused
+    # outright (they build their fighters pre-game); an admin may edit even past
+    # the point budget.
     data = _new(client)                          # creator owns both sides (same screen)
     gid = data["gid"]
     red = next(f for f in data["state"]["figures"] if f["side"] == "red")
@@ -1127,7 +1133,7 @@ def test_admin_can_edit_a_figure_outside_the_rules(client: Client, django_user_m
                                          "uid": red["uid"], "spec": over_budget}),
                         content_type="application/json")
 
-    assert edit(client).status_code == 400       # the owner is bound by the rules
+    assert edit(client).status_code == 403       # a non-admin may not edit mid-game
 
     admin_user = django_user_model.objects.create_user(
         username="gm2", password="gm-pass-98765", is_staff=True)

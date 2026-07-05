@@ -1295,26 +1295,42 @@ $("tokenMenu").addEventListener("mouseenter", cancelHoverClose);
 $("tokenMenu").addEventListener("mouseleave", scheduleHoverClose);
 
 // ---- side panels ------------------------------------------------------------
+// Only an admin edits a live figure (#323): the client gate mirrors the server,
+// which now rejects a non-admin update_figure. Regular players view a full
+// read-only sheet in play and edit pre-game via the setup editor.
+const canEditInline = () => IS_ADMIN;
+
 function drawSelInfo() {
   const box = $("selInfo");
   const f = sel ? figByUid(sel) : null;
-  if (!f) { box.innerHTML = `<span class="muted">No figure selected.</span>`; return; }
-  box.innerHTML = statusHeader(f) + charSheetHtml(f) + planLine(f);
-  // The live editor is owner/admin-only: a figure you don't command shows the
-  // read-only sheet above but gets no Edit button (#214).
+  if (!f) {
+    INLINE_EDIT_FOR = null;
+    box.innerHTML = `<span class="muted">No figure selected.</span>`;
+    return;
+  }
+  // Poll-clobber guard (#323): while an admin has an edit card mounted for THIS
+  // figure, the 2s poll must not rebuild the panel -- that would drop keystrokes
+  // and focus. Refresh only the read-only header region and leave the live card be.
+  if (INLINE_EDIT_FOR === f.uid && box.querySelector(".card")) {
+    const header = box.querySelector("[data-selheader]");
+    if (header) header.innerHTML = statusHeader(f) + charSheetHtml(f) + planLine(f);
+    return;
+  }
+  INLINE_EDIT_FOR = null;
+  box.innerHTML = `<div data-selheader>`
+    + statusHeader(f) + charSheetHtml(f) + planLine(f) + `</div>`;
+  // A figure you don't command shows the read-only sheet above but no controls (#214).
   if (!myControlled(f) || !f.edit_spec) return;
   // Keep this fighter: a signed-in player may snapshot a fighter they control
   // into their saved characters, straight from the running game (#234).
   if (LOGGED_IN) box.appendChild(saveCharacterUi(f));
+  // Inline editing is admin-only (#323). Regular owners stop here (read-only).
+  if (!canEditInline()) return;
   if (!CAT || !RULES || CAT.profile !== PROFILE) { ensureGameCatalog(); return; }
-  // The full editor opens in its own modal so the stats, gear, and Apply button
-  // get a first-class, always-reachable surface instead of being crammed into
-  // this corner panel where the Apply button was clipped (#181).
-  const edit = document.createElement("button");
-  edit.className = "primary"; edit.style.marginTop = "10px";
-  edit.textContent = "✎ Edit this fighter…";
-  edit.addEventListener("click", () => openLiveEdit(f.uid));
-  box.appendChild(edit);
+  // The editor is built inline in this panel from the same chargen card the setup
+  // wizard uses, so the #298 two-handed-shield handling is preserved; Apply posts
+  // update_figure and re-renders. It replaced the old #liveEdit modal (#181/#323).
+  box.appendChild(inlineEditCard(f));
 }
 
 // ---- keep a fighter: save it from the game to your account (#234) -----------
@@ -1372,19 +1388,9 @@ async function saveCharacterFromGame(f, name) {
   render();
 }
 
-let LIVE_EDIT_FOR = null;            // uid the live-edit modal is open for, if any
-function openLiveEdit(uid) {
-  const f = figByUid(uid);
-  if (!f || !f.edit_spec) return;
-  if (!CAT || !RULES || CAT.profile !== PROFILE) { ensureGameCatalog(); return; }
-  LIVE_EDIT_FOR = uid;
-  $("liveEditSub").textContent =
-    `Editing ${f.name} (${f.side}). Changes apply immediately to the running game.`;
-  const slot = $("liveEditSlot"); slot.innerHTML = "";
-  slot.appendChild(liveEditCard(f));
-  $("liveEdit").style.display = "flex";
-}
-function closeLiveEdit() { $("liveEdit").style.display = "none"; LIVE_EDIT_FOR = null; }
+// The uid an inline edit card is currently mounted for, so the poll guard in
+// drawSelInfo knows not to clobber a live card (#323, mirrors the old LIVE_EDIT_FOR).
+let INLINE_EDIT_FOR = null;
 function tokenBadge(f) {   // the same numbered disc the board draws, for matching
   return `<span class="tokenbadge" style="background:${fillFor(f.side)}">`
     + `${f.dead ? "✗" : hpCur(f)}</span>`;
@@ -1420,23 +1426,38 @@ function shieldState(f) {
   return f.shield ? `${escapeHtml(f.shield)} (up)` : "none / slung";
 }
 function charSheetHtml(f) {
+  const isTarmar = f.model === "tarmar";
   const readied = f.weapon || null;
   const carried = f.weapons || [];
   // Readied weapon first and clearly marked, then the rest of the kit (Dagger etc.).
   const ordered = readied
     ? [readied, ...carried.filter(w => w !== readied)]
     : carried.slice();
+  // Tarmar shows the trained skill (0-5) per carried weapon, read from the public
+  // wire field (never edit_spec, per the #214 read-only contract).
+  const weaponSkills = f.weapon_skills || {};
+  const skillTag = name => (isTarmar && name in weaponSkills)
+    ? ` <span class="muted">— skill ${weaponSkills[name]}</span>` : "";
   const weaponItems = ordered.length
     ? ordered.map(w => `<li>${escapeHtml(w)}`
         + (readied && w === readied ? ` <span class="readied">— readied</span>` : "")
-        + `</li>`).join("")
+        + skillTag(w) + `</li>`).join("")
     : `<li class="muted">unarmed</li>`;
-  const vitals = f.model === "tarmar"
+  const vitals = isTarmar
     ? `Fatigue ${f.fatigue}/${f.max_fatigue} · Body ${f.body}/${f.max_body} · DX ${f.dx}`
     : `ST ${f.st}/${f.max_st} · DX ${f.dx}`;
+  // Surface the full attribute spread for EVERY figure (#323). Classic already
+  // shows its complete ST/DX set in the vitals; Tarmar adds its four extra
+  // attributes here so opponents' sheets are as complete as your own.
+  const attrs = isTarmar
+    ? `<div class="sheet-sub">Attributes</div>`
+      + `<div class="sheet-attrs">ST ${f.max_st} · DX ${f.dx} · IQ ${f.intelligence}`
+      + ` · WIS ${f.wisdom} · CON ${f.constitution} · CHA ${f.charisma}</div>`
+    : "";
   const armor = (f.armor && f.armor !== "None") ? escapeHtml(f.armor) : "none";
   return `<div class="charsheet">`
     + `<div class="sheet-vitals">${vitals}</div>`
+    + attrs
     + `<div class="sheet-sub">Weapons</div>`
     + `<ul class="sheet-weapons">${weaponItems}</ul>`
     + `<div class="sheet-gear">Armor: <b>${armor}</b> · Shield: <b>${shieldState(f)}</b></div>`
@@ -1462,7 +1483,7 @@ async function ensureGameCatalog() {
   render();
 }
 
-function liveEditCard(f) {
+function inlineEditCard(f) {
   const card = document.createElement("div"); card.className = "card";
   card.dataset.side = f.side;
   card.innerHTML = cardInner(f.edit_spec);
@@ -1472,12 +1493,14 @@ function liveEditCard(f) {
   apply.className = "primary"; apply.textContent = "Apply to game";
   apply.addEventListener("click", () => applyEdit(card, f.uid));
   card.appendChild(apply);
+  INLINE_EDIT_FOR = f.uid;      // arm the poll guard while this card is mounted
   setTimeout(() => refreshCard(card), 0);
   return card;
 }
 async function applyEdit(card, uid) {
   const data = await act({type: "update_figure", uid, spec: readCard(card)});
-  if (data) { flash("Applied changes."); closeLiveEdit(); render(); }
+  // Clear the guard so the re-render rebuilds the card from the applied spec.
+  if (data) { flash("Applied changes."); INLINE_EDIT_FOR = null; render(); }
 }
 function planLine(f) {
   const p = PLAN[f.uid];
@@ -2072,7 +2095,7 @@ async function startCustom() {
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
   optCache = {}; _lastStateJSON = "";
-  closeEditor(); closeSetup(); closeLiveEdit(); resetAll(); resetGameLifecycle(); render();
+  closeEditor(); closeSetup(); resetAll(); resetGameLifecycle(); render();
   startPolling();                 // re-arm live polling for the new game (#308)
   // Lock Game Control just like startGame does (#255): a custom match is a live
   // game, so profile/roster edits and New Game must be disabled and End Game live.
@@ -2198,6 +2221,7 @@ const LAYOUT_PANELS = [
   {key: "log",     selector: ".logcol",    label: "Game status"},
   {key: "control", selector: "#gameControl", label: "Game Control"},
   {key: "tracker", selector: ".tracker",   label: "Characters"},
+  {key: "fighter", selector: ".fighter",   label: "Selected character"},
 ];
 const LAYOUT_NARROW = window.matchMedia("(max-width: 1100px)");
 let DEFAULT_LAYOUT = null;             // {key: {x,y,w,h}} measured once from flex
@@ -2399,7 +2423,14 @@ function parseStoredLayout(raw) {
 // as mode "manual" so it is honoured rather than auto-shrunk away on first paint.
 function loadSavedLayout() {
   const fromV2 = parseStoredLayout(localStorage.getItem(LAYOUT_KEY));
-  if (fromV2) return fromV2;
+  if (fromV2) {
+    // One-time clean reset for the Selected-character split (#323): a v2 layout
+    // saved before the .fighter panel existed has no `fighter` key. Discard it once
+    // so all five panels lay out from fresh measured defaults; the next save then
+    // writes the new shape back (including `fighter`), so this only fires once.
+    if (!("fighter" in fromV2)) return {};
+    return fromV2;
+  }
   const fromV1 = parseStoredLayout(localStorage.getItem(LAYOUT_KEY_V1));
   if (!fromV1) return {};
   const migrated = {};
@@ -2706,6 +2737,17 @@ function initLayout() {
   }
   if (LAYOUT_PANELS.some(panel => !panel.el || !panel.handle)) return;  // markup missing
   DEFAULT_LAYOUT = measureDefaults(wrap);   // measure BEFORE floating (flex geometry)
+  // Split the (now roster-only) Characters column into a roster top (~55%) and the
+  // Selected-character panel below (~45%), #323. The wide pre-float flow collapses
+  // .fighter to zero width (CSS), so its measured geometry is a sliver; derive its
+  // real default from the tracker's full-height column instead.
+  const trackerDefault = DEFAULT_LAYOUT.tracker;
+  const rosterHeight = Math.round(trackerDefault.h * 0.55);
+  DEFAULT_LAYOUT.tracker = {...trackerDefault, h: rosterHeight};
+  DEFAULT_LAYOUT.fighter = {
+    x: trackerDefault.x, y: trackerDefault.y + rosterHeight,
+    w: trackerDefault.w, h: trackerDefault.h - rosterHeight,
+  };
   for (const panel of LAYOUT_PANELS) {
     panel.mode = "content";
     panel.restore = null;
@@ -2800,6 +2842,6 @@ Object.assign(window, {
   openAdmin, closeAdmin, adminCreateUser, adminSelectUser, adminDeleteUser,
   adminDeleteChar, adminCreateCharFor,
   openEditor, closeEditor, startCustom,
-  copyLink, seatAction, closeLiveEdit, resetTheme,
+  copyLink, seatAction, resetTheme,
   downloadDebugLog, resetLayout,
 });

@@ -73,6 +73,7 @@ def test_wide_viewport_floats_and_shows_titlebars(live_server, page: Page) -> No
         (".logcol .panel-titlebar .tb-label", "Game status"),
         ("#gameControl .panel-titlebar .tb-label", "Game Control"),
         (".tracker .panel-titlebar .tb-label", "Characters"),
+        (".fighter .panel-titlebar .tb-label", "Selected character"),
     ]:
         expect(page.locator(selector)).to_have_text(label)
 
@@ -266,7 +267,9 @@ def test_minimize_collapses_to_titlebar_and_expands(live_server, page: Page) -> 
     expect(page.locator(".wrap.floating")).to_have_count(1)
 
     # Freeze the tracker at a known manual size so expand is an exact height check.
-    _drag_handle(page, ".tracker", "se", -60, -60)
+    # Grow the height (the roster-only tracker is short now, #323); shrinking too far
+    # would flex-collapse .trackerScroll to zero and it would read as hidden.
+    _drag_handle(page, ".tracker", "se", -60, 60)
     before = _box(page, ".tracker")
     titlebar = _box(page, ".tracker .panel-titlebar")
 
@@ -326,3 +329,103 @@ def test_maximize_map_then_game_still_plays(live_server, page: Page) -> None:
 
     page.locator("#svg g.fig:has(.activering)").first.click()
     expect(page.locator("#tokenMenu")).to_be_visible()
+
+
+# ---- #323: the Selected-character panel is the fifth draggable panel -----------
+
+
+@pytest.mark.django_db
+def test_fighter_panel_drags_persists_and_resets(live_server, page: Page) -> None:
+    # The new Selected-character column drags, persists under the versioned key with
+    # its own `fighter` record, survives a reload, and Reset returns it to default.
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    before = _box(page, ".fighter")
+    _drag_panel(page, ".fighter .panel-titlebar", -160, -110)
+    after = _box(page, ".fighter")
+    assert abs(after["x"] - before["x"]) > 50, "fighter panel did not move horizontally"
+    assert abs(after["y"] - before["y"]) > 40, "fighter panel did not move vertically"
+
+    page.wait_for_function("() => localStorage.getItem('melee.layout.v2') !== null")
+    saved = _saved_layout(page)
+    assert saved is not None and "fighter" in saved
+    assert abs(saved["fighter"]["x"] - after["x"]) < 2
+
+    page.reload()
+    restored = _box(page, ".fighter")
+    assert abs(restored["x"] - after["x"]) < 2
+    assert abs(restored["y"] - after["y"]) < 2
+
+    page.get_by_role("button", name="Reset layout").click()
+    reset = _box(page, ".fighter")
+    assert abs(reset["x"] - before["x"]) < 3, "reset did not restore the fighter x"
+    assert abs(reset["y"] - before["y"]) < 3, "reset did not restore the fighter y"
+
+
+@pytest.mark.django_db
+def test_fighter_panel_minimizes_maximizes(live_server, page: Page) -> None:
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    # Freeze the fighter panel at a known manual size (shrinking always has room).
+    _drag_handle(page, ".fighter", "se", -50, -50)
+    before = _box(page, ".fighter")
+    titlebar = _box(page, ".fighter .panel-titlebar")
+
+    _ctl(page, ".fighter", "Minimize").click()
+    mini = _box(page, ".fighter")
+    assert mini["height"] <= titlebar["height"] + 4, "minimize did not collapse to titlebar"
+    expect(page.locator(".fighter .fighterScroll")).to_be_hidden()
+
+    _ctl(page, ".fighter", "Expand").click()
+    back = _box(page, ".fighter")
+    assert abs(back["height"] - before["height"]) < 4, "expand did not restore the height"
+    expect(page.locator(".fighter .fighterScroll")).to_be_visible()
+
+    wrap = _box(page, ".wrap")
+    _ctl(page, ".fighter", "Maximize").click()
+    maxed = _box(page, ".fighter")
+    assert maxed["width"] >= wrap["width"] - 4, "maximize did not fill the width"
+    assert maxed["height"] >= wrap["height"] - 4, "maximize did not fill the height"
+
+
+@pytest.mark.django_db
+def test_v2_layout_without_fighter_resets_once(live_server, page: Page) -> None:
+    # Decision 1 (#323): a v2 layout saved before the Selected-character panel
+    # existed has no `fighter` key. On this update it is discarded ONCE so all five
+    # panels lay out from fresh measured defaults; a later save then persists the
+    # new five-panel shape, and subsequent loads honour it (no repeated reset).
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+    default_tracker = _box(page, ".tracker")
+    default_fighter = _box(page, ".fighter")
+
+    # Plant a stale four-panel layout with the tracker shoved off its default spot.
+    stale = {
+        "map": {"x": 0, "y": 0, "w": 500, "h": 500, "mode": "manual"},
+        "tracker": {"x": 20, "y": 320, "w": 260, "h": 200, "mode": "manual"},
+    }
+    page.evaluate(
+        "s => localStorage.setItem('melee.layout.v2', JSON.stringify(s))", stale)
+    page.reload()
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    # The stale layout is discarded: the tracker is back at its measured default,
+    # not the planted spot, and the fighter panel appears at its default split.
+    reset_tracker = _box(page, ".tracker")
+    assert abs(reset_tracker["x"] - default_tracker["x"]) < 3
+    assert abs(reset_tracker["y"] - default_tracker["y"]) < 3
+    reset_fighter = _box(page, ".fighter")
+    assert abs(reset_fighter["x"] - default_fighter["x"]) < 3
+    assert abs(reset_fighter["y"] - default_fighter["y"]) < 3
+
+    # A drag now saves the five-panel shape (with `fighter`); a reload honours it.
+    _drag_panel(page, ".tracker .panel-titlebar", -150, 60)
+    page.wait_for_function(
+        "() => 'fighter' in JSON.parse(localStorage.getItem('melee.layout.v2') || '{}')")
+    moved = _box(page, ".tracker")
+    page.reload()
+    honoured = _box(page, ".tracker")
+    assert abs(honoured["x"] - moved["x"]) < 3, "the saved five-panel layout was not honoured"
+    assert abs(honoured["y"] - moved["y"]) < 3

@@ -59,10 +59,22 @@
   .logcol { width: 300px; flex: 0 0 300px; }
   #gameControl { overflow: auto; }
   .trackerScroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
+  /* Selected-character panel (#323): its own draggable/resizable column holding the
+     read-only sheet / inline edit card (#selInfo) over the turn-flow controls
+     (#controls). The sheet scrolls internally so #controls stays pinned. */
+  .fighterScroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
   @media (max-width: 1100px) {
     .wrap { flex-direction: column; height: auto; }
     .col { width: auto; flex: none; border-left: none; border-top: 1px solid var(--line); }
     .arena { min-height: 60vh; }
+  }
+  /* Wide, non-floating pre-float measuring pass (#323): collapse the Selected-
+     character column to zero so map/log/control/tracker measure exactly as they did
+     before this panel existed. JS overrides its default geometry (a split of the
+     tracker column) right after measuring. Once floating, this no longer applies. */
+  @media (min-width: 1101px) {
+    .wrap:not(.floating) > .fighter { flex: 0 0 0; width: 0; padding: 0;
+                                      overflow: hidden; border-left: 0; }
   }
   /* Draggable panels (#319, Stage 1: move-only). Each panel carries a
      .panel-titlebar drag grip; JS measures today's flex geometry as the default,
@@ -221,6 +233,7 @@
   .charsheet .sheet-vitals { font-size: 13px; }
   .charsheet .sheet-sub { margin-top: 6px; color: var(--muted); font-size: 11px;
                           text-transform: uppercase; letter-spacing: .5px; }
+  .charsheet .sheet-attrs { font-size: 13px; }
   .charsheet .sheet-weapons { margin: 2px 0 0; padding-left: 18px; font-size: 13px; }
   .charsheet .sheet-weapons li { padding: 1px 0; }
   .charsheet .sheet-weapons .readied { color: var(--gold); font-weight: 600; }
@@ -313,20 +326,22 @@
   #controls .warnline { color: var(--target); font-size: 12.5px; margin-top: 8px; }
   #controls .warnline.clickable { cursor: pointer; text-decoration: underline dotted; }
   #controls .warnline.clickable:hover { filter: brightness(1.25); }
-  #editor, #setup, #admin, #liveEdit { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
+  #editor, #setup, #admin { display: none; position: fixed; inset: 0; background: #0009; z-index: 50;
             flex-direction: column; align-items: center; overflow: auto; }
-  #editor, #admin, #liveEdit { z-index: 55; }   /* opens on top of the setup panel */
-  #editorBox, #setupBox, #adminBox, #liveEditBox { background: var(--panel); border: 1px solid var(--line);
+  #editor, #admin { z-index: 55; }   /* opens on top of the setup panel */
+  #editorBox, #setupBox, #adminBox { background: var(--panel); border: 1px solid var(--line);
                border-radius: 10px; margin: 24px; padding: 16px 18px; width: min(700px, 94vw); }
-  #editorRoster .card, #liveEditSlot .card { border: 1px solid var(--line); border-radius: 8px;
+  /* The chargen editor card, shared by the setup wizard and the admin-only inline
+     fighter editor that lives in the Selected-character panel (#323). */
+  #editorRoster .card, #selInfo .card { border: 1px solid var(--line); border-radius: 8px;
                         padding: 10px 12px; margin: 8px 0; }
   #editor input, #editor select, #admin input,
-  #liveEdit input, #liveEdit select { background: color-mix(in srgb, var(--ink) 8%, var(--panel)); color: var(--ink);
+  #selInfo .card input, #selInfo .card select { background: color-mix(in srgb, var(--ink) 8%, var(--panel)); color: var(--ink);
     border: 1px solid var(--line); border-radius: 5px; padding: 3px 5px; margin: 1px; }
-  #editor label, #liveEdit label { white-space: nowrap; }
-  /* The live-edit Apply button sits at full width so it is always obvious and
-     reachable inside the modal (#181). */
-  #liveEditSlot .card button.primary { display: block; width: 100%; margin-top: 12px;
+  #editor label, #selInfo .card label { white-space: nowrap; }
+  /* The inline-edit Apply button sits at full width so it is always obvious and
+     reachable inside the Selected-character panel (#181/#323). */
+  #selInfo .card button.primary { display: block; width: 100%; margin-top: 12px;
     padding: 11px 14px; font-size: 1.02rem; }
   .adminRow { display: flex; align-items: center; gap: 8px; padding: 3px 0;
               border-bottom: 1px solid var(--line); }
@@ -523,7 +538,15 @@
     <div class="trackerScroll">
       <div class="seclabel">Characters</div>
       <div class="pad roster" id="roster"></div>
-      <div class="seclabel">Selected character</div>
+    </div>
+  </aside>
+  <!-- Fifth column: the Selected-character panel (#323). Its own draggable/
+       resizable window holding the read-only sheet / admin inline edit card
+       (#selInfo) above the pinned turn-flow controls (#controls). The ids are
+       reused so drawSelInfo / drawControls / showPreGame keep working unchanged. -->
+  <aside class="col fighter">
+    <div class="panel-titlebar"><span class="tb-label">Selected character</span></div>
+    <div class="fighterScroll">
       <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
     </div>
     <div class="pad" id="controls"></div>
@@ -559,16 +582,6 @@
     <div id="adminChars"></div>
     <div style="margin-top:10px">
       <button onclick="closeAdmin()">Close</button>
-    </div>
-  </div>
-</div>
-<div id="liveEdit">
-  <div id="liveEditBox">
-    <div class="banner">Edit fighter</div>
-    <div class="muted" id="liveEditSub">Change this fighter's stats and gear, then apply the change to the live game.</div>
-    <div id="liveEditSlot"></div>
-    <div style="margin-top:8px">
-      <button onclick="closeLiveEdit()">Close</button>
     </div>
   </div>
 </div>

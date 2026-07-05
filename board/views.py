@@ -1359,6 +1359,12 @@ def _authorize_action(game: dict, request, body: dict) -> None:
     seats = game.get("seats")
     if not seats:
         return
+    # A live figure re-spec is admin-only (#323): regular players build their
+    # fighters pre-game via new_custom and never drive update_figure on a running
+    # game. This mirrors the client gate (canEditInline = IS_ADMIN) and hardens the
+    # endpoint the same way #244/#257 gated the other per-figure writes.
+    if body.get("type") == "update_figure" and not _is_admin(request):
+        raise Forbidden("only an admin may edit a figure mid-game")
     if _is_admin(request):
         return
     mine = _owned_sides(game, request)
