@@ -73,6 +73,7 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "hth_opponents": figure.hth_opponents,
         "shield": figure.shield.name if figure.shield_ready else None,
         "dodging": figure.dodging,
+        "defending": figure.defending,
         "dead": figure.is_dead,
         "collapsed": figure.collapsed,
         "engaged": state.engaged(figure) if figure.can_act() else False,
