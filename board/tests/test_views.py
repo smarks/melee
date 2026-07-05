@@ -613,6 +613,45 @@ def test_update_figure_preserves_fight_state(client: Client) -> None:
         del GAMES["fight-test"]
 
 
+def test_update_figure_preserves_tarmar_fumble_state() -> None:
+    # #309: §7 fumble state is cross-turn fight state — off_balance is set on a
+    # fumble and spent on the NEXT attack, and a stressed weapon stays stressed
+    # until re-readied — so a mid-fight re-spec must keep it, like the rest of the
+    # running-fight state. Pre-fix the Tarmar rebuild copied only fatigue/body and
+    # let both fields reset to chargen defaults, silently erasing the fumble penalty.
+    from engine import chargen
+    from engine.arena import Arena
+    from engine.profile import PROFILES
+    from engine.state import GameState
+    from engine.tarmar import TarmarFigure
+    from hexarena.hex import Hex
+
+    from board.views import GAMES, _update_figure
+
+    spec = {"name": "Fumbler", "side": "red", "weapon": "Broadsword",
+            "weapon2": "None", "armor": "Leather", "shield": "Small shield",
+            "strength": 12, "dexterity": 12, "intelligence": 10, "wisdom": 10,
+            "constitution": 10, "charisma": 10, "skill": 2, "skill2": 0}
+    fighter = chargen.build("Tarmar", spec)
+    assert isinstance(fighter, TarmarFigure)
+    fighter.uid, fighter.position = "fumbler", Hex(2, 2)
+    fighter.off_balance = True                             # fumbled last turn (§7)
+    fighter.stressed_weapons.add("Broadsword")
+
+    arena = Arena(cols=9, rows=9)
+    GAMES["fumble-test"] = {
+        "state": GameState(arena, [fighter], ruleset=PROFILES["Tarmar"].ruleset),
+        "profile": "Tarmar"}
+    try:
+        _update_figure(GAMES["fumble-test"], "fumbler", {**spec, "armor": "None"})
+        rebuilt = GAMES["fumble-test"]["state"].figures[0]
+        assert rebuilt is not fighter                      # a genuine rebuild happened
+        assert rebuilt.off_balance is True                # #309: penalty survives the edit
+        assert "Broadsword" in rebuilt.stressed_weapons   # stressed weapon stays stressed
+    finally:
+        del GAMES["fumble-test"]
+
+
 def test_catalog_endpoint_lists_legal_choices(client: Client) -> None:
     data = client.get("/api/catalog?profile=Tarmar").json()
     assert data["stat_rules"]["model"] == "tarmar"
@@ -1784,11 +1823,85 @@ def test_update_figure_rebinds_queued_attack_references(client: Client) -> None:
 
 
 # ---- per-game mutation lock serializes concurrent requests (#253) ------------
-def test_game_lock_is_stable_per_gid() -> None:
+def test_game_lock_gives_mutual_exclusion_and_prunes_its_entry() -> None:
+    # #253 + #302: the per-game lock still gives per-gid mutual exclusion, but the
+    # registry no longer leaks — a gid's entry lives only while a holder is inside
+    # its critical section and is dropped the moment the last holder releases it.
     from board.views import _game_lock
 
-    assert _game_lock("gid-a") is _game_lock("gid-a")       # same lock every time
-    assert _game_lock("gid-a") is not _game_lock("gid-b")   # distinct per game
+    with _game_lock("gid-a"):
+        live_lock = _game_lock._locks["gid-a"]              # the entry exists while held
+        assert live_lock.locked()
+        assert live_lock.acquire(blocking=False) is False   # same gid can't be re-entered
+    # Released -> the entry is pruned, so it can't accumulate one-per-gid forever.
+    assert "gid-a" not in _game_lock._locks
+    assert "gid-a" not in _game_lock._holders
+
+
+def test_lock_registry_stays_bounded_across_many_distinct_gids() -> None:
+    # #302: the old registry minted a permanent Lock for ANY gid it was ever asked
+    # about (nonexistent, pre-auth gids included) and never freed one, reintroducing
+    # the unbounded-registry DoS the bounded GAMES store was built to prevent. The
+    # refcounted registry returns to empty after each serial use, whatever the gid.
+    from board.views import _game_lock
+
+    for index in range(200):
+        with _game_lock(f"ghost-{index}"):
+            pass
+    assert len(_game_lock._locks) == 0                       # bounded — nothing leaks
+    assert len(_game_lock._holders) == 0
+
+
+@pytest.mark.django_db
+def test_hitting_nonexistent_gids_leaves_no_locks_behind(client: Client) -> None:
+    # #302 end to end: an unauthenticated client enumerating distinct nonexistent
+    # gids used to mint a permanent lock each (the api_state path takes the lock
+    # BEFORE the existence check). The refcounted registry must be empty afterward.
+    from board.views import _game_lock
+
+    locks_before = len(_game_lock._locks)
+    for index in range(50):
+        response = client.get(f"/api/game/ghost-{index}")
+        assert response.status_code == 404
+    assert len(_game_lock._locks) == locks_before            # no per-gid leak
+
+
+def test_options_and_load_reload_under_the_per_game_lock(client: Client, monkeypatch) -> None:
+    # #305: api_options and api_game_load reload an evicted game via _resident_game,
+    # a check-then-act that must run under the per-game lock (like api_state) so a
+    # reload can't race a concurrent locked action and overwrite fresh state with a
+    # stale copy. Assert the gid's lock is actually held while _resident_game runs.
+    from django.contrib.auth.models import AnonymousUser
+    from django.test import RequestFactory
+
+    from board import views
+
+    data = _new(client)
+    gid = data["gid"]
+    active = data["state"]["active_uid"]
+
+    original_resident = views._resident_game
+    lock_held_during_reload: dict[str, bool] = {}
+
+    def resident_recording_lock_state(the_gid: str):
+        live_lock = views._game_lock._locks.get(the_gid)
+        lock_held_during_reload[the_gid] = live_lock is not None and live_lock.locked()
+        return original_resident(the_gid)
+
+    monkeypatch.setattr(views, "_resident_game", resident_recording_lock_state)
+    factory = RequestFactory()
+
+    load_request = factory.get(f"/api/game/{gid}/load")
+    load_request.user = AnonymousUser()
+    lock_held_during_reload.clear()
+    views.api_game_load(load_request, gid)
+    assert lock_held_during_reload[gid] is True             # load reloads under the lock
+
+    options_request = factory.get(f"/api/game/{gid}/options?uid={active}")
+    options_request.user = AnonymousUser()
+    lock_held_during_reload.clear()
+    views.api_options(options_request, gid)
+    assert lock_held_during_reload[gid] is True             # options reloads under the lock
 
 
 def test_concurrent_actions_on_one_game_are_serialized(client: Client, monkeypatch) -> None:

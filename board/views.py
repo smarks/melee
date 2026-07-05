@@ -18,6 +18,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Iterator, MutableMapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from django.contrib.auth import get_user_model
@@ -146,19 +147,54 @@ GAMES: BoundedGameStore = BoundedGameStore()
 # views. Lock ordering is fixed: a request takes the per-game lock FIRST, then any
 # GAMES access (which briefly takes the store RLock) happens inside it — nothing
 # ever grabs a per-game lock while holding the store lock, so the two can't
-# deadlock. The lock registry is itself guarded by a dedicated lock.
-_GAME_LOCKS: dict[str, threading.Lock] = {}
-_GAME_LOCKS_GUARD = threading.Lock()
+# deadlock.
+class _PerGameLocks:
+    """Reference-counted per-gid mutation locks (#253) that can't leak (#302).
+
+    A gid's lock is minted on first concurrent use and dropped the moment its
+    last holder releases it, so the registry is bounded by the number of
+    *in-flight* requests, never by the number of distinct gids ever seen. An
+    earlier design kept one permanent lock per gid string it was ever asked
+    about — including nonexistent, pre-auth gids — which reintroduced the exact
+    unbounded-registry DoS the bounded :class:`BoundedGameStore` was built to
+    prevent (an attacker enumerating gids inflated the table forever). With
+    refcounting the table never outgrows live concurrency: hitting N distinct
+    nonexistent gids in sequence leaves nothing behind.
+
+    The registry bookkeeping is guarded by a dedicated lock. The per-gid lock
+    itself is acquired OUTSIDE that guard (never block while holding the guard),
+    preserving the fixed lock ordering: per-game lock first, then any GAMES
+    access.
+    """
+
+    def __init__(self) -> None:
+        self._locks: dict[str, threading.Lock] = {}
+        self._holders: dict[str, int] = {}
+        self._guard = threading.Lock()
+
+    @contextmanager
+    def __call__(self, gid: str) -> Iterator[None]:
+        with self._guard:
+            lock = self._locks.get(gid)
+            if lock is None:
+                lock = threading.Lock()
+                self._locks[gid] = lock
+                self._holders[gid] = 0
+            self._holders[gid] += 1
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+            with self._guard:
+                self._holders[gid] -= 1
+                if self._holders[gid] == 0:
+                    del self._holders[gid]
+                    del self._locks[gid]
 
 
-def _game_lock(gid: str) -> threading.Lock:
-    """The stable per-game mutation lock for ``gid`` (created on first use, #253)."""
-    with _GAME_LOCKS_GUARD:
-        lock = _GAME_LOCKS.get(gid)
-        if lock is None:
-            lock = threading.Lock()
-            _GAME_LOCKS[gid] = lock
-        return lock
+# Callable that yields ``with _game_lock(gid):`` (created on first use, #253).
+_game_lock = _PerGameLocks()
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -1158,19 +1194,30 @@ def api_figure_advance(request, gid, uid):
 
 def api_game_load(request, gid):
     """Load a saved game on demand, reconstructing it into the live registry."""
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
-    payload = _payload(game)
-    payload["gid"] = gid
-    payload["you_control"] = sorted(_owned_sides(game, request))
-    return JsonResponse(payload)
+    # Under the per-game lock so the load-on-demand reload can't race a concurrent
+    # locked action and write a stale copy over freshly-persisted state (#305).
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        payload = _payload(game)
+        payload["gid"] = gid
+        payload["you_control"] = sorted(_owned_sides(game, request))
+        return JsonResponse(payload)
 
 
 def api_options(request, gid):
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
+    # Under the per-game lock for symmetry with api_state: the load-on-demand
+    # reload inside _resident_game is a check-then-act that must not race a
+    # concurrent locked action reloading/persisting the same gid (#305).
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        return _options_payload(request, game, gid)
+
+
+def _options_payload(request, game: dict, gid: str) -> JsonResponse:
     state: GameState = game["state"]
     uid = request.GET.get("uid", "")
     try:
@@ -1734,6 +1781,12 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
         rebuilt.fatigue_roll = figure.fatigue_roll
         rebuilt.fatigue_taken = min(figure.fatigue_taken, rebuilt.fatigue)
         rebuilt.body_taken = min(figure.body_taken, rebuilt.body)
+        # §7 fumble state is cross-turn fight state (off_balance is set on a fumble
+        # and spent on the NEXT attack, a stressed weapon stays stressed until
+        # re-readied), so it must survive a mid-fight re-spec like the rest of the
+        # running-fight state — not silently reset to chargen defaults (#309).
+        rebuilt.off_balance = figure.off_balance
+        rebuilt.stressed_weapons = set(figure.stressed_weapons)
     state.figures[state.figures.index(figure)] = rebuilt
 
     # A mid-combat edit swaps the Figure object, but a queued attack holds direct
