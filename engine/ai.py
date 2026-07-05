@@ -383,6 +383,14 @@ def _disengage_step(state: GameState, figure: Figure) -> None:
 def queue_attacks(state: GameState, side: str) -> None:
     """Declare attacks for every figure on ``side`` that chose an attack option."""
     for figure in [f for f in state.figures if f.side == side and f.can_act()]:
+        if figure.attacked_this_turn:
+            # This figure has already spent its one attack this turn, so there is
+            # nothing left to queue. It happens when a bare-handed foe grappled it
+            # earlier in THIS combat phase and its defense roll was a 6: the rules
+            # give the defender an automatic free hit (p.17), which counts as its
+            # attack. Queuing the attack it had selected would be a second attack
+            # the engine correctly rejects — don't ask for it (#295).
+            continue
         if (figure.current_option == Option.DISENGAGE
                 and not figure.attacked_this_turn):
             # A figure that chose to break away (option n) moves instead of

@@ -243,6 +243,26 @@ def test_seed_239_disarmed_engaged_ai_rearms_by_pickup() -> None:
     _play_one_game(profile, arena, figures, 239)
 
 
+def test_seed_416_free_hit_defender_not_double_attacked() -> None:
+    """Regression for #295: the AI never queues a second attack for a figure that
+    already delivered an automatic free hit this turn.
+
+    At Classic seed 416 a bare-handed (fumble-disarmed) figure grapples a foe
+    during the combat phase; the defender's 1d6 defense roll is a 6, so the rules
+    grant it an automatic free hit (p.17) — which counts as its attack and sets
+    ``attacked_this_turn``. That foe had also SELECTED a shift-attack this turn, so
+    when its own side's :func:`engine.ai.queue_attacks` pass reached it the AI
+    asked the engine to queue that shift-attack too. The one-attack-per-turn guard
+    (#76) rightly rejected the second attack, raising ``IllegalAction`` and
+    crashing the game. The fix has ``queue_attacks`` skip any figure that has
+    already attacked this turn. This full-game replay raised before the fix and
+    runs clean after."""
+    profile, arena, figures = _game_for_seed(416)
+    assert profile.name == CLASSIC.name, "seed 416 must select the Classic profile"
+    # Must complete without raising IllegalAction (the AI no longer double-queues).
+    _play_one_game(profile, arena, figures, 416)
+
+
 @pytest.mark.slow
 def test_soak_large_sweep() -> None:
     """A much larger sweep for local confidence (run with ``-m slow``)."""
