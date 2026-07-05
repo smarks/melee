@@ -2220,9 +2220,17 @@ const LAYOUT_PANELS = [
   {key: "map",     selector: ".arena",     label: "Map"},
   {key: "log",     selector: ".logcol",    label: "Game status"},
   {key: "control", selector: "#gameControl", label: "Game Control"},
-  {key: "tracker", selector: ".tracker",   label: "Characters"},
-  {key: "fighter", selector: ".fighter",   label: "Selected character"},
+  // The tracker (roster) and fighter (sheet + controls) share one column, split
+  // top/bottom (#323). They default to "manual" (a fixed, bounded slot that scrolls
+  // internally) rather than "content": a content-mode roster auto-grows to its full
+  // height and, stacked above the fighter, would overflow and cover the fighter's
+  // click targets (and vice-versa). Bounding both keeps the two-pane split stable.
+  {key: "tracker", selector: ".tracker",   label: "Characters", defaultMode: "manual"},
+  {key: "fighter", selector: ".fighter",   label: "Selected character", defaultMode: "manual"},
 ];
+// A panel's out-of-the-box sizing mode: "content" (auto-fit to content) unless the
+// registry pins it to a fixed slot (the split tracker/fighter, #323).
+const defaultModeFor = panel => panel.defaultMode || "content";
 const LAYOUT_NARROW = window.matchMedia("(max-width: 1100px)");
 let DEFAULT_LAYOUT = null;             // {key: {x,y,w,h}} measured once from flex
 let layoutZTop = LAYOUT_Z_BASE;        // monotonic front-most z within the band
@@ -2275,7 +2283,7 @@ function mergeLayout(defaults, saved) {
     merged[panel.key] = {
       x: numberOr(over.x, base.x), y: numberOr(over.y, base.y),
       w: numberOr(over.w, base.w), h: numberOr(over.h, base.h),
-      mode: LAYOUT_MODES.has(over.mode) ? over.mode : "content",
+      mode: LAYOUT_MODES.has(over.mode) ? over.mode : defaultModeFor(panel),
       restoreGeom: sanitizeRestore(over.restoreGeom),
     };
   }
@@ -2684,10 +2692,10 @@ function resetLayout() {
   if (layoutStacked()) return;   // stacked flow IS the default; nothing to place
   for (const panel of LAYOUT_PANELS) {
     panel.restore = null;
-    setMode(panel, "content");                        // default mode, per #321
+    setMode(panel, defaultModeFor(panel));            // default mode, per #321/#323
     applyGeom(panel, DEFAULT_LAYOUT[panel.key]);
     panel.el.style.zIndex = LAYOUT_Z_BASE;
-    fitPanel(panel);
+    if (panel.mode === "content") fitPanel(panel);    // manual panels keep their slot
   }
 }
 
@@ -2749,7 +2757,7 @@ function initLayout() {
     w: trackerDefault.w, h: trackerDefault.h - rosterHeight,
   };
   for (const panel of LAYOUT_PANELS) {
-    panel.mode = "content";
+    panel.mode = defaultModeFor(panel);
     panel.restore = null;
     buildPanelChrome(panel);
     panel.handle.addEventListener("pointerdown", event => onPanelPointerDown(panel, event));
