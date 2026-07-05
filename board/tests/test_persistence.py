@@ -392,3 +392,46 @@ def test_giant_and_gargoyle_quirks_round_trip() -> None:
         persistence._figure_to_json(gargoyle))
     assert restored_gargoyle.fly_movement_allowance == 16
     assert restored_gargoyle.flying is True
+
+
+def test_dropped_non_catalog_weapon_round_trips() -> None:
+    """#303: a dropped non-catalog (monster) weapon must survive save/load.
+
+    Dropped weapons were serialized by name only and restored via
+    ``WEAPONS[name]``, so a monster's ad-hoc natural attack (never in the
+    catalog) KeyError'd on reload -- and since autosave persists after every
+    action (#276), that permanently orphaned the game. Reproduces the reload
+    crash: fails pre-fix, passes post-fix."""
+    from engine.monsters import create_monster
+
+    state = _two_figure_game("Classic Melee")
+    giant = create_monster("Giant", "Grond", "a")
+    dropped_weapon = giant.ready_weapon               # non-catalog "Spiked club"
+    assert dropped_weapon.name not in WEAPONS
+    state.dropped.append((Hex(5, 5), dropped_weapon))
+
+    # Full JSON round-trip must not raise KeyError on the non-catalog weapon.
+    blob = json.dumps(persistence.state_to_json(state))
+    restored = persistence.state_from_json(json.loads(blob))
+
+    assert len(restored.dropped) == 1
+    restored_hex, restored_weapon = restored.dropped[0]
+    assert (restored_hex.col, restored_hex.row) == (5, 5)
+    assert restored_weapon.name == "Spiked club"
+    assert restored_weapon.damage == dropped_weapon.damage
+    assert restored_weapon.hth_damage == dropped_weapon.hth_damage
+
+
+def test_dropped_weapons_use_the_same_serializer_as_carried() -> None:
+    """Drift guard (#303): the dropped list must serialize each weapon through
+    the same by-value helper carried weapons use, so a non-catalog weapon keeps
+    round-tripping. Catalog weapons still serialize to a bare name string."""
+    state = _two_figure_game("Classic Melee")
+    state.dropped.append((Hex(2, 2), WEAPONS["Dagger"]))
+
+    payload = persistence.state_to_json(state)
+    dropped_entry = payload["dropped"][0]
+
+    # A catalog weapon collapses to the same value _weapon_to_json produces.
+    assert dropped_entry["weapon"] == persistence._weapon_to_json(WEAPONS["Dagger"])
+    assert dropped_entry["weapon"] == "Dagger"

@@ -411,7 +411,8 @@ def state_to_json(state: GameState) -> dict:
         "dice_scripted": list(state.dice._scripted),
         "figures": [_figure_to_json(figure) for figure in state.figures],
         "dropped": [
-            {"col": hex_pos.col, "row": hex_pos.row, "weapon": weapon.name}
+            {"col": hex_pos.col, "row": hex_pos.row,
+             "weapon": _weapon_to_json(weapon)}
             for hex_pos, weapon in state.dropped
         ],
         "pending": [_pending_to_json(pending) for pending in state._pending],
@@ -436,7 +437,7 @@ def state_from_json(data: dict) -> GameState:
     if data.get("victory_announced"):
         state._victory_announced = True
     state.dropped = [
-        (Hex(entry["col"], entry["row"]), WEAPONS[entry["weapon"]])
+        (Hex(entry["col"], entry["row"]), _weapon_from_json(entry["weapon"]))
         for entry in data.get("dropped", [])
     ]
     by_uid = {figure.uid: figure for figure in figures}
