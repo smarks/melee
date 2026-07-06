@@ -28,6 +28,16 @@ const myControlled = f => IS_ADMIN ? true
   : (S.controllers || {})[f.side] !== "computer";
 // A side driven by the AI (used by the Action panel's "computer is playing" state).
 const isComputerSide = side => (S.controllers || {})[side] === "computer";
+// #347: two SEPARATE gates. `myControlled` is EDIT/INSPECT reach — an admin may
+// edit any figure outside the rules (#86/#180), so it stays true for every figure
+// when IS_ADMIN. `myTurnActor` is the TURN-FLOW gate: "do I set this figure's
+// action this turn?" A computer-controlled side is ALWAYS auto-played by the AI
+// (server-side `_advance_computer`), so it is NEVER anyone's to act for — not even
+// an admin's. The Action panel therefore routes AI figures to the "computer is
+// playing" / auto-advance path while the admin keeps full edit reach. For a
+// non-admin the two coincide (myControlled is already false for computer sides),
+// so this only changes the admin case.
+const myTurnActor = f => myControlled(f) && !isComputerSide(f.side);
 function captureOwnership(data) {
   if ("you_control" in data) YOU_CONTROL = data.you_control || [];
   if ("open_seats" in data) OPEN_SEATS = data.open_seats || [];
@@ -724,8 +734,10 @@ function drawControls() {
     // line (no controls, no Resolve); a computer's turn (rarely reached -- the server
     // advances AI eagerly in api_action, not on poll) shows the "computer is playing"
     // line. Hotseat controls all human sides, so it never hits the waiting branch
-    // (myControlled is true), with no special-casing.
-    if (!myControlled(active)) {
+    // (myTurnActor is true), with no special-casing. #347: an admin is NOT the
+    // AI's actor even though it may edit AI figures, so an AI turn falls into the
+    // "computer is playing" branch for an admin too (myTurnActor excludes AI sides).
+    if (!myTurnActor(active)) {
       if (isComputerSide(active.side)) setHint("🤖 Computer is playing…");
       else setHint(`Waiting for <span class="chip ${active.side}">${sideName(active.side)}</span>`
                    + ` to set <b>${escapeHtml(active.name)}</b>'s action…`);
@@ -744,7 +756,7 @@ function drawControls() {
 
   if (phase === "combat") {
     const actionable = new Set(S.combat_actionable || []);
-    const actors = S.figures.filter(f => f.label && myControlled(f) && actionable.has(f.uid));
+    const actors = S.figures.filter(f => f.label && myTurnActor(f) && actionable.has(f.uid));
     const ready = new Set(S.combat_ready || []);
 
     // (#334) The "attacks resolved -> end the turn" state is SERVER-authoritative
@@ -780,7 +792,7 @@ function drawControls() {
     // resolved and the game bricks (#333): we fall through to render Resolve so this
     // human can drive resolve_combat, exactly as before the #326 split.
     const others = actors.length ? [] : S.figures.filter(
-      f => f.label && actionable.has(f.uid) && !myControlled(f));
+      f => f.label && actionable.has(f.uid) && !myTurnActor(f));
     const humanOther = others.find(
       f => !isComputerSide(f.side) && !OPEN_SEATS.includes(f.side) && !ready.has(f.side));
     if (humanOther) {
@@ -895,7 +907,7 @@ function figureChecklist(c, figs) {
 function drawForceRetreat(c) {
   const opts = (S.force_retreat_options || []).filter(o => {
     const attacker = figByUid(o.attacker);
-    return attacker && myControlled(attacker);
+    return attacker && myTurnActor(attacker);
   });
   if (!opts.length) return;
   const head = document.createElement("div");
@@ -1200,15 +1212,16 @@ async function onFigureClick(f) {
   // is always allowed -- theirs or an enemy's (#214). ACTING stays gated: the
   // action menu only opens for your own actionable figure. So a figure you can't
   // command is simply inspected, not flashed away.
-  const tag = {uid: f.uid, name: f.name, side: f.side, myControlled: myControlled(f), phase: S.phase};
+  const tag = {uid: f.uid, name: f.name, side: f.side, myControlled: myControlled(f),
+               actFor: myTurnActor(f), phase: S.phase};
   if (S.phase === "select") {
-    if (!isActive(f) || !myControlled(f)) { dbg("INTERACT", `figure click ${f.name} → inspect`, tag); inspectFigure(f); return; }
+    if (!isActive(f) || !myTurnActor(f)) { dbg("INTERACT", `figure click ${f.name} → inspect`, tag); inspectFigure(f); return; }
     dbg("INTERACT", `figure click ${f.name} → open-menu`, tag);
     sel = f.uid; chosenOption = null; pendingDest = null; pendingFacing = f.facing; pendingReady = null;
     optInfo = await loadOptions(f);
     render(); openMenu(f);
   } else if (S.phase === "combat") {
-    if (!myControlled(f)) {
+    if (!myTurnActor(f)) {
       // #220: a foe click is the natural "pick the target" gesture. If you have a
       // committed shooter still awaiting a target (the must-attack gate), aim its
       // shot at this foe so Resolve can clear — otherwise just inspect the foe.
@@ -1237,7 +1250,7 @@ async function queuePendingShotAt(enemy) {
   if (!S || S.phase !== "combat" || combatResolvedTurn === S.turn) return false;
   const mustAttack = new Set(S.must_attack || []);
   const pending = S.figures.filter(
-    f => myControlled(f) && mustAttack.has(f.uid) && !PLAN[f.uid]);
+    f => myTurnActor(f) && mustAttack.has(f.uid) && !PLAN[f.uid]);
   for (const shooter of pending) {
     const info = await loadOptions(shooter);
     if ((info._targets || []).includes(enemy.uid)) {
@@ -1265,7 +1278,7 @@ async function maybeAutoTarget() {
   if (!S || S.phase !== "combat" || combatResolvedTurn === S.turn) return;
   const mustAttack = new Set(S.must_attack || []);
   const pending = S.figures.filter(
-    f => myControlled(f) && mustAttack.has(f.uid) && !PLAN[f.uid]);
+    f => myTurnActor(f) && mustAttack.has(f.uid) && !PLAN[f.uid]);
   if (!pending.length) return;
   _autoTargetBusy = true;
   let queued = false;
@@ -1318,8 +1331,8 @@ function scheduleHoverClose() {
 }
 function hoverActionable(f) {
   if (!S || S.victory || chosenOption) return false;   // not mid-placement
-  if (S.phase === "select") return isActive(f) && !!f.can_act && myControlled(f);
-  if (S.phase === "combat") return myControlled(f) && !!f.can_act;
+  if (S.phase === "select") return isActive(f) && !!f.can_act && myTurnActor(f);
+  if (S.phase === "combat") return myTurnActor(f) && !!f.can_act;
   return false;
 }
 async function onFigureHover(f) {
@@ -1581,8 +1594,8 @@ function planLine(f) {
     return `<div style="margin-top:8px" class="muted">Action set: <b>${optLabel(f.option)}</b></div>`;
   if (S.phase === "select" && hasPassed(f) && !f.acted)
     return `<div style="margin-top:8px" class="muted">Passed — waiting to choose last.</div>`;
-  if ((S.phase === "select" && isActive(f) && myControlled(f) && f.can_act) ||
-      (S.phase === "combat" && myControlled(f) && f.can_act))
+  if ((S.phase === "select" && isActive(f) && myTurnActor(f) && f.can_act) ||
+      (S.phase === "combat" && myTurnActor(f) && f.can_act))
     return `<div style="margin-top:8px" class="muted">Click this counter on the board for its options.</div>`;
   return "";
 }
@@ -1620,11 +1633,11 @@ function figActionHtml(f) {
   if (S.phase === "select") {
     if (f.acted) return `<span class="action">${escapeHtml(optLabel(f.option))}</span>`;
     if (hasPassed(f)) return `<span class="action passed">Passed — waiting</span>`;
-    if (isActive(f) && myControlled(f) && !f.dead)
+    if (isActive(f) && myTurnActor(f) && !f.dead)
       return `<span class="action todo">choose action</span>`;
     return `<span class="action idle">—</span>`;
   }
-  const canFight = S.phase === "combat" && myControlled(f) && f.can_act;
+  const canFight = S.phase === "combat" && myTurnActor(f) && f.can_act;
   if (canFight && !f.dead) return `<span class="action todo">choose action</span>`;
   return `<span class="action idle">—</span>`;
 }
@@ -1643,7 +1656,7 @@ function figControlsHtml(f) {
   // block; once it comes up last to choose, isActive is true and it gets the
   // enabled block again (with Pass disabled -- it's already deferred).
   if (hasPassed(f) && !isActive(f)) return "";
-  const enabled = isActive(f) && myControlled(f);
+  const enabled = isActive(f) && myTurnActor(f);
   // Mid-placement: the active figure that chose a destination-requiring option
   // shows its placement confirm right here, under its own row -- reach hexes light
   // up on the board and Set action sits inches from the counter, not in a distant
@@ -1729,7 +1742,7 @@ function placementInnerHtml(f) {
 // once (like the board popup's do_nothing/pass did); destination-requiring ones
 // enter the inline placement step (reach hexes on the board + Set action here).
 function onInlineOption(f, option) {
-  if (!isActive(f) || !myControlled(f)) return;
+  if (!isActive(f) || !myTurnActor(f)) return;
   optInfo = optCache[f.uid] || optInfo;      // reach data for placement + drawArena
   sel = f.uid;
   if (option === "do_nothing") selectDoNothing(f);
@@ -1755,7 +1768,7 @@ let activeOptsBusy = null;
 async function ensureActiveOptions() {
   if (!S || S.phase !== "select" || S.victory) return;
   const active = S.active_uid ? figByUid(S.active_uid) : null;
-  if (!active || active.dead || !myControlled(active)) return;
+  if (!active || active.dead || !myTurnActor(active)) return;
   if (optCache[active.uid] || activeOptsBusy === active.uid) return;
   activeOptsBusy = active.uid;
   await loadOptions(active);
