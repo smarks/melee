@@ -267,33 +267,89 @@ def test_editor_readied_weapon_choice_starts_that_weapon_in_hand(
     assert picked["weapon"] == melee_weapon
 
 
+def _login_admin(context, live_server, django_user_model, username: str):
+    """Plant an admin session cookie so the board SPA loads already authenticated
+    as a staff account (the same trick as test_admin_ui)."""
+    from django.test import Client as DjangoClient
+
+    boss = django_user_model.objects.create_user(
+        username=username, password="boss-pass-123", is_staff=True)
+    django_client = DjangoClient()
+    django_client.force_login(boss)
+    context.add_cookies([{
+        "name": "sessionid",
+        "value": django_client.cookies["sessionid"].value,
+        "url": live_server.url,
+    }])
+    return boss
+
+
 @pytest.mark.django_db
-def test_live_fighter_editor_opens_in_a_modal(live_server, page: Page) -> None:
-    # #181: editing a fighter mid-game happens in a first-class modal whose Apply
-    # button is always reachable -- not crammed into the bottom corner panel where
-    # it used to be clipped.
+def test_admin_edits_a_fighter_inline_and_it_applies(
+        live_server, context, page: Page, django_user_model) -> None:
+    # #323: editing a fighter mid-game now happens INLINE in the Selected-character
+    # panel (the old #liveEdit modal is gone), and only an admin may do it. The admin
+    # selects a fighter, edits a stat in the inline card, and Apply writes it live.
+    _login_admin(context, live_server, django_user_model, "gm")
     page.goto(live_server.url)
-    # A hot-seat game so the viewer owns -- and so may edit -- every fighter.
+    _start_inline_game(page, human=True)
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    assert page.locator("#liveEdit").count() == 0, "the old live-edit modal must be gone"
+
+    # Inspect a non-active fighter (clicking the active one opens the action menu).
+    page.locator("#roster .row:not(.active)").first.click()
+    card = page.locator("#selInfo .card")
+    expect(card).to_be_visible(timeout=10_000)          # the admin gets the inline card
+    apply = card.get_by_role("button", name="Apply to game")
+    expect(apply).to_be_visible()
+
+    # Edit the strength stat outside the point budget (admin rules-bypass) and apply.
+    card.locator('input[data-stat="strength"]').fill("30")
+    apply.click()
+
+    # The live figure's read-only sheet now reports the new ST.
+    expect(page.locator("#selInfo .charsheet .sheet-vitals")).to_contain_text(
+        "ST 30/30", timeout=10_000)
+
+
+@pytest.mark.django_db
+def test_admin_inline_edit_survives_a_re_render(
+        live_server, context, page: Page, django_user_model) -> None:
+    # Poll-clobber guard (#323): while an inline edit card is mounted for a figure,
+    # a re-render (the 2s poll, or re-selecting the same figure) must NOT rebuild the
+    # card and drop the admin's in-progress typing.
+    _login_admin(context, live_server, django_user_model, "gm2")
+    page.goto(live_server.url)
     _start_inline_game(page, human=True)
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
 
-    # Selecting a fighter from the tracker offers a prominent Edit button (the
-    # game's stat catalog loads asynchronously, so allow a moment).
-    page.locator("#roster .row").first.click()
-    edit = page.locator("#selInfo").get_by_role(
-        "button", name=re.compile("Edit this fighter"))
-    expect(edit).to_be_visible(timeout=10_000)
+    row = page.locator("#roster .row:not(.active)").first
+    row.click()
+    strength = page.locator('#selInfo .card input[data-stat="strength"]')
+    expect(strength).to_be_visible(timeout=10_000)
+    strength.fill("27")
 
-    # It opens a modal -- not the cramped corner panel -- with a reachable Apply.
-    edit.click()
-    modal = page.locator("#liveEdit")
-    expect(modal).to_be_visible()
-    apply = modal.get_by_role("button", name="Apply to game")
-    expect(apply).to_be_visible()
+    # Force a re-render by re-selecting the same figure; the guard keeps the live
+    # card (and the un-applied value) intact rather than rebuilding it.
+    row.click()
+    expect(page.locator("#selInfo .card")).to_have_count(1)
+    expect(strength).to_have_value("27")
 
-    # Applying the edit closes the modal, returning the player to the board.
-    apply.click()
-    expect(modal).to_be_hidden()
+
+@pytest.mark.django_db
+def test_regular_owner_has_a_read_only_selected_panel(live_server, page: Page) -> None:
+    # #323: a regular (non-admin) player -- even one who owns the fighter -- gets a
+    # full read-only sheet in play but NO inline edit card (they edit pre-game via
+    # the setup editor; the server also rejects a non-admin update_figure).
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)          # hot-seat: the viewer owns a side
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+
+    page.locator("#roster .row:not(.active)").first.click()
+    expect(page.locator("#selInfo .charsheet")).to_be_visible()
+    expect(page.locator("#selInfo .card")).to_have_count(0)
+    expect(page.locator("#selInfo").get_by_role(
+        "button", name="Apply to game")).to_have_count(0)
 
 
 @pytest.mark.django_db

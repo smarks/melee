@@ -22,12 +22,12 @@ from playwright.sync_api import Page, expect
 _SEED = 1
 
 
-def _new_game(page: Page, live_server) -> dict:
+def _new_game(page: Page, live_server, profile: str = "") -> dict:
     page.goto(live_server.url)   # a loaded page gives fetch() a base URL
-    created = page.evaluate(
-        "async (p) => await (await fetch(p)).json()",
-        f"/api/game/new?computer=blue&seed={_SEED}",
-    )
+    query = f"/api/game/new?computer=blue&seed={_SEED}"
+    if profile:
+        query += f"&profile={profile}"
+    created = page.evaluate("async (p) => await (await fetch(p)).json()", query)
     page.goto(f"{live_server.url}/game/{created['gid']}")
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
     return created
@@ -99,6 +99,43 @@ def test_clicking_own_non_active_figure_inspects_without_menu(
     expect(sheet.locator(".sheet-vitals")).to_contain_text(
         f"ST {own['st']}/{own['max_st']}")
     # Inspecting a non-active figure must not pop the action menu.
+    expect(page.locator("#tokenMenu")).to_be_hidden()
+
+
+@pytest.mark.django_db
+def test_tarmar_sheet_shows_the_full_attribute_set_and_skills(
+        live_server, page: Page) -> None:
+    # Decision 2 (#323): a Tarmar sheet surfaces the complete attribute spread for
+    # EVERY figure (opponents too) -- ST/DX plus IQ/WIS/CON/CHA -- and the trained
+    # skill per carried weapon. The non-owner (enemy) view stays read-only.
+    created = _new_game(page, live_server, profile="Tarmar")
+    figures = created["state"]["figures"]
+
+    enemy = next(f for f in figures
+                 if f["side"] == "blue" and f["label"] and f["weapon"])
+    assert enemy["model"] == "tarmar"
+
+    _row(page, enemy["uid"]).click()
+    sheet = page.locator("#selInfo .charsheet")
+    expect(sheet).to_be_visible()
+
+    # All six attributes are shown, read from the public wire fields.
+    attrs = sheet.locator(".sheet-attrs")
+    expect(attrs).to_contain_text(f"ST {enemy['max_st']}")
+    expect(attrs).to_contain_text(f"DX {enemy['dx']}")
+    expect(attrs).to_contain_text(f"IQ {enemy['intelligence']}")
+    expect(attrs).to_contain_text(f"WIS {enemy['wisdom']}")
+    expect(attrs).to_contain_text(f"CON {enemy['constitution']}")
+    expect(attrs).to_contain_text(f"CHA {enemy['charisma']}")
+
+    # The readied weapon lists its trained skill.
+    weapons = sheet.locator(".sheet-weapons")
+    expect(weapons).to_contain_text("skill")
+
+    # Non-owner view remains read-only: no inline edit card, no editor button.
+    expect(page.locator("#selInfo .card")).to_have_count(0)
+    expect(page.locator("#selInfo").get_by_role(
+        "button", name="Apply to game")).to_have_count(0)
     expect(page.locator("#tokenMenu")).to_be_hidden()
 
 

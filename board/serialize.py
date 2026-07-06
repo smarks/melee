@@ -6,7 +6,6 @@ geometry produced by :mod:`board.geometry`.
 """
 from __future__ import annotations
 
-from engine.facing import front_hexes
 from engine.figure import Figure
 from engine.state import GameState
 from engine.tarmar import TarmarFigure
@@ -111,6 +110,17 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         data["max_body"] = figure.body
         weapon = figure.ready_weapon
         data["skill"] = figure.weapon_skill.get(weapon.name, 0) if weapon else 0
+        # The full attribute spread + per-weapon skills, public for every figure so
+        # the read-only sheet is as complete for opponents as for your own (#323).
+        # These are display-only wire fields, distinct from the owner/admin edit_spec.
+        data["intelligence"] = figure.intelligence
+        data["wisdom"] = figure.wisdom
+        data["constitution"] = figure.constitution
+        data["charisma"] = figure.charisma
+        data["weapon_skills"] = {
+            carried.name: figure.weapon_skill.get(carried.name, 0)
+            for carried in figure.weapons
+        }
     return data
 
 
