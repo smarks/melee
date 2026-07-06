@@ -662,6 +662,90 @@ def test_panels_menu_brings_back_a_minimized_panel(live_server, page: Page) -> N
 
 
 @pytest.mark.django_db
+def test_chaining_minimize_then_maximize_keeps_the_manual_restore(
+        live_server, page: Page) -> None:
+    # #335: chaining the transient modes must NOT clobber a panel's saved restore
+    # geometry. Freeze the tracker at a known MANUAL size, Minimize it, then (while
+    # minimized) Maximize it -- the pre-fix code overwrote panel.restore with the
+    # transient {collapsed-titlebar, minimized} snapshot, so Restore returned the
+    # panel to the collapsed minimized state, not the user's manual size. With the
+    # fix the restore taken on Minimize (the manual geom) survives the Maximize, so
+    # Restore returns the panel to that manual size, expanded.
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    # Grow the tracker to a distinct manual size (grow height so Expand is an exact
+    # check and the roster scroll stays visible when expanded, mirroring #293's test).
+    _drag_handle(page, ".tracker", "se", -60, 60)
+    manual = _box(page, ".tracker")
+    titlebar = _box(page, ".tracker .panel-titlebar")
+
+    _ctl(page, ".tracker", "Minimize").click()
+    mini = _box(page, ".tracker")
+    assert mini["height"] <= titlebar["height"] + 4, "minimize did not collapse to the titlebar"
+
+    # Maximize while minimized (both buttons live in the always-visible titlebar).
+    _ctl(page, ".tracker", "Maximize").click()
+    wrap = _box(page, ".wrap")
+    maxed = _box(page, ".tracker")
+    assert maxed["height"] >= wrap["height"] - 4, "maximize did not fill the height"
+
+    # Restore must return to the MANUAL size the user set -- not the collapsed
+    # minimized geometry (the pre-fix bug), and the panel is expanded (scroll shown).
+    _ctl(page, ".tracker", "Restore").click()
+    back = _box(page, ".tracker")
+    assert abs(back["height"] - manual["height"]) < 6, (
+        "Restore did not return the panel to its manual height -- the chained "
+        f"Minimize->Maximize clobbered the saved restore (#335); got {back['height']}, "
+        f"want ~{manual['height']}")
+    assert abs(back["width"] - manual["width"]) < 6, "Restore lost the manual width"
+    assert back["height"] > titlebar["height"] + 20, "panel came back collapsed, not expanded"
+    expect(page.locator(".tracker .trackerScroll")).to_be_visible()
+
+
+@pytest.mark.django_db
+def test_narrow_load_then_widen_measures_correct_floating_defaults(
+        live_server, page: Page) -> None:
+    # #338: floating defaults must reflect the WIDE flex flow, not whatever CSS was
+    # active at load. Capture the reference defaults from a plain wide load, then
+    # load NARROW (stacked media query in force) and widen past the breakpoint. The
+    # pre-fix code measured DEFAULT_LAYOUT once at load -- while stacked, so every
+    # panel measured full-width at x~=0 -- and never re-measured, so widening flipped
+    # into floating with broken (piled, clipped) geometry. With the fix, defaults are
+    # measured the first time the app enters floating, so the widened layout matches
+    # the reference: panels laid out side-by-side at their design widths.
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+    reference_tracker = _box(page, ".tracker")
+    reference_map = _box(page, ".arena")
+    # A plain wide load lays the tracker out to the RIGHT of the map, at its design
+    # width -- the sanity the narrow-then-widen path must reproduce.
+    assert reference_tracker["x"] > reference_map["x"] + 100
+    page.evaluate("() => localStorage.clear()")
+
+    # Reload NARROW: below 1100px the app stays stacked (no floating, x-agnostic flow).
+    page.set_viewport_size({"width": 800, "height": 900})
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(0)
+
+    # Widen past the breakpoint -> the app flips into floating mode.
+    page.set_viewport_size({"width": 1440, "height": 900})
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    widened_tracker = _box(page, ".tracker")
+    widened_map = _box(page, ".arena")
+    # The floating layout is sane: the tracker is a right-hand column at its design
+    # width, NOT piled at x~=0 with the full narrow width (the pre-fix breakage).
+    assert widened_tracker["x"] > widened_map["x"] + 100, (
+        "after narrow->widen the tracker piled onto the map at x~=0 -- floating "
+        f"defaults were measured while stacked (#338); tracker.x={widened_tracker['x']}")
+    assert abs(widened_tracker["x"] - reference_tracker["x"]) < 3, (
+        "widened tracker x does not match the wide-load default (#338)")
+    assert abs(widened_tracker["width"] - reference_tracker["width"]) < 3, (
+        "widened tracker width does not match the wide-load default (#338)")
+
+
+@pytest.mark.django_db
 def test_resize_handle_is_present_and_grabbable(live_server, page: Page) -> None:
     # The resize grips are a real, grabbable hit area in floating mode (Stage 3
     # enlarged them). Grab the log's SE corner and confirm the drag resizes it.
