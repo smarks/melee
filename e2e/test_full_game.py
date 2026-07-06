@@ -53,7 +53,7 @@ def _advance_once(page: Page) -> bool:
         # The action list now lives inline under the active character (#202);
         # the active figure's block is the enabled one, and Do nothing is one of
         # its options (it submits immediately, lighting up the next figure).
-        hold = page.locator('#roster .charctl.enabled button[data-opt="do_nothing"]')
+        hold = page.locator('#controls .charctl.enabled button[data-opt="do_nothing"]')
         if hold.count() and hold.first.is_enabled():
             hold.first.click()
             return True
@@ -275,20 +275,20 @@ def _wait_active_options(page: Page, uid: str) -> None:
     """Wait until the active figure's inline action list has really loaded (its
     Do-nothing button is the tell -- the block shows 'Loading actions…' first)."""
     page.wait_for_selector(
-        f'#roster .charctl.enabled[data-ctl="{uid}"] button[data-opt="do_nothing"]',
+        f'#controls .charctl.enabled[data-ctl="{uid}"] button[data-opt="do_nothing"]',
         timeout=10_000)
 
 
 def _click_opt(page: Page, uid: str, opt: str) -> None:
     button = page.locator(
-        f'#roster .charctl.enabled[data-ctl="{uid}"] button[data-opt="{opt}"]')
+        f'#controls .charctl.enabled[data-ctl="{uid}"] button[data-opt="{opt}"]')
     button.wait_for(state="visible", timeout=10_000)
     button.click()
 
 
 def _click_set_action(page: Page, uid: str) -> None:
     button = page.locator(
-        f'#roster .charctl[data-ctl="{uid}"] button[data-act="setaction"]')
+        f'#controls .charctl[data-ctl="{uid}"] button[data-act="setaction"]')
     button.wait_for(state="visible", timeout=10_000)
     button.click()
 
@@ -350,7 +350,7 @@ def _swap_to_melee(page: Page, gid: str, fig: dict) -> None:
     available = {o["option"] for o in info["options"] if o["available"]}
     option = "ready_weapon" if "ready_weapon" in available else "change_weapons"
     _click_opt(page, uid, option)
-    selector = page.locator(f'#roster .charctl[data-ctl="{uid}"] select[data-ready]')
+    selector = page.locator(f'#controls .charctl[data-ctl="{uid}"] select[data-ready]')
     selector.wait_for(state="visible", timeout=10_000)
     selector.select_option(label="Shortsword")
     _click_set_action(page, uid)

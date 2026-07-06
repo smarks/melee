@@ -146,10 +146,10 @@ def test_selection_phase_lights_up_the_active_figure(live_server, page: Page) ->
     # Holding the active figure (Do nothing) commits its action and advances the
     # highlight to the next figure in initiative order.
     active_before = page.locator("#roster .row.active").get_attribute("data-uid")
-    # The action list now lives inline under the active character (#202); Do
-    # nothing is one of its options and submits immediately.
+    # The action list now lives in the Action panel for the active character (#326);
+    # Do nothing is one of its options and submits immediately.
     page.locator(
-        f'#roster .charctl[data-ctl="{active_before}"] button[data-opt="do_nothing"]').click()
+        f'#controls .charctl[data-ctl="{active_before}"] button[data-opt="do_nothing"]').click()
     # The highlight moves to a DIFFERENT figure (wait for the re-render to settle).
     expect(page.locator(
         f'#roster .row.active:not([data-uid="{active_before}"])')).to_have_count(1)
@@ -419,14 +419,13 @@ def _active_uid(page: Page):
 
 
 def _active_ctl(page: Page):
-    """The inline action-control block for the currently active character.
+    """The action-control block for the currently active character.
 
-    The action buttons moved off the bottom of the column into a per-character
-    block under each character row (#198/#199); the active figure's block is the
-    enabled one.
+    The action buttons moved into the Action panel's #controls (#326), rendered for
+    the character whose turn it is; that block is the enabled one.
     """
     uid = _active_uid(page)
-    return page.locator(f'#roster .charctl[data-ctl="{uid}"]')
+    return page.locator(f'#controls .charctl[data-ctl="{uid}"]')
 
 
 @pytest.mark.django_db
@@ -489,33 +488,27 @@ def test_multiple_passers_resolve_in_initiative_order(live_server, page: Page) -
 
 
 @pytest.mark.django_db
-def test_inline_controls_active_enabled_others_disabled(live_server, page: Page) -> None:
-    # #202: the FULL action list sits inline under each character during selection.
-    # The active figure's list is live (valid options enabled); every other
-    # not-yet-acted figure shows the same list, greyed, as a preview of the control
-    # that becomes theirs.
+def test_action_controls_render_for_the_active_character(live_server, page: Page) -> None:
+    # #326: the action-selection controls live in the Action panel (#controls),
+    # rendered ONCE for the character whose turn it is -- not inline under every
+    # roster row. Exactly one enabled block, headed by the active character's name,
+    # listing that figure's live options; the roster itself carries no controls now.
     page.goto(live_server.url)
     _start_inline_game(page, human=True)          # 2 humans x 2 figures = 4 characters
     expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
 
-    # Exactly one enabled inline block (the active character), listing live options
-    # (Full move + Do nothing) once the server's availability has loaded.
-    enabled = page.locator("#roster .charctl.enabled")
+    # Exactly one enabled block, in the Action panel, for the active character.
+    enabled = page.locator("#controls .charctl.enabled")
     expect(enabled).to_have_count(1)
     expect(enabled.locator('button[data-opt="move"]')).to_be_enabled(timeout=10_000)
     expect(enabled.locator('button[data-opt="do_nothing"]')).to_be_enabled()
-    # ...and it belongs to the active row.
     assert enabled.get_attribute("data-ctl") == _active_uid(page)
 
-    # At least one other character shows a disabled (greyed) preview list whose
-    # option buttons cannot be clicked.
-    disabled = page.locator("#roster .charctl.disabled")
-    expect(disabled.first).to_be_visible()
-    expect(disabled.first.locator('button[data-opt="do_nothing"]')).to_be_disabled()
-    expect(disabled.first.locator('button[data-opt="move"]')).to_be_disabled()
+    # The Action panel names the active character (side chip + name header).
+    expect(page.locator("#controls .action-actor")).to_be_visible()
 
-    # No action option buttons remain pinned at the bottom of the column.
-    expect(page.locator('#controls button[data-opt]')).to_have_count(0)
+    # The roster is list + selection only now: no action-control blocks anywhere in it.
+    expect(page.locator("#roster .charctl")).to_have_count(0)
 
 
 @pytest.mark.django_db
@@ -548,17 +541,17 @@ def test_inline_move_option_applies_and_advances(live_server, page: Page) -> Non
 
     active = _active_uid(page)
     assert active is not None
-    ctl = page.locator(f'#roster .charctl[data-ctl="{active}"]')
+    ctl = page.locator(f'#controls .charctl[data-ctl="{active}"]')
     # Prefer Charge & Attack when it is live, else Full move -- both need a
-    # destination hex, so both exercise the inline placement step.
+    # destination hex, so both exercise the placement step.
     charge = ctl.locator('button[data-opt="charge_attack"]:not([disabled])')
     move = charge if charge.count() else ctl.locator('button[data-opt="move"]')
     move.first.click()
 
-    # Placement enters inline under THIS character: reach hexes light on the board,
-    # and Set action is gated until a destination hex is picked.
+    # Placement enters in the Action panel for THIS character: reach hexes light on
+    # the board, and Set action is gated until a destination hex is picked.
     expect(page.locator("#svg polygon.hex.reach").first).to_be_visible(timeout=5_000)
-    place = page.locator(f'#roster .charctl.placing[data-ctl="{active}"]')
+    place = page.locator(f'#controls .charctl.placing[data-ctl="{active}"]')
     expect(place).to_be_visible()
     expect(place.get_by_role("button", name="Set action")).to_be_disabled()
 

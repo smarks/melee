@@ -62,11 +62,13 @@
      scrolling the page. */
   .logcol { width: 300px; flex: 0 0 300px; }
   #gameControl { overflow: auto; }
+  /* Character panel (#326): the roster + the selected fighter's sheet share ONE
+     bounded internal scroll, so a long roster and a full sheet can't overflow the
+     panel and cover a neighbour's click targets (the #324 lesson). */
   .trackerScroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
-  /* Selected-character panel (#323): its own draggable/resizable column holding the
-     read-only sheet / inline edit card (#selInfo) over the turn-flow controls
-     (#controls). The sheet scrolls internally so #controls stays pinned. */
-  .fighterScroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
+  /* Action panel (#326, formerly Selected-character): #controls scrolls internally
+     under the pinned phase banner/prompt so a tall combat checklist stays bounded. */
+  .actionScroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
   /* Narrow-screen model (#325): a clean, full-width STACKED SCROLL. The wrap is a
      plain vertical flex flow, the page scrolls, and window chrome is off (see the
      .wrap:not(.floating) rules on .panel-ctls / .rz / titlebar cursor below --
@@ -78,23 +80,26 @@
     .wrap { flex-direction: column; height: auto; }
     .col { width: auto; flex: none; border-left: none; border-top: 1px solid var(--line); }
     .arena { min-height: 60vh; }
+    /* Stacked play order (#326): the board, the reference log, then Game Control,
+       then the Character list and the Action controls -- map, log, control,
+       character, action. */
     .arena       { order: 1; }
-    .tracker     { order: 2; }
-    .fighter     { order: 3; }
-    .logcol      { order: 4; }
-    #gameControl { order: 5; }
+    .logcol      { order: 2; }
+    #gameControl { order: 3; }
+    .tracker     { order: 4; }
+    .action      { order: 5; }
     /* Touch-friendly stacked spacing: a little breathing room under each section's
        content so finger targets aren't cramped, and a comfy tap size on the log. */
     .col > .pad { padding-bottom: 14px; }
     #log { font-size: 16px; }
   }
-  /* Wide, non-floating pre-float measuring pass (#323): collapse the Selected-
-     character column to zero so map/log/control/tracker measure exactly as they did
-     before this panel existed. JS overrides its default geometry (a split of the
-     tracker column) right after measuring. Once floating, this no longer applies. */
+  /* Wide, non-floating pre-float measuring pass (#323/#326): collapse the Action
+     column to zero so map/log/control/character measure exactly as they did before
+     this panel existed. JS overrides its default geometry (a split of the Character
+     column) right after measuring. Once floating, this no longer applies. */
   @media (min-width: 1101px) {
-    .wrap:not(.floating) > .fighter { flex: 0 0 0; width: 0; padding: 0;
-                                      overflow: hidden; border-left: 0; }
+    .wrap:not(.floating) > .action { flex: 0 0 0; width: 0; padding: 0;
+                                     overflow: hidden; border-left: 0; }
   }
   /* Draggable panels (#319, Stage 1: move-only). Each panel carries a
      .panel-titlebar drag grip; JS measures today's flex geometry as the default,
@@ -233,9 +238,8 @@
   .menu .commit.muted { color: var(--muted); }
   .menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
   .pad { padding: 14px 16px; border-bottom: 1px solid var(--line); }
-  /* The end-phase action is pinned at the bottom of the Characters column and
-     always renders in full (never clipped); the tracker above it scrolls. */
-  #controls { flex: 0 0 auto; border-top: 1px solid var(--line); }
+  /* The turn-flow controls fill the Action panel's scroll region (#326); the phase
+     banner/prompt above them stays pinned in the panel's own .pad header. */
   #roster, #selInfo { min-height: 0; }
   .seclabel { padding: 9px 16px 3px; color: var(--muted); font-size: 11px;
               text-transform: uppercase; letter-spacing: .6px; }
@@ -300,39 +304,33 @@
   .roster .row.waiting { opacity: .7; font-style: italic; }
   .roster .row.disabled { opacity: .5; cursor: default; }
   .roster .row.disabled:hover { color: inherit; }
-  /* Inline per-character action controls (#198/#199): a copy of the action
-     controls under each character during selection. The active figure's block is
-     enabled (gold-accented); every other not-yet-acted figure shows the same
-     block greyed as a preview of the control that becomes theirs on their turn. */
-  .roster .charctl { display: flex; flex-direction: column; gap: 6px;
+  /* Action panel controls (#326, was #198/#199/#202): the action-selection block
+     for the character whose turn it is. It moved out of the roster into #controls
+     in the Action panel, so it renders once, for the active character, next to the
+     phase prompt. The active character's name heads the block. */
+  #controls .action-actor { font-weight: 600; margin-bottom: 8px; }
+  #controls .charctl { display: flex; flex-direction: column; gap: 6px;
       margin: 2px 0 12px; padding: 8px; border: 1px solid var(--line);
       border-radius: 8px; background: transparent; }
   /* Enabled (the figure whose turn it is): a bright accent-tinted card with a
      2px accent border, so the live control stands out in every theme. Colour
      comes from the theme's own --accent via color-mix, not a fixed rgba. */
-  .roster .charctl.enabled { border: 2px solid var(--accent); padding: 7px;
+  #controls .charctl.enabled { border: 2px solid var(--accent); padding: 7px;
       background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); }
-  .roster .charctl.enabled .opt { color: var(--ink); }
-  /* Disabled (a preview of another figure's future turn): greyed with the muted
-     token — never a low opacity — so its text stays legible while reading as off. */
-  .roster .charctl.disabled { border-color: var(--line);
-      background: color-mix(in srgb, var(--muted) 6%, transparent); color: var(--muted); }
-  .roster .charctl.disabled .opt,
-  .roster .charctl.disabled .opt .why { color: var(--muted); }
+  #controls .charctl.enabled .opt { color: var(--ink); }
   /* The inline option list (#202): every action for the character, the valid ones
      live, the rest greyed with the server's reason. */
-  .roster .charctl .opt-list { display: flex; flex-direction: column; gap: 4px; }
-  .roster .charctl .opt { width: 100%; margin: 0; text-align: left; display: flex;
+  #controls .charctl .opt-list { display: flex; flex-direction: column; gap: 4px; }
+  #controls .charctl .opt { width: 100%; margin: 0; text-align: left; display: flex;
       justify-content: space-between; align-items: baseline; gap: 8px; }
-  .roster .charctl .opt .why { font-size: 11.5px; color: var(--muted);
+  #controls .charctl .opt .why { font-size: 11.5px; color: var(--muted);
       font-style: italic; font-weight: 400; white-space: nowrap; }
-  /* Mid-placement confirm, rendered right under the character (not the far panel
-     #200 stranded it in): destination hexes light on the board, Set action here. */
-  .roster .charctl.placing { border-color: var(--gold); background: rgba(230, 184, 0, .16); }
-  .roster .charctl .place-head { font-size: 13px; }
-  .roster .charctl .place-hint { font-size: 12px; color: var(--accent); }
-  .roster .charctl .place-btns { display: flex; gap: 6px; flex-wrap: wrap; }
-  .roster .charctl .place-btns button { flex: 1; margin: 0; min-width: 56px; }
+  /* Mid-placement confirm: destination hexes light on the board, Set action here. */
+  #controls .charctl.placing { border-color: var(--gold); background: rgba(230, 184, 0, .16); }
+  #controls .charctl .place-head { font-size: 13px; }
+  #controls .charctl .place-hint { font-size: 12px; color: var(--accent); }
+  #controls .charctl .place-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  #controls .charctl .place-btns button { flex: 1; margin: 0; min-width: 56px; }
   polygon.hex { fill: var(--hex); stroke: var(--hex-stroke); stroke-width: 1.2; }
   /* Megahex boundaries (Melee p.16): the seams between 7-hex flowers, drawn a
      touch heavier and tinted so the megahex grid reads without burying the
@@ -584,30 +582,33 @@
       <div id="newGameReason" class="gc-note"></div>
     </div>
   </aside>
-  <!-- Right column: the Characters tracker (former Players + Characters panels,
-       merged), grouped by side, each row showing its chosen action this phase.
-       The end-phase action button (#controls) is pinned at the bottom. -->
+  <!-- Character panel (#326): the roster LIST on top, and — when a character is
+       selected — its full read-only sheet / admin inline edit card (#selInfo)
+       BELOW the list, in one bounded internal scroll. The roster is list +
+       selection only now; the action-choosing controls live in the Action panel. -->
   <aside class="col tracker">
-    <div class="panel-titlebar"><span class="tb-label">Characters</span></div>
+    <div class="panel-titlebar"><span class="tb-label">Character</span></div>
+    <div class="trackerScroll">
+      <div class="seclabel">Characters</div>
+      <div class="pad roster" id="roster"></div>
+      <div class="seclabel">Selected character</div>
+      <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
+    </div>
+  </aside>
+  <!-- Action panel (#326, formerly Selected-character): the self-contained
+       "what do I do now + do it here" surface. The phase banner + prompt sit at
+       the top; #controls carries the active character's action-selection controls
+       and the combat Resolve / End-turn flow. The ids are reused so
+       drawControls / showPreGame keep working unchanged. -->
+  <aside class="col action">
+    <div class="panel-titlebar"><span class="tb-label">Action</span></div>
     <div class="pad">
       <div class="banner" id="phaseBanner">Loading…</div>
       <div class="hint" id="hint"></div>
     </div>
-    <div class="trackerScroll">
-      <div class="seclabel">Characters</div>
-      <div class="pad roster" id="roster"></div>
+    <div class="actionScroll">
+      <div class="pad" id="controls"></div>
     </div>
-  </aside>
-  <!-- Fifth column: the Selected-character panel (#323). Its own draggable/
-       resizable window holding the read-only sheet / admin inline edit card
-       (#selInfo) above the pinned turn-flow controls (#controls). The ids are
-       reused so drawSelInfo / drawControls / showPreGame keep working unchanged. -->
-  <aside class="col fighter">
-    <div class="panel-titlebar"><span class="tb-label">Selected character</span></div>
-    <div class="fighterScroll">
-      <div class="pad" id="selInfo"><span class="muted">No figure selected.</span></div>
-    </div>
-    <div class="pad" id="controls"></div>
   </aside>
 </div>
 <div id="tokenMenu" class="menu" style="display:none"></div>

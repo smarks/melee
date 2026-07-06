@@ -92,7 +92,7 @@ def test_status_log_has_its_own_always_visible_column(
     # Play a few steps so the log gains entries, then assert it's on-screen without
     # scrolling: its top is within the viewport and it has a real height.
     for _ in range(6):
-        hold = page.locator('#roster .charctl.enabled button[data-opt="do_nothing"]')
+        hold = page.locator('#controls .charctl.enabled button[data-opt="do_nothing"]')
         if hold.count() and hold.first.is_enabled():
             hold.first.click()
             page.wait_for_timeout(120)

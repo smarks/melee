@@ -26,6 +26,8 @@ let IS_ADMIN = false;    // logged-in admin: may act on any figure (#86)
 const myControlled = f => IS_ADMIN ? true
   : YOU_CONTROL.length ? YOU_CONTROL.includes(f.side)
   : (S.controllers || {})[f.side] !== "computer";
+// A side driven by the AI (used by the Action panel's "computer is playing" state).
+const isComputerSide = side => (S.controllers || {})[side] === "computer";
 function captureOwnership(data) {
   if ("you_control" in data) YOU_CONTROL = data.you_control || [];
   if ("open_seats" in data) OPEN_SEATS = data.open_seats || [];
@@ -699,31 +701,52 @@ function drawControls() {
   if (phase === "select") {
     // Per-character initiative selection (#192): only the active figure may act,
     // and each choice submits immediately, lighting up the next figure. The
-    // action buttons themselves now live inline under each character in the
-    // roster (drawRoster / figControlsHtml, #198/#199) instead of pinned here at
-    // the bottom, so #controls just carries the "what to do now" hint.
-    if (sel && chosenOption) {                               // mid-placement (inline, #202)
-      const placing = figByUid(sel);
-      setHint(`Placing <b>${escapeHtml(placing ? placing.name : "")}</b> — click a green`
-              + ` hex on the board, then press <b>Set action</b> under its card.`);
-      return;
-    }
+    // action-selection buttons now live HERE in the Action panel (#326), rendered
+    // for the character whose turn it is, instead of inline under every roster row.
     const active = S.active_uid ? figByUid(S.active_uid) : null;
     if (!active) { setHint("Resolving the action pass…"); return; }
+    // Player-specific Action panel (#326): only the client controlling the active
+    // character sees its action controls. Another human's turn shows a NAMED waiting
+    // line (no controls, no Resolve); a computer's turn (rarely reached -- the server
+    // advances AI eagerly in api_action, not on poll) shows the "computer is playing"
+    // line. Hotseat controls all human sides, so it never hits the waiting branch
+    // (myControlled is true), with no special-casing.
     if (!myControlled(active)) {
-      setHint(`Waiting for <span class="chip ${active.side}">${sideName(active.side)}</span>`
-              + ` to set <b>${escapeHtml(active.name)}</b>'s action…`);
-      return;
+      if (isComputerSide(active.side)) setHint("🤖 Computer is playing…");
+      else setHint(`Waiting for <span class="chip ${active.side}">${sideName(active.side)}</span>`
+                   + ` to set <b>${escapeHtml(active.name)}</b>'s action…`);
+      return;                                              // non-owning client: no controls
     }
-    setHint(`<b>${escapeHtml(active.name)}</b> has initiative — choose its action`
-            + ` from its card above, on its counter, or the board. It submits`
-            + ` immediately, then the next figure lights up.`);
+    // Mine: name the active character, then render its action-selection block (the
+    // option list, or the mid-placement confirm once a destination option is chosen).
+    const placing = chosenOption && sel === active.uid;
+    setHint(placing
+      ? `Placing <b>${escapeHtml(active.name)}</b> — click a green hex on the board, then press <b>Set action</b>.`
+      : `<b>${escapeHtml(active.name)}</b> has initiative — choose its action below, on its counter, or the board.`);
+    drawActionActor(c, active);
+    ensureActiveOptions();   // load the active figure's real options, then re-draw
     return;
   }
 
   if (phase === "combat") {
     const actionable = new Set(S.combat_actionable || []);
     const actors = S.figures.filter(f => f.label && myControlled(f) && actionable.has(f.uid));
+    // Player-specific Action panel (#326): a client with no actionable figures this
+    // combat step, while another side still has some, is waiting on that side -- a
+    // NAMED human line or the computer line -- with NO Resolve/End-turn shown.
+    // (Combat is largely simultaneous, so in a normal 2-human game each client has
+    // its own actors and this branch is not reached; it covers the asymmetric case.)
+    if (combatResolvedTurn !== S.turn && !actors.length) {
+      const others = S.figures.filter(
+        f => f.label && actionable.has(f.uid) && !myControlled(f));
+      const humanOther = others.find(f => !isComputerSide(f.side));
+      if (humanOther) {
+        setHint(`Waiting for <span class="chip ${humanOther.side}">${sideName(humanOther.side)}</span>`
+                + ` to set <b>${escapeHtml(humanOther.name)}</b>'s action…`);
+        return;
+      }
+      if (others.length) { setHint("🤖 Computer is playing…"); return; }
+    }
     if (combatResolvedTurn !== S.turn) {
       setHint("Choose each figure's attack, then resolve.");
       figureChecklist(c, actors);
@@ -1557,14 +1580,14 @@ function figActionHtml(f) {
   if (canFight && !f.dead) return `<span class="action todo">choose action</span>`;
   return `<span class="action idle">—</span>`;
 }
-// The inline per-character action controls shown UNDER each character row during
-// the selection phase (#198/#199/#202). Instead of a "Choose action → popup"
-// indirection, the FULL list of this figure's actions is listed inline: the
-// active, controllable figure's valid options are live (clicking one specifies
-// it directly), and its invalid options are greyed with the server's reason.
-// Every other not-yet-acted figure shows a greyed preview list of the control
-// that becomes theirs on their turn. A figure that has already acted, passed, or
-// is dead shows no block (its chosen action / "Passed — waiting" badge stands).
+// The action-selection control block for a character (#198/#199/#202), now rendered
+// in the Action panel for the character whose turn it is (#326). Instead of a
+// "Choose action → popup" indirection, the FULL list of this figure's actions is
+// listed: the active, controllable figure's valid options are live (clicking one
+// specifies it directly), and its invalid options are greyed with the server's
+// reason. A figure that has already acted, passed (and isn't up last), or is dead
+// yields no block. (drawActionActor only ever calls this for the active, owned
+// figure, so the block is always the enabled variant.)
 function figControlsHtml(f) {
   if (S.phase !== "select") return "";
   if (f.dead || f.collapsed || f.acted) return "";
@@ -1681,7 +1704,42 @@ async function ensureActiveOptions() {
   activeOptsBusy = active.uid;
   await loadOptions(active);
   activeOptsBusy = null;
-  if (S && S.active_uid === active.uid) drawRoster();   // state may have moved on
+  if (S && S.active_uid === active.uid) drawControls();   // options feed the Action panel (#326)
+}
+// The active character's action-selection block, rendered into the Action panel's
+// #controls (#326): a name header (side chip + token + name) over the option list
+// or, mid-placement, the destination/facing confirm. Reuses figControlsHtml so the
+// #202 inline option/placement flow is preserved verbatim -- only its home moved.
+function drawActionActor(container, active) {
+  const head = document.createElement("div");
+  head.className = "action-actor";
+  head.innerHTML = `<span class="chip ${active.side}">${escapeHtml(sideName(active.side))}</span> `
+    + tokenBadge(active) + ` ${escapeHtml(active.name)}`;
+  container.appendChild(head);
+  const block = document.createElement("div");
+  block.innerHTML = figControlsHtml(active);
+  container.appendChild(block);
+  wireCharCtl(block);
+}
+// Wire an action-control block's option buttons, placement buttons, and Ready-weapon
+// selector. Shared so the block behaves identically wherever it is mounted (#326).
+function wireCharCtl(scope) {
+  scope.querySelectorAll(".charctl[data-ctl]").forEach(block => {
+    const f = figByUid(block.dataset.ctl);
+    if (!f) return;
+    block.querySelectorAll("button[data-opt]").forEach(btn => {
+      if (btn.disabled) return;
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation(); onInlineOption(f, btn.dataset.opt); });
+    });
+    block.querySelectorAll("button[data-act]").forEach(btn => {
+      if (btn.disabled) return;
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation(); onPlacementAct(f, btn.dataset.act); });
+    });
+    const readySel = block.querySelector("select[data-ready]");
+    if (readySel) readySel.addEventListener("change", (e) => { pendingReady = e.target.value; });
+  });
 }
 function drawRoster() {
   const r = $("roster"); if (!r || !S) return;
@@ -1706,11 +1764,13 @@ function drawRoster() {
       const kit = `<span class="kit muted">⚔ ${escapeHtml(f.weapon || "unarmed")} · DX ${f.dx}</span>`;
       const classTag = f.char_class
         ? `<span class="muted">— ${escapeHtml(f.char_class)}</span> ` : "";
+      // The roster is list + selection only now (#326): the action-selection
+      // controls moved to the Action panel. Each row still shows its chosen-action
+      // status column (figActionHtml) so the tracker stays a full at-a-glance board.
       html += `<div class="${cls}" data-uid="${escapeHtml(f.uid)}">`
         + `<span class="rowmain">${tokenBadge(f)} ${escapeHtml(f.name)} ${classTag}`
         + `<span class="muted">${state}</span>${kit}</span>`
-        + figActionHtml(f) + `</div>`
-        + figControlsHtml(f);
+        + figActionHtml(f) + `</div>`;
     }
   }
   html += inviteHtml();
@@ -1719,28 +1779,6 @@ function drawRoster() {
     const f = figByUid(row.dataset.uid);
     if (f) row.addEventListener("click", () => onFigureClick(f));
   });
-  // Wire the inline per-character action list (#202). Disabled buttons (invalid
-  // options and every non-active figure's greyed preview) carry the `disabled`
-  // attribute and get no handler. An enabled option specifies the action directly
-  // (simple -> submit now; destination -> inline placement); the placement block's
-  // data-act buttons turn/confirm/cancel it, and its weapon selector sets Ready.
-  r.querySelectorAll(".charctl[data-ctl]").forEach(block => {
-    const f = figByUid(block.dataset.ctl);
-    if (!f) return;
-    block.querySelectorAll("button[data-opt]").forEach(btn => {
-      if (btn.disabled) return;
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation(); onInlineOption(f, btn.dataset.opt); });
-    });
-    block.querySelectorAll("button[data-act]").forEach(btn => {
-      if (btn.disabled) return;
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation(); onPlacementAct(f, btn.dataset.act); });
-    });
-    const readySel = block.querySelector("select[data-ready]");
-    if (readySel) readySel.addEventListener("change", (e) => { pendingReady = e.target.value; });
-  });
-  ensureActiveOptions();   // load the active figure's real options, then re-draw
 }
 
 function drawLog() {
@@ -2205,8 +2243,9 @@ applyTheme();
 //   minimized  collapsed to the titlebar; Expand returns to the saved geom.
 // The pure helpers (clampGeom / mergeLayout / snapGeom / fitGeom / resizeGeom /
 // snapResizeGeom) are kept small so they are easy to reason about and to e2e-test.
-const LAYOUT_KEY = "melee.layout.v2";  // {key:{x,y,w,h,mode,restoreGeom}}
-const LAYOUT_KEY_V1 = "melee.layout.v1";  // Stage 1 {key:{x,y,w,h}} -- migrated on load
+const LAYOUT_KEY = "melee.layout.v3";  // {key:{x,y,w,h,mode,restoreGeom}} (#326: fighter->action panel split)
+const LAYOUT_KEY_V2 = "melee.layout.v2";  // prior shape (map/log/control/tracker/fighter) -- cleared on reset
+const LAYOUT_KEY_V1 = "melee.layout.v1";  // Stage 1 {key:{x,y,w,h}}
 const LAYOUT_SNAP_PX = 12;             // snap when an edge is within this many px (#325: eased from 9 for easier edge alignment)
 const LAYOUT_MIN_VISIBLE = 48;         // px of a panel that must stay grabbable
 const LAYOUT_RESIZE_MIN_W = 96;        // smallest width a drag-resize allows
@@ -2220,13 +2259,16 @@ const LAYOUT_PANELS = [
   {key: "map",     selector: ".arena",     label: "Map"},
   {key: "log",     selector: ".logcol",    label: "Game status"},
   {key: "control", selector: "#gameControl", label: "Game Control"},
-  // The tracker (roster) and fighter (sheet + controls) share one column, split
-  // top/bottom (#323). They default to "manual" (a fixed, bounded slot that scrolls
-  // internally) rather than "content": a content-mode roster auto-grows to its full
-  // height and, stacked above the fighter, would overflow and cover the fighter's
-  // click targets (and vice-versa). Bounding both keeps the two-pane split stable.
-  {key: "tracker", selector: ".tracker",   label: "Characters", defaultMode: "manual"},
-  {key: "fighter", selector: ".fighter",   label: "Selected character", defaultMode: "manual"},
+  // The Character panel (roster list + selected sheet) and the Action panel
+  // (phase prompt + the active character's action controls) share one column,
+  // split top/bottom (#323/#326). They default to "manual" (a fixed, bounded slot
+  // that scrolls internally) rather than "content": a content-mode roster auto-
+  // grows to its full height and, stacked above the Action panel, would overflow
+  // and cover its click targets (and vice-versa). Bounding both keeps the split
+  // stable. The `tracker` KEY is kept (its CSS class + saved-layout slot) though
+  // the panel is now labelled "Character".
+  {key: "tracker", selector: ".tracker",   label: "Character", defaultMode: "manual"},
+  {key: "action",  selector: ".action",    label: "Action", defaultMode: "manual"},
 ];
 // A panel's out-of-the-box sizing mode: "content" (auto-fit to content) unless the
 // registry pins it to a fixed slot (the split tracker/fighter, #323).
@@ -2426,29 +2468,13 @@ function parseStoredLayout(raw) {
   }
 }
 
-// Load the v2 layout, falling back to a one-way v1 migration: a Stage 1 save had
-// no mode, so a user who had positioned panels wanted THAT geometry -- we load it
-// as mode "manual" so it is honoured rather than auto-shrunk away on first paint.
+// Load the v3 layout. The Character/Action split (#326) reshaped the panel set
+// (`fighter` became `action`), so there is no clean field-by-field migration from
+// v2/v1 -- following the #323 precedent, a fresh version key means a ONE-TIME reset
+// to measured defaults. Return {} when no v3 layout exists; the next save writes the
+// new five-panel shape (with `action`), so this only fires once per browser.
 function loadSavedLayout() {
-  const fromV2 = parseStoredLayout(localStorage.getItem(LAYOUT_KEY));
-  if (fromV2) {
-    // One-time clean reset for the Selected-character split (#323): a v2 layout
-    // saved before the .fighter panel existed has no `fighter` key. Discard it once
-    // so all five panels lay out from fresh measured defaults; the next save then
-    // writes the new shape back (including `fighter`), so this only fires once.
-    if (!("fighter" in fromV2)) return {};
-    return fromV2;
-  }
-  const fromV1 = parseStoredLayout(localStorage.getItem(LAYOUT_KEY_V1));
-  if (!fromV1) return {};
-  const migrated = {};
-  for (const panel of LAYOUT_PANELS) {
-    const geom = fromV1[panel.key];
-    if (geom && typeof geom === "object") {
-      migrated[panel.key] = {...geom, mode: "manual", restoreGeom: null};
-    }
-  }
-  return migrated;
+  return parseStoredLayout(localStorage.getItem(LAYOUT_KEY)) || {};
 }
 
 function saveLayout() {
@@ -2687,6 +2713,7 @@ function applyResponsiveLayout() {
 
 function resetLayout() {
   localStorage.removeItem(LAYOUT_KEY);
+  localStorage.removeItem(LAYOUT_KEY_V2);   // clear the pre-#326 shape too
   localStorage.removeItem(LAYOUT_KEY_V1);
   layoutZTop = LAYOUT_Z_BASE;
   if (layoutStacked()) return;   // stacked flow IS the default; nothing to place
@@ -2803,16 +2830,18 @@ function initLayout() {
   }
   if (LAYOUT_PANELS.some(panel => !panel.el || !panel.handle)) return;  // markup missing
   DEFAULT_LAYOUT = measureDefaults(wrap);   // measure BEFORE floating (flex geometry)
-  // Split the (now roster-only) Characters column into a roster top (~55%) and the
-  // Selected-character panel below (~45%), #323. The wide pre-float flow collapses
-  // .fighter to zero width (CSS), so its measured geometry is a sliver; derive its
-  // real default from the tracker's full-height column instead.
+  // Split the right column into the Character panel on top (~62%: it now holds the
+  // roster AND the selected fighter's sheet, so it gets the larger share) and the
+  // Action panel below (~38%: the phase prompt + the active character's controls),
+  // #326. The wide pre-float flow collapses .action to zero width (CSS), so its
+  // measured geometry is a sliver; derive its real default from the tracker's
+  // full-height column instead.
   const trackerDefault = DEFAULT_LAYOUT.tracker;
-  const rosterHeight = Math.round(trackerDefault.h * 0.55);
-  DEFAULT_LAYOUT.tracker = {...trackerDefault, h: rosterHeight};
-  DEFAULT_LAYOUT.fighter = {
-    x: trackerDefault.x, y: trackerDefault.y + rosterHeight,
-    w: trackerDefault.w, h: trackerDefault.h - rosterHeight,
+  const characterHeight = Math.round(trackerDefault.h * 0.62);
+  DEFAULT_LAYOUT.tracker = {...trackerDefault, h: characterHeight};
+  DEFAULT_LAYOUT.action = {
+    x: trackerDefault.x, y: trackerDefault.y + characterHeight,
+    w: trackerDefault.w, h: trackerDefault.h - characterHeight,
   };
   for (const panel of LAYOUT_PANELS) {
     panel.mode = defaultModeFor(panel);

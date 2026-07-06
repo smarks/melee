@@ -262,13 +262,13 @@ def test_pick_up_offers_a_choice_of_several_dropped_weapons(live_server, page: P
 
     # The active red figure's inline controls expose Pick up weapon once its server
     # options load.
-    pick_up = page.locator(f'#roster .charctl[data-ctl="{red.uid}"] button[data-opt="pick_up"]')
+    pick_up = page.locator(f'#controls .charctl[data-ctl="{red.uid}"] button[data-opt="pick_up"]')
     expect(pick_up).to_be_enabled(timeout=10_000)
     pick_up.click()
 
     # #269: with more than one weapon in reach a chooser must appear (pre-fix it
     # silently grabbed the first). The placement block carries a <select> listing both.
-    placing = page.locator(f'#roster .charctl.placing[data-ctl="{red.uid}"]')
+    placing = page.locator(f'#controls .charctl.placing[data-ctl="{red.uid}"]')
     expect(placing).to_be_visible()
     selector = placing.locator("select[data-ready]")
     expect(selector).to_be_visible()
