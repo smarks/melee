@@ -252,6 +252,17 @@ def _meta(game: dict) -> dict:
         "force_retreat_options": retreat_options,
         "combat_actionable": _combat_actionable(state) if game["phase"] == "combat" else [],
         "must_attack": _must_attack(state) if game["phase"] == "combat" else [],
+        # #334: server-authoritative combat coordination for networked multi-human
+        # play. ``combat_resolved`` is True once this turn's queued attacks have been
+        # resolved; the client shows the End-turn screen from THIS, not a client-local
+        # flag, so one player can't jump ahead and end the turn before another human
+        # has resolved (which would silently discard that human's queued attacks).
+        # ``combat_ready`` lists the human sides that have pressed Resolve this combat
+        # phase -- resolution waits until every human side with an action has committed.
+        "combat_resolved": (bool(game.get("combat_resolved"))
+                            if game["phase"] == "combat" else False),
+        "combat_ready": (sorted(game.get("combat_ready", []))
+                         if game["phase"] == "combat" else []),
     }
 
 
@@ -344,6 +355,8 @@ def _do_end_turn(game: dict) -> None:
     state.end_turn()          # settles injury flags AND refreezes initiative order
     game["phase"] = "select"
     game["combat_prepared"] = False
+    game["combat_ready"] = []            # combat coordination is per-turn (#334)
+    game["combat_resolved"] = False
 
 
 @dataclass
@@ -505,6 +518,33 @@ def _human_force_retreat_available(game: dict) -> bool:
         if controllers.get(attacker.side, "human") == "human":
             return True
     return False
+
+
+def _human_combat_sides(game: dict) -> set:
+    """Human sides that still owe a Resolve before the queued attacks resolve (#334).
+
+    A side counts only if a real player holds its seat -- an open/abandoned or a
+    computer seat can never press Resolve, so it must not block -- and it has at
+    least one figure that can still act this combat step. Combat resolves only once
+    every such side has committed, so one client's Resolve cannot discard another
+    human's queued attacks. A seatless game (test fixtures) yields the empty set, so
+    a single/trusted client resolves immediately, exactly as before.
+    """
+    state: GameState = game["state"]
+    controllers = game.get("controllers", {})
+    seats = game.get("seats", {})
+    actionable = set(_combat_actionable(state))
+    sides = set()
+    for figure in state.figures:
+        if figure.uid not in actionable:
+            continue
+        side = figure.side
+        if controllers.get(side, "human") != "human":
+            continue
+        if seats.get(side, "open") in ("open", "computer"):
+            continue
+        sides.add(side)
+    return sides
 
 
 def _payload(game: dict, *, include_layout: bool = True) -> dict:
@@ -878,6 +918,8 @@ def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
         "controllers": controllers,
         "seats": seats,
         "combat_prepared": False,
+        "combat_ready": [],           # human sides that have pressed Resolve (#334)
+        "combat_resolved": False,     # this turn's combat has been resolved (#334)
     }
     _advance_computer(GAMES[gid])
     _autosave_game(gid, GAMES[gid])
@@ -1425,7 +1467,12 @@ def api_action(request, gid):
 
         try:
             _authorize_action(game, request, body)
-            result = _dispatch(game, body, is_admin=_is_admin(request))
+            # The acting player's own seats -- so resolve_combat can mark only the
+            # sides they control ready and never force an early resolve that discards
+            # another human's queued attacks (#334). Empty for seatless/trusted games.
+            owner_sides = _owned_sides(game, request)
+            result = _dispatch(game, body, is_admin=_is_admin(request),
+                               owner_sides=owner_sides)
             _debug_record(game, "client", body.get("type"), _debug_params(body))
             # Drive the computer, then auto-end an idle combat turn -- and if that
             # opens a fresh select pass led by a computer figure, drive that too.
@@ -1545,7 +1592,7 @@ def _require_active(state: GameState, figure) -> None:
         raise IllegalAction(f"it is {who}'s turn to act, not {figure.name}")
 
 
-def _act_move(game: dict, body: dict, *, is_admin: bool = False):
+def _act_move(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     figure = _figure(state, body.get("uid", ""))
     _require_active(state, figure)
@@ -1567,7 +1614,7 @@ def _act_move(game: dict, body: dict, *, is_admin: bool = False):
     return None
 
 
-def _act_do_nothing(game: dict, body: dict, *, is_admin: bool = False):
+def _act_do_nothing(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     """Commit a figure to a deliberate no-op (a real, set action) (#192)."""
     state: GameState = game["state"]
     figure = _figure(state, body.get("uid", ""))
@@ -1577,7 +1624,7 @@ def _act_do_nothing(game: dict, body: dict, *, is_admin: bool = False):
     return None
 
 
-def _act_pass(game: dict, body: dict, *, is_admin: bool = False):
+def _act_pass(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     """Defer a figure's action to choose last (the Pass rule, #192)."""
     state: GameState = game["state"]
     figure = _figure(state, body.get("uid", ""))
@@ -1587,7 +1634,7 @@ def _act_pass(game: dict, body: dict, *, is_admin: bool = False):
     return None
 
 
-def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False):
+def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     attacker = _figure(state, body.get("uid", ""))
     target = _figure(state, body.get("target", ""))
@@ -1611,7 +1658,7 @@ def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False):
     return None
 
 
-def _act_queue_hth(game: dict, body: dict, *, is_admin: bool = False):
+def _act_queue_hth(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     attacker = _figure(state, body.get("uid", ""))
     target = _figure(state, body.get("target", ""))
@@ -1620,7 +1667,7 @@ def _act_queue_hth(game: dict, body: dict, *, is_admin: bool = False):
     return None
 
 
-def _act_shield_rush(game: dict, body: dict, *, is_admin: bool = False):
+def _act_shield_rush(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     attacker = _figure(state, body.get("uid", ""))
     target = _figure(state, body.get("target", ""))
@@ -1628,22 +1675,44 @@ def _act_shield_rush(game: dict, body: dict, *, is_admin: bool = False):
     return None
 
 
-def _act_hth_disengage(game: dict, body: dict, *, is_admin: bool = False):
+def _act_hth_disengage(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     state.attempt_hth_disengage(_figure(state, body.get("uid", "")))
     return None
 
 
-def _act_disengage_move(game: dict, body: dict, *, is_admin: bool = False):
+def _act_disengage_move(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     figure = _figure(state, body.get("uid", ""))
     state.disengage_move(figure, _hex_from_label(body.get("dest", "")))
     return None
 
 
-def _act_resolve_combat(game: dict, body: dict, *, is_admin: bool = False):
+def _act_resolve_combat(game: dict, body: dict, *, is_admin: bool = False,
+                        owner_sides: set | None = None):
+    """Resolve the queued attacks -- but in a networked multi-human game, only once
+    every human side has committed (#334).
+
+    A client presses Resolve after POSTing its own figures' attacks, which marks the
+    acting player's sides ready. The single ``state.resolve_combat`` (which preserves
+    the unified cross-side adjDX ordering over the COMBINED pending queue) runs only
+    when no other human side still owes a Resolve. A player marks only the sides they
+    actually own ready, so no one can force an early resolve that drops another
+    human's attacks. Trusted callers with no seat context (``owner_sides`` empty --
+    hotseat with one client, solo-vs-AI, test fixtures) resolve immediately.
+    """
     state: GameState = game["state"]
+    if owner_sides:
+        ready = set(game.get("combat_ready", [])) | set(owner_sides)
+        game["combat_ready"] = sorted(ready)
+        waiting = _human_combat_sides(game) - ready
+        if waiting:
+            # Hold: record this side's readiness and wait for the other human(s).
+            # The queued attacks stay in _pending until every side has resolved.
+            return {"combat_waiting": sorted(waiting)}
     results = state.resolve_combat()
+    game["combat_resolved"] = True
+    game["combat_ready"] = []
     return [
         {
             "hit": r.hit, "rolled": r.rolled, "needed": r.needed,
@@ -1654,7 +1723,7 @@ def _act_resolve_combat(game: dict, body: dict, *, is_admin: bool = False):
     ]
 
 
-def _act_force_retreat(game: dict, body: dict, *, is_admin: bool = False):
+def _act_force_retreat(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     attacker = _figure(state, body.get("uid", ""))
     target = _figure(state, body.get("target", ""))
@@ -1662,7 +1731,7 @@ def _act_force_retreat(game: dict, body: dict, *, is_admin: bool = False):
     return None
 
 
-def _act_end_turn(game: dict, body: dict, *, is_admin: bool = False):
+def _act_end_turn(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     """End the turn — but no-op a stale duplicate (#242).
 
     ``end_turn`` runs in any phase (the post-victory "Start next round" reuses
@@ -1690,7 +1759,7 @@ def _act_end_turn(game: dict, body: dict, *, is_admin: bool = False):
     return None
 
 
-def _act_update_figure(game: dict, body: dict, *, is_admin: bool = False):
+def _act_update_figure(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     _update_figure(game, body.get("uid", ""), body.get("spec") or {},
                    allow_invalid=is_admin)
     return None
@@ -1716,7 +1785,7 @@ _ACTIONS = {
 }
 
 
-def _dispatch(game: dict, body: dict, *, is_admin: bool = False):
+def _dispatch(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     """Route a board action to its handler, enforcing the declared phase once."""
     action = body.get("type")
     entry = _ACTIONS.get(action)
@@ -1725,7 +1794,7 @@ def _dispatch(game: dict, body: dict, *, is_admin: bool = False):
     required_phase, handler = entry
     if required_phase is not None and game["phase"] != required_phase:
         raise IllegalAction(f"not the {_PHASE_LABEL[required_phase]} phase")
-    return handler(game, body, is_admin=is_admin)
+    return handler(game, body, is_admin=is_admin, owner_sides=owner_sides)
 
 
 def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = False) -> None:

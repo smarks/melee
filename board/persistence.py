@@ -460,6 +460,11 @@ def game_to_json(game: dict) -> dict:
         "controllers": dict(game.get("controllers", {})),
         "seats": dict(game.get("seats", {})),
         "combat_prepared": game.get("combat_prepared", False),
+        # Per-turn combat coordination for networked multi-human play (#334): which
+        # human sides have pressed Resolve, and whether the queue has resolved. Ride
+        # along so a mid-combat game resumes without dropping a side's readiness.
+        "combat_ready": list(game.get("combat_ready", [])),
+        "combat_resolved": game.get("combat_resolved", False),
         # Whether Section IX experience has been awarded — persisted so the
         # one-shot award stays one-shot across a restart/eviction (#257).
         "awarded": game.get("awarded", False),
@@ -480,6 +485,8 @@ def game_from_json(data: dict) -> dict:
         "controllers": dict(data.get("controllers", {})),
         "seats": dict(data.get("seats", {})),
         "combat_prepared": data.get("combat_prepared", False),
+        "combat_ready": list(data.get("combat_ready", [])),
+        "combat_resolved": data.get("combat_resolved", False),
         "awarded": data.get("awarded", False),
         "_debug": list(data.get("debug", [])),
         # Keep the trail's sequence numbers monotonic across the reload.
