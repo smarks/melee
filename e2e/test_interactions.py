@@ -12,6 +12,7 @@ picks the opponent type and presses New Game to start a match.
 from __future__ import annotations
 
 import re
+import time
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -627,3 +628,164 @@ def test_sole_legal_target_is_auto_queued_and_clears_the_resolve_gate(
             "button", name=re.compile("Resolve"))).to_be_enabled()
     finally:
         del GAMES["auto-target-e2e"]
+
+
+@pytest.mark.django_db
+def test_solo_vs_ai_standoff_still_offers_resolve_not_a_dead_computer_hint(
+        live_server, page: Page) -> None:
+    """#333: in a solo-vs-AI combat where the human's figure has no legal attack and
+    the only actionable party is a computer whose shot is already queued, the client
+    must still render a Resolve control -- not a dead '🤖 Computer is playing…' with
+    no button -- and pressing it must resolve the AI's queued shot and advance the
+    turn. Pre-#326 this fell through to Resolve; the character/action split turned it
+    into a hard combat deadlock that bricked the game (no client-reachable way to
+    resolve the pending AI attack). Seeds the standoff directly so it's deterministic.
+    """
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD, SMALL_BOW
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=15, rows=15)
+    grid = arena.layout
+    # A human meleer with only a broadsword, out of reach of the foe -> no attack.
+    red = create_human("Redcap", 12, 12, "red",
+                       weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    # A computer archer in range whose shot is already queued into _pending (as the
+    # server does when combat opens), and which stays combat-actionable.
+    blue = create_human("Bluecap", 12, 12, "blue",
+                        weapons=[SMALL_BOW], ready_weapon=SMALL_BOW)
+    blue.position = Hex(6, 6)
+    stand_off = blue.position
+    for _ in range(3):                          # three hexes away: broadsword can't reach
+        stand_off = grid.neighbor(stand_off, 0)
+    red.position = stand_off
+    blue.facing = 0                            # facing red, so the shot is a legal front-arc missile
+    red.facing = 3                             # facing back toward blue (still can't reach it)
+    blue.current_option = Option.MISSILE_ATTACK
+    state = GameState(arena, [red, blue])
+    state.queue_attack(blue, red)              # the AI's shot sits unresolved in _pending
+    gid = "standoff-333"
+    GAMES[gid] = {
+        "state": state, "layout": board_layout(arena),
+        "phase": "combat",
+        "controllers": {"red": "human", "blue": "computer"},
+        "combat_prepared": True,
+    }
+    try:
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+        # THE FIX: a Resolve control is present and enabled. Pre-fix there was none --
+        # the '🤖 Computer is playing…' early-return hid it and the turn could never
+        # advance (reload re-ran the same dead branch).
+        resolve = page.get_by_role("button", name=re.compile("Resolve"))
+        expect(resolve).to_be_enabled(timeout=20_000)
+        # Resolving drives the AI's queued shot and advances the turn -- no deadlock.
+        resolve.click()
+        expect(page.locator("#phaseBanner")).to_contain_text("Turn 2", timeout=20_000)
+    finally:
+        GAMES.pop(gid, None)
+
+
+@pytest.mark.django_db
+def test_networked_combat_resolve_waits_for_both_humans(
+        live_server, page: Page) -> None:
+    """#334: in a networked 2-human combat, the first client to press Resolve must
+    NOT resolve the whole board and jump to End-turn -- that lets it advance the turn
+    and silently discard the other human's queued attacks. Resolve holds until BOTH
+    humans have committed, then a single resolve_combat resolves every side's attacks
+    together (preserving the unified cross-side ordering).
+
+    Two real browser contexts claim the two open seats of a seeded adjacent duel,
+    each auto-queues its sole-target attack (#299), and we assert: after the first
+    Resolve the acting client waits (no End-turn) with its attack still unresolved in
+    the server queue; after the second Resolve both attacks resolve (neither dropped).
+    """
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=9, rows=9)
+    grid = arena.layout
+    red = create_human("Redcap", 12, 12, "red",
+                       weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue = create_human("Bluecap", 12, 12, "blue",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue.position = Hex(4, 4)
+    red.position = grid.neighbor(blue.position, 0)            # adjacent: each can strike the other
+    red.facing = next(d for d in range(6)
+                      if grid.neighbor(red.position, d) == blue.position)
+    blue.facing = next(d for d in range(6)
+                       if grid.neighbor(blue.position, d) == red.position)
+    red.current_option = Option.ATTACK                       # both committed -> both must_attack
+    blue.current_option = Option.ATTACK
+    gid = "networked-334"
+    GAMES[gid] = {
+        "state": GameState(arena, [red, blue]), "layout": board_layout(arena),
+        "phase": "combat",
+        "controllers": {"red": "human", "blue": "human"},
+        "seats": {"red": "open", "blue": "open"},            # two open human seats to claim
+        "combat_prepared": True,
+        "combat_ready": [], "combat_resolved": False,
+    }
+    joiner_context = page.context.browser.new_context()
+    try:
+        # Player A (this context) claims red, then reloads so it loads with its seat
+        # cookie already set -- controlling ONLY red (a fresh, un-polluted plan).
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+        page.evaluate("() => window.seatAction('claim','red')")
+        expect(page.get_by_text("— you")).to_have_count(1, timeout=20_000)
+        page.reload()
+        expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+
+        # Player B (separate context -> its own cookie / player id) claims blue.
+        joiner = joiner_context.new_page()
+        joiner.goto(f"{live_server.url}/game/{gid}")
+        expect(joiner.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+        joiner.evaluate("() => window.seatAction('claim','blue')")
+        expect(joiner.get_by_text("— you")).to_have_count(1, timeout=20_000)
+        joiner.reload()
+        expect(joiner.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+
+        # Each client auto-queues its sole-target attack (#299), so Resolve is enabled.
+        a_resolve = page.get_by_role("button", name=re.compile("Resolve"))
+        expect(a_resolve).to_be_enabled(timeout=20_000)
+        b_resolve = joiner.get_by_role("button", name=re.compile("Resolve"))
+        expect(b_resolve).to_be_enabled(timeout=20_000)
+
+        # A resolves first -> it must WAIT for B (no End-turn), and A's attack must sit
+        # unresolved in the server queue. Pre-fix A resolved immediately and was shown
+        # End-turn, from where it could advance the turn and drop B's attack.
+        a_resolve.click()
+        expect(page.get_by_text(
+            re.compile("waiting for the other player", re.I))).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("button", name=re.compile("End turn"))).to_have_count(0)
+        assert len(GAMES[gid]["state"]._pending) == 1, (
+            "first Resolve must hold A's attack in the queue, not resolve it early")
+        assert GAMES[gid]["combat_resolved"] is False
+
+        # B resolves: both sides have now committed, so the combined queue resolves.
+        b_resolve.click()
+        # Wait for the server to actually resolve (both attacks narrated). The shared
+        # log survives an end-turn, unlike the per-turn flags, so it's the stable proof.
+        deadline = time.time() + 15
+        while time.time() < deadline and len(GAMES[gid]["state"].log) < 2:
+            page.wait_for_timeout(200)
+        # Both attacks resolved together -> neither discarded.
+        log_text = "\n".join(GAMES[gid]["state"].log)
+        assert "Redcap" in log_text and "Bluecap" in log_text, (
+            f"both fighters' attacks must resolve; neither dropped. log:\n{log_text}")
+        assert not GAMES[gid]["state"]._pending
+    finally:
+        joiner_context.close()
+        GAMES.pop(gid, None)

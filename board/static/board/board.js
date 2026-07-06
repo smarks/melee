@@ -731,24 +731,53 @@ function drawControls() {
   if (phase === "combat") {
     const actionable = new Set(S.combat_actionable || []);
     const actors = S.figures.filter(f => f.label && myControlled(f) && actionable.has(f.uid));
-    // Player-specific Action panel (#326): a client with no actionable figures this
-    // combat step, while another side still has some, is waiting on that side -- a
-    // NAMED human line or the computer line -- with NO Resolve/End-turn shown.
-    // (Combat is largely simultaneous, so in a normal 2-human game each client has
-    // its own actors and this branch is not reached; it covers the asymmetric case.)
-    if (combatResolvedTurn !== S.turn && !actors.length) {
-      const others = S.figures.filter(
-        f => f.label && actionable.has(f.uid) && !myControlled(f));
-      const humanOther = others.find(f => !isComputerSide(f.side));
-      if (humanOther) {
-        setHint(`Waiting for <span class="chip ${humanOther.side}">${sideName(humanOther.side)}</span>`
-                + ` to set <b>${escapeHtml(humanOther.name)}</b>'s action…`);
-        return;
-      }
-      if (others.length) { setHint("🤖 Computer is playing…"); return; }
+    const ready = new Set(S.combat_ready || []);
+
+    // (#334) The "attacks resolved -> end the turn" state is SERVER-authoritative
+    // (S.combat_resolved), NOT the client-local combatResolvedTurn: in a networked
+    // 2-human game a client that resolved early must not jump to End-turn, which
+    // would advance the turn and silently discard the other human's queued attacks.
+    // It shows End-turn only once the server has resolved the combined queue.
+    if (S.combat_resolved) {
+      setHint("Attacks resolved — push back any beaten foes, then end the turn.");
+      drawForceRetreat(c);                 // post-combat shoves, if any
+      bigPrimary(c, "End turn →", () => {
+        dbg("INTERACT", "End turn pressed");
+        // #242: carry the turn we mean to end so a double-click / retried POST
+        // that lands after the first end_turn already advanced is a safe no-op.
+        resetAll(); act({type: "end_turn", expected_turn: S.turn}).then(after);
+      });
+      return;
     }
-    if (combatResolvedTurn !== S.turn) {
-      setHint("Choose each figure's attack, then resolve.");
+
+    // (#334) I've committed my side(s) (pressed Resolve) but another human still has
+    // to resolve. Wait -- no duplicate Resolve, no premature End-turn. Detected from
+    // server state (combat_ready), so this holds across clients until all resolve.
+    const myActionableSides = [...new Set(actors.map(f => f.side))];
+    if (myActionableSides.length && myActionableSides.every(side => ready.has(side))) {
+      setHint("Attacks queued — waiting for the other player to resolve…");
+      return;
+    }
+
+    // Player-specific Action panel (#326): a client with no actionable figures this
+    // combat step may be waiting on ANOTHER human side -- but only a named human
+    // whose seat a client actually holds. A computer (or an unclaimed/abandoned seat
+    // nobody controls) must NOT hide Resolve, or the queued attacks can never be
+    // resolved and the game bricks (#333): we fall through to render Resolve so this
+    // human can drive resolve_combat, exactly as before the #326 split.
+    const others = actors.length ? [] : S.figures.filter(
+      f => f.label && actionable.has(f.uid) && !myControlled(f));
+    const humanOther = others.find(
+      f => !isComputerSide(f.side) && !OPEN_SEATS.includes(f.side) && !ready.has(f.side));
+    if (humanOther) {
+      setHint(`Waiting for <span class="chip ${humanOther.side}">${sideName(humanOther.side)}</span>`
+              + ` to set <b>${escapeHtml(humanOther.name)}</b>'s action…`);
+      return;
+    }
+    {
+      if (actors.length) setHint("Choose each figure's attack, then resolve.");
+      else if (others.length) setHint("🤖 Computer is playing… resolve when ready.");
+      else setHint("Resolve combat to continue.");
       figureChecklist(c, actors);
       // #212: a figure that committed to an attack option AND has a valid target
       // (server's must_attack) would silently waste its shot if combat resolved
@@ -774,7 +803,11 @@ function drawControls() {
       }
       const resolveBtn = bigPrimary(c, actors.length ? "Resolve attacks" : "Resolve combat", () => {
         dbg("INTERACT", "Resolve pressed", {queued: Object.keys(PLAN).length, actors: actors.length});
-        combatResolvedTurn = S.turn;       // next render offers "End turn"
+        // Local optimistic flag: I've committed this turn's combat, so stop
+        // auto-targeting my own figures (queuePendingShotAt / maybeAutoTarget).
+        // The End-turn screen itself is driven by server state (S.combat_resolved),
+        // not this flag, so a networked client can't jump ahead of another human.
+        combatResolvedTurn = S.turn;
         executePlans("combat");
       });
       if (untargeted.length) {
@@ -800,16 +833,6 @@ function drawControls() {
       } else {
         _dbgGateKey = null;
       }
-    } else {
-      setHint("Attacks resolved — push back any beaten foes, then end the turn.");
-      drawForceRetreat(c);                 // post-combat shoves, if any
-      bigPrimary(c, "End turn →", () => {
-        dbg("INTERACT", "End turn pressed");
-        // #242: carry the turn we mean to end so a double-click / retried POST
-        // that lands after the first end_turn already advanced is a safe no-op
-        // server-side instead of silently skipping a whole turn.
-        resetAll(); act({type: "end_turn", expected_turn: S.turn}).then(after);
-      });
     }
     return;
   }
