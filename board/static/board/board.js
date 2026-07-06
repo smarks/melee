@@ -1624,11 +1624,19 @@ function optionListHtml(f, info, enabled) {
     opts = PREVIEW_OPTIONS.map(o => ({option: o, available: false, reason: null, attack: false}));
   }
   return `<div class="opt-list">` + opts.map(o => {
+    // An "illegal" option is one the ACTIVE figure genuinely can't take right now
+    // (the server flagged available === false with a reason). Those get the ⊘ mark,
+    // the visible reason pill, and a title= tooltip on top. A greyed preview block
+    // (another figure's coming turn) is disabled wholesale but carries no reason.
+    const illegal = enabled && o.available === false;
     const dis = (!enabled || o.available === false) ? " disabled" : "";
-    const why = (enabled && o.available === false && o.reason)
+    const why = (illegal && o.reason)
       ? `<span class="why">${escapeHtml(o.reason)}</span>` : "";
-    return `<button class="opt${o.attack ? " attack" : ""}" data-opt="${escapeHtml(o.option)}"${dis}>`
-      + `<span>${escapeHtml(optLabel(o.option))}</span>${why}</button>`;
+    const mark = illegal ? `<span class="opt-mark" aria-hidden="true">⊘</span>` : "";
+    const tip = illegal && o.reason ? ` title="${escapeHtml(o.reason)}"` : "";
+    return `<button class="opt${o.attack ? " attack" : ""}${illegal ? " illegal" : ""}"`
+      + ` data-opt="${escapeHtml(o.option)}"${dis}${tip}>`
+      + `<span class="opt-label">${mark}${escapeHtml(optLabel(o.option))}</span>${why}</button>`;
   }).join("") + `</div>`;
 }
 // The inline placement confirm for a destination-requiring option: destination +
