@@ -68,7 +68,12 @@ class DamageEvent:
         target_side: The ``side`` of the figure that lost ST/Fatigue.
         attacker_uid: Stable uid of the attacker (for a reproducible message).
         target_uid: Stable uid of the target.
-        damage: Hits actually taken off the target (already past armour).
+        damage: Hits actually taken off the target (already past armour). For a
+            Tarmar figure this is Fatigue damage; every hit costs Fatigue.
+        body_damage: Of ``damage``, the portion that also reached Body (Tarmar
+            crits only; 0 otherwise). Body is the lethal track — a Tarmar figure
+            dies at Body 0 while Fatigue may remain — so the invariants need this
+            to see a crit-death, not just Fatigue depletion (#340).
         same_side_allowed: True only when the rules legitimately permit this
             same-side hit — the "Hitting Your Friends" HTH miss-cascade (p.17-18),
             the sole path on which a figure may harm its own side.
@@ -79,6 +84,7 @@ class DamageEvent:
     attacker_uid: str
     target_uid: str
     damage: int
+    body_damage: int = 0
     same_side_allowed: bool = False
 
 

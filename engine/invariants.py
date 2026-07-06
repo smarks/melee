@@ -242,14 +242,28 @@ def _check_weapon_kit(state, context: str) -> None:
             )
 
 
-def _collapse_pool(figure) -> int:
-    """The cumulative damage that puts ``figure`` at or below collapse.
+def _death_pools(figure) -> tuple[int, int | None]:
+    """``(fatigue_or_st_pool, body_pool)`` — the two tracks that fell ``figure``.
 
-    A Tarmar figure collapses when its Fatigue pool is exhausted; a classic
-    figure when its ST reaches 0. Damage-event totals are read against this.
+    A classic figure has one lethal track: it collapses/dies when cumulative ST
+    damage reaches its ST, so the Body pool is ``None``. A Tarmar figure has two
+    — it collapses when Fatigue is exhausted and *dies* when Body reaches 0. Body
+    is reached only by crits and ``body = ceil(fatigue * 2/3) < fatigue``, so a
+    crit-death leaves Fatigue remaining; both tracks must be watched or the
+    checks miss Tarmar's actual kill mode (#340).
     """
     fatigue = getattr(figure, "fatigue", None)
-    return fatigue if fatigue is not None else figure.strength
+    if fatigue is None:
+        return figure.strength, None
+    return fatigue, getattr(figure, "body", None)
+
+
+def _felled(fatigue_taken: int, body_taken: int,
+            fatigue_pool: int, body_pool: int | None) -> bool:
+    """True once ``figure`` is at or below collapse/death on either track."""
+    if fatigue_taken >= fatigue_pool:
+        return True
+    return body_pool is not None and body_taken >= body_pool
 
 
 def _check_no_posthumous_damage(state, context: str) -> None:
@@ -258,23 +272,31 @@ def _check_no_posthumous_damage(state, context: str) -> None:
     The runtime guard ``if not attacker.can_act(): return`` refuses an action
     from a collapsed/dead figure, but only in the instant it runs. This replays
     the ordered ``damage_events`` stream and fails if any event's attacker had
-    already taken enough cumulative damage to be at or below collapse before it
-    struck — a dead figure landing a blow, checkable straight off the trail.
+    already taken enough cumulative damage to be felled on either track — Fatigue
+    (collapse) or Body (Tarmar crit-death) — before it struck: a dead figure
+    landing a blow, checkable straight off the trail.
     """
-    pools = {figure.uid: _collapse_pool(figure) for figure in state.figures}
-    damage_taken: dict[str, int] = {}
+    pools = {figure.uid: _death_pools(figure) for figure in state.figures}
+    fatigue_taken: dict[str, int] = {}
+    body_taken: dict[str, int] = {}
     for event in state.damage_events:
         pool = pools.get(event.attacker_uid)
-        if pool is not None and damage_taken.get(event.attacker_uid, 0) >= pool:
+        if pool is not None and _felled(
+                fatigue_taken.get(event.attacker_uid, 0),
+                body_taken.get(event.attacker_uid, 0), *pool):
+            fatigue_pool, body_pool = pool
             _fail(
                 "posthumous-damage",
                 f"figure {event.attacker_uid}({event.attacker_side}) dealt "
-                f"{event.damage} damage after already taking "
-                f"{damage_taken[event.attacker_uid]} (collapse pool {pool})",
+                f"{event.damage} damage after already being felled (fatigue "
+                f"{fatigue_taken.get(event.attacker_uid, 0)}/{fatigue_pool}, "
+                f"body {body_taken.get(event.attacker_uid, 0)}/{body_pool})",
                 context,
             )
-        damage_taken[event.target_uid] = (
-            damage_taken.get(event.target_uid, 0) + event.damage)
+        fatigue_taken[event.target_uid] = (
+            fatigue_taken.get(event.target_uid, 0) + event.damage)
+        body_taken[event.target_uid] = (
+            body_taken.get(event.target_uid, 0) + event.body_damage)
 
 
 def _check_no_damage_to_downed_target(state, context: str) -> None:
@@ -285,26 +307,33 @@ def _check_no_damage_to_downed_target(state, context: str) -> None:
     a lower-adjDX ally's already-queued blow resolves; the corpse keeps its hex,
     so the reach check still passes and the stale blow would land on a downed
     target. This replays the ordered ``damage_events`` trail and fails if any
-    event delivers fresh damage to a target that had already taken enough
-    cumulative damage to be at or below collapse — the mirror of
+    event delivers fresh damage to a target already felled on either track —
+    Fatigue (collapse) or Body (Tarmar crit-death) — the mirror of
     :func:`_check_no_posthumous_damage`, keyed on the target rather than the
     attacker.
     """
-    pools = {figure.uid: _collapse_pool(figure) for figure in state.figures}
-    damage_taken: dict[str, int] = {}
+    pools = {figure.uid: _death_pools(figure) for figure in state.figures}
+    fatigue_taken: dict[str, int] = {}
+    body_taken: dict[str, int] = {}
     for event in state.damage_events:
         pool = pools.get(event.target_uid)
-        if pool is not None and damage_taken.get(event.target_uid, 0) >= pool:
+        if pool is not None and _felled(
+                fatigue_taken.get(event.target_uid, 0),
+                body_taken.get(event.target_uid, 0), *pool):
+            fatigue_pool, body_pool = pool
             _fail(
                 "damage-to-downed-target",
                 f"figure {event.target_uid}({event.target_side}) took "
-                f"{event.damage} more damage after already having taken "
-                f"{damage_taken[event.target_uid]} (collapse pool {pool}) — a "
-                f"blow landed on an already-downed foe",
+                f"{event.damage} more damage after already being felled (fatigue "
+                f"{fatigue_taken.get(event.target_uid, 0)}/{fatigue_pool}, body "
+                f"{body_taken.get(event.target_uid, 0)}/{body_pool}) — a blow "
+                f"landed on an already-downed foe",
                 context,
             )
-        damage_taken[event.target_uid] = (
-            damage_taken.get(event.target_uid, 0) + event.damage)
+        fatigue_taken[event.target_uid] = (
+            fatigue_taken.get(event.target_uid, 0) + event.damage)
+        body_taken[event.target_uid] = (
+            body_taken.get(event.target_uid, 0) + event.body_damage)
 
 
 def assert_state_invariants(

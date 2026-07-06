@@ -7,9 +7,10 @@ from engine.arena import Arena
 from engine.combat import DamageEvent
 from engine.figure import create_human
 from engine.invariants import InvariantError, assert_state_invariants
-from engine.profile import CLASSIC
+from engine.profile import CLASSIC, TARMAR
 from engine.rules_data import BROADSWORD
 from engine.state import GameState
+from engine.tarmar import create_tarmar_fighter
 from hexarena.hex import Hex
 
 
@@ -19,6 +20,14 @@ def _two_fighter_state() -> GameState:
                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     blue = create_human("Blue", 12, 12, "blue",
                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    red.position, blue.position = Hex(2, 2), Hex(6, 6)
+    return GameState(arena, [red, blue])
+
+
+def _two_tarmar_state() -> GameState:
+    arena = Arena(cols=9, rows=15)
+    red = create_tarmar_fighter("Red", strength=12, dexterity=12, side="red")
+    blue = create_tarmar_fighter("Blue", strength=12, dexterity=12, side="blue")
     red.position, blue.position = Hex(2, 2), Hex(6, 6)
     return GameState(arena, [red, blue])
 
@@ -64,3 +73,57 @@ def test_a_blow_landing_on_an_already_downed_foe_trips_the_check() -> None:
         attacker_uid=red.uid, target_uid=blue.uid, damage=2))
     with pytest.raises(InvariantError, match="damage-to-downed-target"):
         assert_state_invariants(state, CLASSIC)
+
+
+# ---- Tarmar body-death (crit) kill mode (#340) -----------------------------
+# A Tarmar figure dies when BODY reaches 0, not when Fatigue is exhausted, and
+# body = ceil(fatigue*2/3) < fatigue, so a crit-death leaves Fatigue remaining.
+# The checks must see the Body track, not just cumulative Fatigue damage.
+def test_a_tarmar_crit_death_still_passes_for_legal_play() -> None:
+    # Body damage below the Body pool: the figure is hurt but not felled, so a
+    # later exchange is legal and the checks must not false-positive.
+    state = _two_tarmar_state()
+    red, blue = state.figures
+    assert blue.body < blue.fatigue          # crit-death leaves Fatigue behind
+    state.damage_events.append(DamageEvent(   # a crit, but not lethal
+        attacker_side="red", target_side="blue",
+        attacker_uid=red.uid, target_uid=blue.uid,
+        damage=blue.body - 1, body_damage=blue.body - 1))
+    state.damage_events.append(DamageEvent(   # blue, still alive, strikes back
+        attacker_side="blue", target_side="red",
+        attacker_uid=blue.uid, target_uid=red.uid, damage=2, body_damage=0))
+    assert_state_invariants(state, TARMAR)    # no raise
+
+
+def test_a_tarmar_figure_crit_killed_via_body_trips_the_posthumous_check() -> None:
+    # #340: blue is crit-killed (Body exhausted) while Fatigue remains, then the
+    # stream records blue landing a later blow. Pre-fix the checks read only
+    # cumulative Fatigue damage and missed this — a body-death post-mortem attack.
+    state = _two_tarmar_state()
+    red, blue = state.figures
+    state.damage_events.append(DamageEvent(   # crit-death: Body to 0, Fatigue left
+        attacker_side="red", target_side="blue",
+        attacker_uid=red.uid, target_uid=blue.uid,
+        damage=blue.body, body_damage=blue.body))
+    assert blue.body < blue.fatigue          # so cumulative Fatigue < Fatigue pool
+    state.damage_events.append(DamageEvent(   # ...then the corpse strikes anyway
+        attacker_side="blue", target_side="red",
+        attacker_uid=blue.uid, target_uid=red.uid, damage=2, body_damage=0))
+    with pytest.raises(InvariantError, match="posthumous-damage"):
+        assert_state_invariants(state, TARMAR)
+
+
+def test_a_blow_on_a_tarmar_crit_killed_foe_trips_the_downed_check() -> None:
+    # #340 mirror: blue is crit-killed via Body, then a second blow lands fresh
+    # damage on the corpse — must trip even though Fatigue was never exhausted.
+    state = _two_tarmar_state()
+    red, blue = state.figures
+    state.damage_events.append(DamageEvent(   # crit-death: Body to 0, Fatigue left
+        attacker_side="red", target_side="blue",
+        attacker_uid=red.uid, target_uid=blue.uid,
+        damage=blue.body, body_damage=blue.body))
+    state.damage_events.append(DamageEvent(   # ...then a blow lands on the corpse
+        attacker_side="red", target_side="blue",
+        attacker_uid=red.uid, target_uid=blue.uid, damage=2, body_damage=0))
+    with pytest.raises(InvariantError, match="damage-to-downed-target"):
+        assert_state_invariants(state, TARMAR)

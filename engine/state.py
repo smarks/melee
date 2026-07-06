@@ -2062,7 +2062,11 @@ class _CombatMixin:
             self.damage_events.append(DamageEvent(
                 attacker_side=attacker.side, target_side=target.side,
                 attacker_uid=attacker.uid, target_uid=target.uid,
-                damage=result.damage, same_side_allowed=self._same_side_hit_ok))
+                damage=result.damage,
+                # A Tarmar crit (body_hit) drives the same hits into Body too;
+                # record it so the invariants can see a crit-death (#340).
+                body_damage=result.damage if result.body_hit else 0,
+                same_side_allowed=self._same_side_hit_ok))
         # Force-retreat eligibility (p.20) counts only melee damage: "missile or
         # thrown weapon hits ... don't count." A missile/thrown hit deals ST damage
         # but must not arm a force retreat.
