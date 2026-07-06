@@ -66,6 +66,30 @@ class Monster:
     knockdown_hits_threshold: int = KNOCKDOWN_HITS     # hits/turn to fall
     notes: str = ""
 
+    def __post_init__(self) -> None:
+        # A creature's injury thresholds follow strictly from its beginning ST
+        # (ITL p.20), so derive them here rather than hand-setting each monster --
+        # a ST-30+ creature (bear, giant) gets 9/16, a ST-50+ one 15/25 (#336).
+        wound, knockdown = injury_thresholds(self.strength)
+        object.__setattr__(self, "wound_hits_threshold", wound)
+        object.__setattr__(self, "knockdown_hits_threshold", knockdown)
+
+
+def injury_thresholds(strength: int) -> tuple[int, int]:
+    """``(wound_hits_threshold, knockdown_hits_threshold)`` for a *beginning* ST.
+
+    ITL p.20 ("Reactions to Injury"): an ordinary figure loses 2 DX at 5 hits in
+    one turn and falls at 8. A creature whose beginning ST is 30+ is sturdier --
+    it loses 2 DX only at 9 hits and falls at 16; one with beginning ST 50+ only
+    at 15 and 25. Deriving this from ST keeps the rule in a single place so every
+    high-ST creature gets it automatically.
+    """
+    if strength >= 50:
+        return 15, 25
+    if strength >= 30:
+        return 9, 16
+    return WOUND_HITS_THRESHOLD, KNOCKDOWN_HITS
+
 
 def _hide(species: str, stops: int, movement_allowance: int) -> Armor:
     """A creature's natural armour, which also carries its movement allowance."""
@@ -120,7 +144,6 @@ GIANT = Monster(
                   hth_damage=DamageDice(2, -1),
                   notes="1d+1 per full 10 starting ST"),
     size=3, needs_two_to_engage=True,
-    wound_hits_threshold=9, knockdown_hits_threshold=16,
     notes="occupies 3 hexes; engaged only by two foes; -2 DX at 9 hits, "
           "falls at 16 hits/turn",
 )
