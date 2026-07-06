@@ -10,8 +10,10 @@ so the match can be watched after the fact (or live with ``--headed --slowmo``).
 from __future__ import annotations
 
 import re
+import time
 
 import pytest
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 from hexarena.hex import FLAT, Hex, HexLayout
@@ -399,16 +401,49 @@ def _drive_melee_select(page: Page, gid: str, fig: dict, foe: dict, enemies: lis
 
 
 def _open_menu(page: Page, uid: str) -> None:
-    page.locator(f'#roster .row[data-uid="{uid}"]').first.click()
-    page.locator("#tokenMenu").wait_for(state="visible", timeout=5_000)
+    """Open a figure's token menu by clicking its roster row -- re-render-safe.
+
+    Two things make a single click-then-wait flaky (#349, same class as #328):
+    the app's ~2s poll rebuilds #roster from scratch (render() -> drawRoster()
+    replaces its innerHTML), so the row can detach from the DOM mid-gesture and
+    the menu never opens; and onFigureClick opens the menu only after an async
+    loadOptions() fetch round-trip, which on slow headless-linux CI can outlast a
+    tight 5s wait. So re-resolve a fresh row locator and re-click on every attempt
+    (Locator.click re-queries, auto-scrolls, and retries actionability), retrying
+    the whole open-and-verify past any poll tick until #tokenMenu is really
+    visible. Re-clicking a roster row is idempotent -- onFigureClick just reopens
+    the menu -- so a click that already opened it can't be undone by a retry.
+    """
+    row_selector = f'#roster .row[data-uid="{uid}"]'
+    menu = page.locator("#tokenMenu")
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            page.locator(row_selector).first.click(timeout=5_000)
+            menu.wait_for(state="visible", timeout=5_000)
+            return
+        except PlaywrightError:
+            if time.monotonic() >= deadline:
+                raise
 
 
 def _click_menu_row(page: Page, text: str) -> bool:
-    row = page.locator("#tokenMenu .row", has_text=text)
-    if row.count() == 0:
+    """Click a token-menu row by its text. Returns False if the menu offers no
+    such row. The menu's contents are static once open (the poll only rebuilds it
+    on a phase change), but the row node can still detach under a re-render, so
+    re-resolve and retry the click in a short deadline loop rather than acting on
+    a possibly-stale handle."""
+    selector = page.locator("#tokenMenu .row", has_text=text)
+    if selector.count() == 0:
         return False
-    row.first.click()
-    return True
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            selector.first.click(timeout=5_000)
+            return True
+        except PlaywrightError:
+            if selector.count() == 0 or time.monotonic() >= deadline:
+                raise
 
 
 # Body armour by how many hits it soaks (engine/rules_data.py), least first --
