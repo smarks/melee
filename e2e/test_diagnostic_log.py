@@ -40,7 +40,7 @@ def test_diagnostic_log_captures_interactions_and_transitions(
     active = _active_uid(page)
     assert active is not None
     page.locator(
-        f'#roster .charctl[data-ctl="{active}"] button[data-opt="do_nothing"]').click()
+        f'#controls .charctl[data-ctl="{active}"] button[data-opt="do_nothing"]').click()
     # The highlight moves on -> the action was accepted.
     expect(page.locator(
         f'#roster .row.active:not([data-uid="{active}"])')).to_have_count(1, timeout=5_000)
@@ -72,7 +72,7 @@ def test_debug_log_button_downloads_a_report(live_server, page: Page) -> None:
 
     active = _active_uid(page)
     page.locator(
-        f'#roster .charctl[data-ctl="{active}"] button[data-opt="do_nothing"]').click()
+        f'#controls .charctl[data-ctl="{active}"] button[data-opt="do_nothing"]').click()
     expect(page.locator("#roster .row.active")).to_have_count(1)
 
     # Clicking 🐞 Log downloads a readable text report.
@@ -104,7 +104,7 @@ def test_debug_query_param_mirrors_to_console(live_server, page: Page) -> None:
     expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=20_000)
     active = _active_uid(page)
     page.locator(
-        f'#roster .charctl[data-ctl="{active}"] button[data-opt="do_nothing"]').click()
+        f'#controls .charctl[data-ctl="{active}"] button[data-opt="do_nothing"]').click()
     expect(page.locator("#roster .row.active")).to_have_count(1)
 
     # At least one mirrored dbg line reached the console.
