@@ -15,8 +15,10 @@ the draggable-panels block in ``board/static/board/board.js`` and the ``.floatin
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 from test_interactions import _start_inline_game
@@ -507,11 +509,24 @@ def test_narrow_viewport_is_clean_stacked_scroll_with_chrome_hidden(live_server,
     expect(page.locator("#selInfo")).to_contain_text("No figure selected")
 
     # Tap a (non-active) character row -> its read-only sheet fills the Selected panel.
-    row = page.locator(".tracker .roster .row[data-uid]:not(.active)").first
-    expect(row).to_be_visible(timeout=10_000)
-    row.scroll_into_view_if_needed()
-    row.click()
-    expect(page.locator("#selInfo")).not_to_contain_text("No figure selected")
+    # The roster is rebuilt from scratch by the app's ~2s poll (render() -> drawRoster()
+    # replaces #roster's innerHTML), so a row element can detach from the DOM mid-action.
+    # Re-resolve a fresh locator on every attempt -- Locator.click() re-queries, auto-scrolls,
+    # and retries actionability -- and retry the whole tap-and-verify past any re-render so a
+    # poll tick landing between locate and click can never leave us acting on a stale node.
+    row_selector = ".tracker .roster .row[data-uid]:not(.active)"
+    expect(page.locator(row_selector).first).to_be_visible(timeout=10_000)
+    selected_info = page.locator("#selInfo")
+
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            page.locator(row_selector).first.click(timeout=2_000)
+            expect(selected_info).not_to_contain_text("No figure selected", timeout=2_000)
+            break
+        except (PlaywrightError, AssertionError):
+            if time.monotonic() >= deadline:
+                raise
 
 
 @pytest.mark.django_db
