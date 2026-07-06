@@ -15,7 +15,7 @@ from engine import chargen
 from engine.arena import Arena
 from engine.facing import FRONT, REAR, attack_zone
 from engine.figure import Figure, Race, create_fighter
-from engine.monsters import MONSTERS, create_monster
+from engine.monsters import MONSTERS, create_monster, injury_thresholds
 from engine.options import Option
 from engine.rules_data import (
     CLOTH,
@@ -180,6 +180,26 @@ def test_bear_has_its_rulebook_statline() -> None:
     assert bear.hits_stopped(from_front=False) == 2           # natural armour is all-round
     assert bear.ready_weapon.damage == DamageDice(2, 2)       # 2d+2
     assert str(bear.ready_weapon.damage) == "2d+2"
+
+
+def test_st30_creatures_use_the_sturdier_injury_thresholds() -> None:
+    # ITL p.20: a creature with beginning ST 30+ loses 2 DX only at 9 hits/turn
+    # and falls at 16 (not the ordinary 5/8). The bear's beginning ST is 30, so
+    # it qualifies just as the giant does; a normal figure keeps 5/8 (#336).
+    bear = create_monster("Bear", "Bruin", "wild")
+    assert bear.strength == 30
+    assert bear.wound_hits_threshold == 9
+    assert bear.knockdown_hits_threshold == 16
+    giant = create_monster("Giant", "Grond", "wild")
+    assert (giant.wound_hits_threshold, giant.knockdown_hits_threshold) == (9, 16)
+    # A normal figure (ST < 30) keeps the ordinary thresholds.
+    man = create_fighter("Man", 12, 12, "a")
+    assert (man.wound_hits_threshold, man.knockdown_hits_threshold) == (5, 8)
+    # The rule is a pure function of beginning ST across all three tiers (p.20).
+    assert injury_thresholds(29) == (5, 8)
+    assert injury_thresholds(30) == (9, 16)
+    assert injury_thresholds(49) == (9, 16)
+    assert injury_thresholds(50) == (15, 25)
 
 
 def test_wolf_and_gargoyle_statlines() -> None:

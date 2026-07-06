@@ -696,17 +696,25 @@ def test_situational_to_hit_modifiers() -> None:
         spear, charger, SPEAR, False)
     assert "over body" not in note_t
 
-    # a missile shot at a foe sheltering behind a body: -4
+    # a missile shot at a foe sheltering behind a body: -4. The sheltering body
+    # lies in the TARGET's OWN hex (ITL p.117), not one step toward the shooter.
     shooter = create_human("Bow", 12, 12, "a", weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
     hidden = create_human("Hidden", 12, 12, "b", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     shooter.position = Hex(5, 5)
     hidden.position = Hex(5, 9)
     blocker = create_human("Body", 12, 12, "c", weapons=[BROADSWORD], ready_weapon=BROADSWORD)
-    blocker.position = grid.line(hidden.position, shooter.position)[1]
     blocker.damage_taken = blocker.strength + 5
+    # a body sharing the TARGET's own hex confers the shelter penalty (#337)
+    blocker.position = hidden.position
     _, note3 = GameState(arena, [shooter, hidden, blocker])._situational_mods(
         shooter, hidden, LIGHT_CROSSBOW, True)
     assert "-4 sheltered" in note3
+    # a body one hex toward the shooter (not the target's hex) does NOT: the old
+    # off-by-one tested line[1], firing the penalty on the wrong hex (#337).
+    blocker.position = grid.line(hidden.position, shooter.position)[1]
+    _, note_no = GameState(arena, [shooter, hidden, blocker])._situational_mods(
+        shooter, hidden, LIGHT_CROSSBOW, True)
+    assert "sheltered" not in note_no
 
 
 def test_prone_crossbowman_may_fire_at_plus_one() -> None:

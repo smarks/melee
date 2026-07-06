@@ -1274,12 +1274,14 @@ class _ShieldRushMixin:
         # own to-hit (p.16, "Standing in a hex with a fallen body") — #125.
         if attacker.position is not None and self._body_in_hex(attacker.position, exclude=attacker):
             mods -= 2; notes.append("-2 over body")
-        # A missile shot at a foe sheltering behind a body: -4.
-        if (is_missile and attacker.position is not None
-                and target.position is not None):
-            line = layout.line(target.position, attacker.position)
-            if len(line) >= 2 and self._body_in_hex(line[1]):
-                mods -= 4; notes.append("-4 sheltered")
+        # A missile shot at a foe sheltering behind a body: -4. The sheltering
+        # body lies in the TARGET's own hex — "Any figure may lie prone or kneel
+        # in the same hex with a sheltering body" (ITL p.117) — not one step
+        # toward the shooter (#337). Bodies BETWEEN shooter and target are the
+        # separate in-flight blocking rule, handled elsewhere.
+        if (is_missile and target.position is not None
+                and self._body_in_hex(target.position, exclude=target)):
+            mods -= 4; notes.append("-4 sheltered")
         return mods, " ".join(notes)
 
     def move(
@@ -2060,7 +2062,11 @@ class _CombatMixin:
             self.damage_events.append(DamageEvent(
                 attacker_side=attacker.side, target_side=target.side,
                 attacker_uid=attacker.uid, target_uid=target.uid,
-                damage=result.damage, same_side_allowed=self._same_side_hit_ok))
+                damage=result.damage,
+                # A Tarmar crit (body_hit) drives the same hits into Body too;
+                # record it so the invariants can see a crit-death (#340).
+                body_damage=result.damage if result.body_hit else 0,
+                same_side_allowed=self._same_side_hit_ok))
         # Force-retreat eligibility (p.20) counts only melee damage: "missile or
         # thrown weapon hits ... don't count." A missile/thrown hit deals ST damage
         # but must not arm a force retreat.
