@@ -2207,7 +2207,7 @@ applyTheme();
 // snapResizeGeom) are kept small so they are easy to reason about and to e2e-test.
 const LAYOUT_KEY = "melee.layout.v2";  // {key:{x,y,w,h,mode,restoreGeom}}
 const LAYOUT_KEY_V1 = "melee.layout.v1";  // Stage 1 {key:{x,y,w,h}} -- migrated on load
-const LAYOUT_SNAP_PX = 9;              // snap when an edge is within this many px
+const LAYOUT_SNAP_PX = 12;             // snap when an edge is within this many px (#325: eased from 9 for easier edge alignment)
 const LAYOUT_MIN_VISIBLE = 48;         // px of a panel that must stay grabbable
 const LAYOUT_RESIZE_MIN_W = 96;        // smallest width a drag-resize allows
 const LAYOUT_Z_BASE = 10;              // bring-to-front band: 10..40, below overlays@50
@@ -2699,6 +2699,64 @@ function resetLayout() {
   }
 }
 
+// ---- "Panels" header menu: bring any panel back into view (#325) ------------
+// A lighter recovery than Reset layout: pick a panel to un-minimize it, raise it to
+// the front, and re-centre it into view so a panel you minimized or shoved off the
+// edge is one click away. When stacked (narrow), there are no floating windows, so
+// the same pick just scrolls that section into view.
+function showPanel(key) {
+  const panel = LAYOUT_PANELS.find(p => p.key === key);
+  if (!panel || !panel.el) return;
+  closePanelsMenu();
+  if (layoutStacked()) {
+    panel.el.scrollIntoView({block: "start", behavior: "smooth"});
+    return;
+  }
+  if (panel.mode === "minimized") revertPanel(panel);   // un-minimize to its saved geom
+  bringToFront(panel);
+  const bounds = wrapBounds();
+  const geom = getInlineGeom(panel);
+  const centered = {
+    x: Math.round((bounds.width - geom.w) / 2),
+    y: Math.round((bounds.height - geom.h) / 2),
+    w: geom.w, h: geom.h,
+  };
+  applyGeom(panel, clampGeom(centered, bounds));
+  saveLayout();
+}
+
+// Rebuilt on every open so a panel's live minimized state shows in the list.
+function buildPanelsMenu() {
+  const menu = $("panelsMenu");
+  if (!menu) return;
+  menu.innerHTML = "";
+  for (const panel of LAYOUT_PANELS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    const minimized = !layoutStacked() && panel.mode === "minimized";
+    button.innerHTML = escapeHtml(panel.label)
+      + (minimized ? ` <span class="pm-state">minimized</span>` : "");
+    button.addEventListener("click", () => showPanel(panel.key));
+    menu.appendChild(button);
+  }
+}
+
+function closePanelsMenu() { const menu = $("panelsMenu"); if (menu) menu.style.display = "none"; }
+function togglePanelsMenu() {
+  const menu = $("panelsMenu");
+  if (!menu) return;
+  if (menu.style.display === "block") { closePanelsMenu(); return; }
+  buildPanelsMenu();
+  menu.style.display = "block";
+}
+// Click-away / Escape closes the menu (state-driven: it stays open until dismissed,
+// never on a timer -- project UI rule: no auto-dismissing chrome).
+document.addEventListener("pointerdown", (event) => {
+  const dd = document.querySelector(".panels-dd");
+  if (dd && !dd.contains(event.target)) closePanelsMenu();
+});
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") closePanelsMenu(); });
+
 // Build a titlebar control button. pointerdown is stopped so a click on a control
 // never also starts a titlebar drag; the <button> stays keyboard-focusable/clickable.
 function makeCtlButton(symbol, label, onActivate) {
@@ -2851,5 +2909,5 @@ Object.assign(window, {
   adminDeleteChar, adminCreateCharFor,
   openEditor, closeEditor, startCustom,
   copyLink, seatAction, resetTheme,
-  downloadDebugLog, resetLayout,
+  downloadDebugLog, resetLayout, togglePanelsMenu, showPanel,
 });
