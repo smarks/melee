@@ -32,6 +32,20 @@ function captureOwnership(data) {
   if ("you_control" in data) YOU_CONTROL = data.you_control || [];
   if ("open_seats" in data) OPEN_SEATS = data.open_seats || [];
   if ("is_admin" in data) IS_ADMIN = !!data.is_admin;
+  pruneForeignPlan();
+}
+// Once the server has told this client which seats it holds (YOU_CONTROL
+// non-empty), drop any queued PLAN entries for sides it does NOT control (#345).
+// Before a seat is claimed, myControlled's fallback treats every non-computer
+// side as "mine", so the client auto-queues attacks for BOTH sides; after
+// claiming one seat the stale entry for the other side would POST on Resolve and
+// be rejected server-side (a harmless 403). Clearing it on seat claim avoids that.
+function pruneForeignPlan() {
+  if (IS_ADMIN || !YOU_CONTROL.length || !S || !S.figures) return;
+  for (const uid of Object.keys(PLAN)) {
+    const fig = figByUid(uid);
+    if (fig && !YOU_CONTROL.includes(fig.side)) delete PLAN[uid];
+  }
 }
 
 const $ = id => document.getElementById(id);
@@ -1362,6 +1376,17 @@ function drawSelInfo() {
     if (header) header.innerHTML = statusHeader(f) + charSheetHtml(f) + planLine(f);
     return;
   }
+  // Poll-clobber guard for the save-character rename field (#339): a logged-in
+  // NON-admin retyping a colliding name has a live <input> the admin guard above
+  // doesn't cover (INLINE_EDIT_FOR is admin-only). While that input is focused,
+  // skip the innerHTML rebuild and refresh only the read-only header, so a poll
+  // tick during typing can't drop the caret/focus (mirrors the admin path).
+  const renameField = box.querySelector(".savechar-name");
+  if (renameField && document.activeElement === renameField) {
+    const header = box.querySelector("[data-selheader]");
+    if (header) header.innerHTML = statusHeader(f) + charSheetHtml(f) + planLine(f);
+    return;
+  }
   INLINE_EDIT_FOR = null;
   box.innerHTML = `<div data-selheader>`
     + statusHeader(f) + charSheetHtml(f) + planLine(f) + `</div>`;
@@ -2305,7 +2330,8 @@ const LAYOUT_PANELS = [
 // registry pins it to a fixed slot (the split tracker/fighter, #323).
 const defaultModeFor = panel => panel.defaultMode || "content";
 const LAYOUT_NARROW = window.matchMedia("(max-width: 1100px)");
-let DEFAULT_LAYOUT = null;             // {key: {x,y,w,h}} measured once from flex
+let DEFAULT_LAYOUT = null;             // {key: {x,y,w,h}} measured from the wide flex flow
+let defaultsMeasuredWide = false;      // true once DEFAULT_LAYOUT reflects a real wide measurement (#338)
 let layoutZTop = LAYOUT_Z_BASE;        // monotonic front-most z within the band
 let layoutSaveTimer = null;
 const resizeMinH = panel => (panel.handle ? Math.round(panel.handle.offsetHeight) : 32);
@@ -2614,11 +2640,21 @@ function fitToContent(panel) {
   saveLayout();
 }
 
+// Snapshot the geometry+mode a toggle should return to. Only capture when the
+// panel is in a NON-transient mode (content/manual); if it is already maximized
+// or minimized, keep the existing restore instead of overwriting it with the
+// transient geom/mode (#335). Otherwise chaining Maximize<->Minimize would clobber
+// the user's real manual size and Restore/Expand could no longer return to it.
+function captureRestore(panel) {
+  if (panel.mode === "maximized" || panel.mode === "minimized") return panel.restore;
+  return {geom: getInlineGeom(panel), mode: panel.mode};
+}
+
 // Toggle Minimize <-> Expand. Minimize saves the pre-collapse {geom,mode} and
 // shrinks to the titlebar; Expand returns to it.
 function toggleMinimize(panel) {
   if (panel.mode === "minimized") { revertPanel(panel); return; }
-  panel.restore = {geom: getInlineGeom(panel), mode: panel.mode};
+  panel.restore = captureRestore(panel);
   setMode(panel, "minimized");
   const geom = getInlineGeom(panel);
   applyGeom(panel, {x: geom.x, y: geom.y, w: geom.w, h: resizeMinH(panel)});
@@ -2629,7 +2665,7 @@ function toggleMinimize(panel) {
 // fills the wrap; Restore returns to it.
 function toggleMaximize(panel) {
   if (panel.mode === "maximized") { revertPanel(panel); return; }
-  panel.restore = {geom: getInlineGeom(panel), mode: panel.mode};
+  panel.restore = captureRestore(panel);
   setMode(panel, "maximized");
   bringToFront(panel);
   const bounds = wrapBounds();
@@ -2716,6 +2752,27 @@ function onPanelPointerDown(panel, downEvent) {
   window.addEventListener("pointerup", onUp);
 }
 
+// Measure the floating defaults from the wide flex flow. MUST run with the wrap
+// un-floated and the viewport actually wide (getBoundingClientRect then reflects
+// the real side-by-side geometry, not the <1100px stacked column). Also derives
+// the Character/Action column split (#326): the wide pre-float flow collapses
+// .action to zero width, so its default comes from the tracker's full-height
+// column (Character ~62% on top, Action ~38% below) rather than the sliver.
+function captureDefaults() {
+  const wrap = layoutWrap();
+  wrap.classList.remove("floating");
+  for (const panel of LAYOUT_PANELS) clearInlineGeom(panel);
+  DEFAULT_LAYOUT = measureDefaults(wrap);
+  const trackerDefault = DEFAULT_LAYOUT.tracker;
+  const characterHeight = Math.round(trackerDefault.h * 0.62);
+  DEFAULT_LAYOUT.tracker = {...trackerDefault, h: characterHeight};
+  DEFAULT_LAYOUT.action = {
+    x: trackerDefault.x, y: trackerDefault.y + characterHeight,
+    w: trackerDefault.w, h: trackerDefault.h - characterHeight,
+  };
+  defaultsMeasuredWide = true;
+}
+
 // Apply the right layout for the current width: floating (measured defaults ⊕
 // persisted) when wide, or the plain stacked flex flow when narrow.
 function applyResponsiveLayout() {
@@ -2728,6 +2785,10 @@ function applyResponsiveLayout() {
     }
     return;
   }
+  // First entry into wide/floating after a narrow load: measure the real wide
+  // defaults now (deferred from initLayout because they can't be measured while
+  // the stacked media query is in force) -- #338.
+  if (!defaultsMeasuredWide) captureDefaults();
   const merged = mergeLayout(DEFAULT_LAYOUT, loadSavedLayout());
   layoutZTop = LAYOUT_Z_BASE;
   wrap.classList.add("floating");
@@ -2860,20 +2921,12 @@ function initLayout() {
     panel.handle = panel.el && panel.el.querySelector(".panel-titlebar");
   }
   if (LAYOUT_PANELS.some(panel => !panel.el || !panel.handle)) return;  // markup missing
-  DEFAULT_LAYOUT = measureDefaults(wrap);   // measure BEFORE floating (flex geometry)
-  // Split the right column into the Character panel on top (~62%: it now holds the
-  // roster AND the selected fighter's sheet, so it gets the larger share) and the
-  // Action panel below (~38%: the phase prompt + the active character's controls),
-  // #326. The wide pre-float flow collapses .action to zero width (CSS), so its
-  // measured geometry is a sliver; derive its real default from the tracker's
-  // full-height column instead.
-  const trackerDefault = DEFAULT_LAYOUT.tracker;
-  const characterHeight = Math.round(trackerDefault.h * 0.62);
-  DEFAULT_LAYOUT.tracker = {...trackerDefault, h: characterHeight};
-  DEFAULT_LAYOUT.action = {
-    x: trackerDefault.x, y: trackerDefault.y + characterHeight,
-    w: trackerDefault.w, h: trackerDefault.h - characterHeight,
-  };
+  // Measure defaults only when the viewport is actually wide -- the flex geometry
+  // is real only then. If loaded narrow (stacked), defer: applyResponsiveLayout
+  // re-measures the first time we enter floating (#338), so a narrow-then-widen
+  // load can't bake stacked (full-width, x=0, tall-stacked) geometry into the
+  // floating defaults and produce an unrecoverable overlapping layout.
+  if (!layoutStacked()) captureDefaults();   // measures BEFORE floating (flex geometry)
   for (const panel of LAYOUT_PANELS) {
     panel.mode = defaultModeFor(panel);
     panel.restore = null;
@@ -2970,4 +3023,8 @@ Object.assign(window, {
   openEditor, closeEditor, startCustom,
   copyLink, seatAction, resetTheme,
   downloadDebugLog, resetLayout, togglePanelsMenu, showPanel,
+  // render is the poll's re-render entry (the 2s tick calls it on a state
+  // change). Exposed so e2e can simulate a poll tick deterministically and prove
+  // the poll-clobber guards (#323/#339) leave a focused input alone.
+  render,
 });

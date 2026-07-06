@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,45 @@ def _seed_combat_game(gid: str) -> None:
         "phase": "combat",
         "controllers": {"red": "human", "blue": "human"}, "combat_prepared": True,
     }
+
+
+def _seed_two_open_seat_combat(gid: str):
+    """A deterministic two-fighter combat game where BOTH sides are human and
+    OPEN to claim. Each fighter is committed to a plain Attack with the other as
+    its sole adjacent target, so an unseated client (whose myControlled fallback
+    treats every non-computer side as its own) auto-queues a shot for BOTH sides.
+    Returns (red, blue) so a test can reference their uids. Used by #345.
+    """
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    grid = arena.layout
+    red = create_human("Redcap", 12, 12, "red",
+                       weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue = create_human("Bluecap", 12, 12, "blue",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue.position = Hex(3, 3)
+    red.position = grid.neighbor(blue.position, 0)
+    red.facing = next(direction for direction in range(6)
+                      if grid.neighbor(red.position, direction) == blue.position)
+    blue.facing = next(direction for direction in range(6)
+                       if grid.neighbor(blue.position, direction) == red.position)
+    red.current_option = Option.ATTACK
+    blue.current_option = Option.ATTACK
+    GAMES[gid] = {
+        "state": GameState(arena, [red, blue]), "layout": board_layout(arena),
+        "phase": "combat",
+        "controllers": {"red": "human", "blue": "human"},
+        "seats": {"red": "open", "blue": "open"}, "combat_prepared": True,
+    }
+    return red, blue
 
 
 def _debug_snapshot(page: Page) -> dict:
@@ -138,6 +178,69 @@ def test_new_game_resets_combat_resolved_turn(live_server, page: Page) -> None:
         assert snapshot["combatResolvedTurn"] == -1, (
             "combatResolvedTurn leaked into the new game (#307); "
             f"got {snapshot['combatResolvedTurn']}")
+    finally:
+        from board.views import GAMES
+        GAMES.pop(gid, None)
+
+
+@pytest.mark.django_db
+def test_claiming_a_seat_clears_queued_actions_for_unowned_sides(
+        live_server, page: Page) -> None:
+    # #345: before claiming a seat an unclaimed client treats every non-computer
+    # side as its own and auto-queues attacks for BOTH sides into PLAN. After it
+    # claims ONE seat, the stale entry for the OTHER side must be dropped -- pre-fix
+    # it lingered and got POSTed on Resolve, where the server rejects it (403 log
+    # noise). Claiming clears queued actions for sides the client does not control.
+    import json as _json
+
+    gid = "seat-plan-prune-345"
+    red, blue = _seed_two_open_seat_combat(gid)
+    try:
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+
+        # Unseated, the client auto-queued a shot for BOTH sides (#299 fallback).
+        def _plan_has_both() -> bool:
+            plan = _debug_snapshot(page).get("plan", {})
+            return red.uid in plan and blue.uid in plan
+
+        deadline = time.monotonic() + 15
+        while not _plan_has_both():
+            assert time.monotonic() < deadline, (
+                "the unseated client never auto-queued both sides; "
+                f"plan={_debug_snapshot(page).get('plan')}")
+            page.wait_for_timeout(300)
+
+        # Record the /action POSTs a Resolve fires, to prove no unowned side is sent.
+        action_posts: list[dict] = []
+        page.on("request", lambda request: (
+            action_posts.append(_json.loads(request.post_data or "{}"))
+            if request.method == "POST" and request.url.endswith("/action") else None))
+
+        # Claim the red seat. YOU_CONTROL becomes ['red']; the blue entry must go.
+        page.evaluate("() => window.seatAction('claim', 'red')")
+        claim_deadline = time.monotonic() + 15
+        while "red" not in _debug_snapshot(page).get("you_control", []):
+            assert time.monotonic() < claim_deadline, "seat claim never took effect"
+            page.wait_for_timeout(300)
+
+        pruned_plan = _debug_snapshot(page).get("plan", {})
+        assert red.uid in pruned_plan, "claiming red dropped red's own queued action"
+        assert blue.uid not in pruned_plan, (
+            "the stale queued action for the unowned blue side survived the seat "
+            f"claim (#345); plan keys={list(pruned_plan)}")
+
+        # Resolve: the client must POST only actions for the side it controls.
+        resolve = page.get_by_role("button", name=re.compile("Resolve"))
+        expect(resolve).to_be_enabled(timeout=20_000)
+        resolve.click()
+        expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+        page.wait_for_timeout(500)   # let the batched POSTs drain
+
+        posted_uids = {post.get("uid") for post in action_posts if "uid" in post}
+        assert blue.uid not in posted_uids, (
+            "Resolve POSTed a queued action for the unowned blue side, which the "
+            f"server rejects with 403 (#345); posted uids={posted_uids}")
     finally:
         from board.views import GAMES
         GAMES.pop(gid, None)
