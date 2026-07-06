@@ -1,7 +1,13 @@
 name: CI
 
+# CI runs on pushes to main (the post-merge gate that also drives Deploy via
+# workflow_run) and on pull requests targeting main. It deliberately does NOT
+# run on every feature-branch push — that produced a duplicate run per commit
+# and filled the Actions history with red from normal fix-iteration. Feature
+# work is validated through its PR; main stays green.
 on:
   push:
+    branches: [main]
   pull_request:
     branches: [main]
 
