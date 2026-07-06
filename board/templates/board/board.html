@@ -45,8 +45,12 @@
   /* The map panel is a flex column: a pinned drag titlebar over an inner scroll
      region (.arena-scroll) that keeps the SVG-centering + scroll behaviour the
      arena had before the titlebar existed (grid place-items:center, overflow). */
+  /* An opaque themed background so a floating/maximized map never shows the
+     panels beneath it through the margins around the centered SVG (#325). --bg is
+     the same colour the board margins had before, so the look is unchanged -- only
+     now it is solid rather than see-through. */
   .arena { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex;
-           flex-direction: column; position: relative; }
+           flex-direction: column; position: relative; background: var(--bg); }
   .arena-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid;
                   place-items: center; padding: 16px; position: relative; }
   .col { width: 340px; flex: 0 0 340px; border-left: 1px solid var(--line);
@@ -63,10 +67,26 @@
      read-only sheet / inline edit card (#selInfo) over the turn-flow controls
      (#controls). The sheet scrolls internally so #controls stays pinned. */
   .fighterScroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
+  /* Narrow-screen model (#325): a clean, full-width STACKED SCROLL. The wrap is a
+     plain vertical flex flow, the page scrolls, and window chrome is off (see the
+     .wrap:not(.floating) rules on .panel-ctls / .rz / titlebar cursor below --
+     dragging, resizing, and maximizing don't apply when stacked). Panels are
+     re-ordered for play: the board first, then who-acts-now (Characters) and the
+     selected fighter's sheet + turn controls, then the reference log, and finally
+     Game Control (mostly a pre-game setup panel, locked during a match). */
   @media (max-width: 1100px) {
     .wrap { flex-direction: column; height: auto; }
     .col { width: auto; flex: none; border-left: none; border-top: 1px solid var(--line); }
     .arena { min-height: 60vh; }
+    .arena       { order: 1; }
+    .tracker     { order: 2; }
+    .fighter     { order: 3; }
+    .logcol      { order: 4; }
+    #gameControl { order: 5; }
+    /* Touch-friendly stacked spacing: a little breathing room under each section's
+       content so finger targets aren't cramped, and a comfy tap size on the log. */
+    .col > .pad { padding-bottom: 14px; }
+    #log { font-size: 16px; }
   }
   /* Wide, non-floating pre-float measuring pass (#323): collapse the Selected-
      character column to zero so map/log/control/tracker measure exactly as they did
@@ -104,6 +124,23 @@
   .panel-ctl:hover { color: var(--ink); border-color: var(--accent); }
   .panel-ctl:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .wrap:not(.floating) .panel-ctls { display: none; }   /* stacked: no window controls */
+  /* Stacked: the titlebar is just a section label, not a drag grip -- so it reads
+     as a heading, not a movable window (#325). */
+  .wrap:not(.floating) .panel-titlebar { cursor: default; }
+  /* "Panels" header dropdown (#325): a lighter recovery than Reset layout -- pick a
+     panel to un-minimize it, raise it to the front, and re-centre it into view. The
+     menu is state-driven (it stays open until you pick an item or toggle it shut --
+     not an auto-dismissing popup) and sits above the floating panels / overlays. */
+  .panels-dd { position: relative; display: inline-block; }
+  .panels-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 70;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 4px; min-width: 190px; box-shadow: 0 8px 22px #0008; text-align: left; }
+  .panels-menu button { display: block; width: 100%; text-align: left; margin: 0;
+    padding: 7px 10px; border: 0; border-radius: 5px; background: transparent;
+    color: var(--ink); font-size: 13px; cursor: pointer; }
+  .panels-menu button:hover { background: var(--accent); color: var(--accent-ink); }
+  .panels-menu .pm-state { color: var(--muted); font-size: 11px; margin-left: 8px; }
+  .panels-menu button:hover .pm-state { color: var(--accent-ink); }
   /* Floating mode: absolutely position each panel from its inline left/top/
      width/height (written by JS). z-index sits in a 10-40 band, strictly below
      overlays@50, modals@55 and the token menu@60, so stacking never regresses. */
@@ -116,18 +153,34 @@
   /* Drag-to-resize handles (#321): eight edge/corner grips, only in floating mode
      and kept inside the panel box (the panels clip overflow). Corners sit above
      edges so a corner drag resizes both axes. */
+  /* Larger, finger-friendly hit areas (#325): 10px edges and 20px corners give a
+     comfortable grab target for both mouse and touch (touch-action:none keeps a
+     drag from scrolling the page). A faint tint on hover makes the grip visible;
+     the corners show a small diagonal wedge so they read as resize handles. */
   .rz { display: none; position: absolute; z-index: 6; touch-action: none; }
   .wrap.floating > .arena > .rz,
   .wrap.floating > .col > .rz { display: block; }
-  .rz-n { top: 0; left: 0; right: 0; height: 6px; cursor: ns-resize; }
-  .rz-s { bottom: 0; left: 0; right: 0; height: 6px; cursor: ns-resize; }
-  .rz-e { top: 0; bottom: 0; right: 0; width: 6px; cursor: ew-resize; }
-  .rz-w { top: 0; bottom: 0; left: 0; width: 6px; cursor: ew-resize; }
-  .rz-ne, .rz-nw, .rz-se, .rz-sw { width: 12px; height: 12px; z-index: 7; }
+  .rz-n { top: 0; left: 0; right: 0; height: 10px; cursor: ns-resize; }
+  .rz-s { bottom: 0; left: 0; right: 0; height: 10px; cursor: ns-resize; }
+  .rz-e { top: 0; bottom: 0; right: 0; width: 10px; cursor: ew-resize; }
+  .rz-w { top: 0; bottom: 0; left: 0; width: 10px; cursor: ew-resize; }
+  .rz-n:hover, .rz-s:hover, .rz-e:hover, .rz-w:hover {
+    background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .rz-ne, .rz-nw, .rz-se, .rz-sw { width: 20px; height: 20px; z-index: 7; }
   .rz-ne { top: 0; right: 0; cursor: nesw-resize; }
   .rz-nw { top: 0; left: 0; cursor: nwse-resize; }
   .rz-se { bottom: 0; right: 0; cursor: nwse-resize; }
-  .rz-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+  .rz-sw { bottom: 0; left: 0; cursor: nwse-resize; }
+  /* A subtle corner wedge so the resize corners are visibly grabbable. */
+  .rz-se::after, .rz-sw::after, .rz-ne::after, .rz-nw::after {
+    content: ""; position: absolute; width: 8px; height: 8px; opacity: .5;
+    border-color: var(--muted); border-style: solid; border-width: 0; }
+  .rz-se::after { right: 2px; bottom: 2px; border-right-width: 2px; border-bottom-width: 2px; }
+  .rz-sw::after { left: 2px; bottom: 2px; border-left-width: 2px; border-bottom-width: 2px; }
+  .rz-ne::after { right: 2px; top: 2px; border-right-width: 2px; border-top-width: 2px; }
+  .rz-nw::after { left: 2px; top: 2px; border-left-width: 2px; border-top-width: 2px; }
+  .rz-se:hover::after, .rz-sw:hover::after, .rz-ne:hover::after, .rz-nw:hover::after {
+    opacity: 1; border-color: var(--accent); }
   .wrap.floating > .minimized > .rz { display: none; }  /* no resizing while collapsed */
   /* Game Control panel (the former New-game modal, now always inline). */
   .gc-section { margin-top: 12px; }
@@ -450,6 +503,11 @@
     <label class="themepick">Theme
       <select id="themePicker" title="Choose a colour theme"></select>
     </label>
+    <span class="panels-dd">
+      <button id="panelsMenuBtn" type="button" onclick="togglePanelsMenu()"
+              title="Show a panel / bring it back into view">Panels ▾</button>
+      <div id="panelsMenu" class="panels-menu" style="display:none"></div>
+    </span>
     <button id="resetLayout" onclick="resetLayout()"
             title="Reset panel positions to the default layout">⟲ Reset layout</button>
     {% if request.user.is_authenticated %}

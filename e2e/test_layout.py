@@ -433,3 +433,196 @@ def test_v2_layout_without_fighter_resets_once(live_server, page: Page) -> None:
     honoured = _box(page, ".tracker")
     assert abs(honoured["x"] - moved["x"]) < 3, "the saved five-panel layout was not honoured"
     assert abs(honoured["y"] - moved["y"]) < 3
+
+
+# ---- Stage 3 (#325): narrow-screen stacked scroll, opaque map, touch, bring-back --
+
+_PANEL_SELECTORS = [".arena", ".logcol", "#gameControl", ".tracker", ".fighter"]
+
+
+def _titlebar_owns_its_center(page: Page, selector: str) -> bool:
+    """True iff the panel's own titlebar is the topmost element at its centre --
+    i.e. no other panel's box overlaps and would intercept its clicks (#324)."""
+    box = _box(page, f"{selector} .panel-titlebar")
+    center_x = box["x"] + box["width"] / 2
+    center_y = box["y"] + box["height"] / 2
+    return page.evaluate(
+        "([sel, x, y]) => { const hit = document.elementFromPoint(x, y);"
+        " const panel = document.querySelector(sel);"
+        " return !!(hit && panel && panel.contains(hit)); }",
+        [selector, center_x, center_y],
+    )
+
+
+@pytest.mark.django_db
+def test_default_layout_panels_do_not_overlap_click_targets(live_server, page: Page) -> None:
+    # Overlap probe (the #324 CI failure mode): at the default layout in a standard
+    # viewport, every panel's titlebar is the topmost element at its own centre, so
+    # no panel's subtree overlaps and intercepts another panel's click targets.
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+    for selector in _PANEL_SELECTORS:
+        assert _titlebar_owns_its_center(page, selector), (
+            f"{selector} titlebar is covered by another panel at the default layout"
+        )
+
+
+@pytest.mark.django_db
+def test_narrow_viewport_is_clean_stacked_scroll_with_chrome_hidden(live_server, page: Page) -> None:
+    # Below the breakpoint (~400px) the app is a clean, full-width stacked scroll:
+    # nothing floats, no panel is absolutely positioned, the window chrome (titlebar
+    # controls + resize handles) is hidden, the page scrolls, and a figure is still
+    # inspectable.
+    page.set_viewport_size({"width": 400, "height": 800})
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(0)
+
+    for selector in _PANEL_SELECTORS:
+        position = page.evaluate(
+            "s => getComputedStyle(document.querySelector(s)).position", selector)
+        assert position != "absolute", f"{selector} must not be absolutely positioned when stacked"
+
+    # Window chrome is off: the titlebar control cluster and the resize grips.
+    expect(page.locator(".arena .panel-ctls")).to_be_hidden()
+    expect(page.locator(".fighter .panel-ctls")).to_be_hidden()
+    expect(page.locator(".arena .rz-se")).to_be_hidden()
+    expect(page.locator(".tracker .rz-e")).to_be_hidden()
+
+    # The page scrolls (stacked content is taller than the short viewport).
+    assert page.evaluate("() => document.documentElement.scrollHeight > window.innerHeight"), (
+        "stacked layout should make the page scroll on a short viewport"
+    )
+
+    # A figure is still inspectable in stacked mode: tapping a name in the full-width
+    # Characters list shows that figure's sheet in the Selected-character panel. That
+    # is the reliable narrow/touch inspect gesture, and it exercises the stacked flow
+    # (page scroll, no nested map scroll). We deliberately do NOT click the SVG token
+    # here: at 400px the map is a cramped nested-scroll box, so a token can land in a
+    # spot that is fiddly to reach programmatically on headless CI -- the app still
+    # opens its menu on a real tap, and that path is covered at the wide viewport in
+    # test_moving_map_does_not_break_game_or_menu.
+    _start_inline_game(page, human=True)
+    expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=10_000)
+    expect(page.locator("#svg polygon[data-label]").first).to_be_visible(timeout=10_000)
+    expect(page.locator("#selInfo")).to_contain_text("No figure selected")
+
+    # Tap a (non-active) character row -> its read-only sheet fills the Selected panel.
+    row = page.locator(".tracker .roster .row[data-uid]:not(.active)").first
+    expect(row).to_be_visible(timeout=10_000)
+    row.scroll_into_view_if_needed()
+    row.click()
+    expect(page.locator("#selInfo")).not_to_contain_text("No figure selected")
+
+
+@pytest.mark.django_db
+def test_maximized_map_has_opaque_background(live_server, page: Page) -> None:
+    # Stage 2 left the map see-through around the centered SVG; Stage 3 gives it a
+    # themed opaque background so lower panels don't show through the margins.
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+    _ctl(page, ".arena", "Maximize").click()
+
+    background = page.evaluate(
+        "() => getComputedStyle(document.querySelector('.arena')).backgroundColor")
+    assert background not in ("transparent", "rgba(0, 0, 0, 0)"), (
+        f"maximized map background is see-through: {background}"
+    )
+
+    # A point in the map's margin (inside the maximized arena, away from centre)
+    # resolves to the arena itself -- no lower panel bleeds through.
+    arena = _box(page, ".arena")
+    owns_margin = page.evaluate(
+        "([x, y]) => { const hit = document.elementFromPoint(x, y);"
+        " const arena = document.querySelector('.arena');"
+        " return !!(hit && arena && arena.contains(hit)); }",
+        [arena["x"] + 12, arena["y"] + arena["height"] - 12],
+    )
+    assert owns_margin, "a lower panel is visible through the maximized map's margin"
+
+
+@pytest.mark.django_db
+def test_touch_drag_moves_and_persists(live_server, browser) -> None:
+    # Touch support: in a touch-enabled context, dragging a panel by its titlebar
+    # with real touch input (CDP touch events -> pointer events) moves it and the
+    # move persists, proving drag works by finger, not just mouse.
+    context = browser.new_context(viewport={"width": 1440, "height": 900}, has_touch=True)
+    page = context.new_page()
+    try:
+        page.goto(live_server.url)
+        expect(page.locator(".wrap.floating")).to_have_count(1)
+        assert page.evaluate("() => navigator.maxTouchPoints > 0"), "context is not touch-enabled"
+
+        handle = _box(page, ".tracker .panel-titlebar")
+        start_x = handle["x"] + handle["width"] / 2
+        start_y = handle["y"] + handle["height"] / 2
+        before = _box(page, ".tracker")
+
+        cdp = context.new_cdp_session(page)
+        cdp.send("Input.dispatchTouchEvent",
+                 {"type": "touchStart", "touchPoints": [{"x": start_x, "y": start_y}]})
+        steps = 10
+        delta_x, delta_y = -180.0, 90.0
+        for step in range(1, steps + 1):
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [
+                {"x": start_x + delta_x * step / steps, "y": start_y + delta_y * step / steps}]})
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+
+        after = _box(page, ".tracker")
+        assert abs(after["x"] - before["x"]) > 50, "touch drag did not move the panel horizontally"
+        assert abs(after["y"] - before["y"]) > 40, "touch drag did not move the panel vertically"
+
+        page.wait_for_function("() => localStorage.getItem('melee.layout.v2') !== null")
+        saved = json.loads(page.evaluate("() => localStorage.getItem('melee.layout.v2')"))
+        assert abs(saved["tracker"]["x"] - after["x"]) < 3, "touch move was not persisted"
+    finally:
+        context.close()
+
+
+@pytest.mark.django_db
+def test_panels_menu_brings_back_a_minimized_panel(live_server, page: Page) -> None:
+    # Bring-back affordance: minimize a panel, then use the header "Panels" menu to
+    # restore it -- it comes back expanded, in view, and raised to the front.
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    _ctl(page, ".fighter", "Minimize").click()
+    expect(page.locator(".fighter .fighterScroll")).to_be_hidden()
+
+    # Push another panel to the top of the z-band so "front" is a real assertion.
+    _drag_panel(page, ".tracker .panel-titlebar", -40, 40)
+    tracker_z = page.evaluate(
+        "() => parseInt(getComputedStyle(document.querySelector('.tracker')).zIndex) || 0")
+
+    page.get_by_role("button", name="Panels").click()
+    page.locator("#panelsMenu").get_by_role("button", name="Selected character").click()
+
+    # Expanded again (content visible), and the menu closed after the pick.
+    expect(page.locator(".fighter .fighterScroll")).to_be_visible()
+    expect(page.locator("#panelsMenu")).to_be_hidden()
+
+    # In view: inside the wrap bounds.
+    wrap = _box(page, ".wrap")
+    fighter = _box(page, ".fighter")
+    assert fighter["x"] >= wrap["x"] - 2 and fighter["y"] >= wrap["y"] - 2
+    assert fighter["x"] + fighter["width"] <= wrap["x"] + wrap["width"] + 2
+
+    # Raised to the front (z above the panel we just brought forward).
+    fighter_z = page.evaluate(
+        "() => parseInt(getComputedStyle(document.querySelector('.fighter')).zIndex) || 0")
+    assert fighter_z > tracker_z, "restored panel was not raised to the front"
+
+
+@pytest.mark.django_db
+def test_resize_handle_is_present_and_grabbable(live_server, page: Page) -> None:
+    # The resize grips are a real, grabbable hit area in floating mode (Stage 3
+    # enlarged them). Grab the log's SE corner and confirm the drag resizes it.
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    grip = _box(page, ".logcol .rz-se")
+    assert grip["width"] >= 12 and grip["height"] >= 12, "resize corner is too small to grab"
+
+    before = _box(page, ".logcol")
+    _drag_handle(page, ".logcol", "se", 120, 100)
+    after = _box(page, ".logcol")
+    assert after["width"] - before["width"] > 80, "corner grip did not resize the panel"
