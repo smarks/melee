@@ -8,8 +8,9 @@ pytest-django>=4.8
 # GitHub so CI resolves it with no auth. For local development you can override
 # with an editable checkout:  pip install -e ../hexarena
 # PINNED TO A RELEASE TAG. To bump: cut a new vX.Y.Z tag in the lib (its pyproject
-# version must match — a tag-version-guard workflow enforces this), then update the
-# @vX.Y.Z here in a melee commit that CI tests.
+# version must match the tag — each shared lib repo has a tag-version-guard workflow
+# that fails a mismatched tag push; hexarena's was added 2026-07-06, melee #342),
+# then update the @vX.Y.Z here in a melee commit that CI tests.
 hexarena @ git+https://github.com/smarks/hexarena.git@v0.1.0
 
 # Shared Tarmar d20 combat core (matrix, modifiers, crit, Hybrid armour) — the
