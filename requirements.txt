@@ -3,6 +3,7 @@ gunicorn>=22.0
 whitenoise>=6.6
 pytest>=8.0
 pytest-django>=4.8
+pytest-cov>=5.0
 
 # Shared hex-grid library (coords, dice, pathfinding, layout). Installed from
 # GitHub so CI resolves it with no auth. For local development you can override
