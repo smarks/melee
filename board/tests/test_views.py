@@ -675,8 +675,32 @@ def test_new_custom_game_builds_edited_fighters(client: Client) -> None:
     out = client.post("/api/game/new_custom", data=json.dumps(roster),
                       content_type="application/json").json()
     assert "gid" in out
+    # #355: player-typed names are deliberate and must survive untouched.
     assert {f["name"] for f in out["state"]["figures"]} == {"Hero", "Foe"}
     assert out["state"]["controllers"]["blue"] == "computer"
+
+
+def test_new_custom_game_names_default_archetype_fighters(client: Client) -> None:
+    # #355: a wizard game started from bare archetype defaults (the editor names
+    # each new fighter after its class and sends no char_class) must come back
+    # with distinct creative names, the archetype kept only as the class label.
+    # Pre-fix build_custom_skirmish never generated names, so the figures shipped
+    # as "Knight"/"Swordsman" — this asserts the gap is closed.
+    from board import scenario
+
+    roster = {"profile": "Classic Melee", "fighters": [
+        {"name": "Knight", "side": "red", "strength": 13, "dexterity": 11,
+         "weapon": "Broadsword", "armor": "Leather", "shield": "None"},
+        {"name": "Swordsman", "side": "blue", "strength": 12, "dexterity": 12,
+         "weapon": "Shortsword", "armor": "Chainmail", "shield": "Small shield"},
+    ]}
+    out = client.post("/api/game/new_custom", data=json.dumps(roster),
+                      content_type="application/json").json()
+    figures = out["state"]["figures"]
+    names = [f["name"] for f in figures]
+    assert len(set(names)) == len(names)                     # distinct
+    assert all(name not in scenario.ARCHETYPE_NAMES for name in names)
+    assert {f["char_class"] for f in figures} == {"Knight", "Swordsman"}
 
 
 def test_new_custom_game_rejects_an_illegal_fighter(client: Client) -> None:
