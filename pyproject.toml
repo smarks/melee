@@ -1,0 +1,27 @@
+# Coverage configuration for the melee unit test suite.
+#
+# Coverage is measured on the application code only (the `engine` rules core and
+# the `board` Django app). It runs on the unit `test` CI job via
+#   pytest --cov=engine --cov=board --cov-report=term-missing --cov-report=xml
+# The e2e job is deliberately left out: it drives a live_server in a
+# subprocess/thread where line coverage is unreliable.
+#
+# No hard --cov-fail-under gate is set (house rule: pushed stuff stays green).
+# Coverage is report-only; a conservative floor can be ratcheted in later once
+# the baseline is trusted.
+
+[tool.coverage.run]
+source = ["engine", "board"]
+branch = false
+omit = [
+    "*/tests/*",
+    "*/migrations/*",
+    "manage.py",
+    "*/wsgi.py",
+    "*/asgi.py",
+    "*/settings.py",
+    "*/settings/*",
+]
+
+[tool.coverage.report]
+show_missing = true
