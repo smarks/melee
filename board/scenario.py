@@ -87,17 +87,47 @@ def _tarmar_archetypes(side: str) -> dict[str, Figure]:
 ARCHETYPE_NAMES = ["Knight", "Swordsman", "Spearman", "Archer"]
 
 
-def _assign_generated_names(figures: list[Figure], rng: random.Random | None = None) -> None:
-    """Give every figure a distinct, characterful name (in place).
+def _is_default_named(figure: Figure) -> bool:
+    """True when a fighter still carries a bare archetype/class default as its name.
+
+    The setup wizard seats each new fighter under its archetype label ("Knight",
+    "Swordsman", …), so an untouched fighter's name is just its class and should
+    get a creative name. A name the player typed ("Aragorn") or a loaded saved
+    character's name is deliberate and must be kept, so this returns ``False`` for
+    anything that isn't empty, an archetype label, or an exact echo of the class.
+    """
+    name = (figure.name or "").strip()
+    if not name:
+        return True
+    if name in ARCHETYPE_NAMES:
+        return True
+    return bool(figure.char_class) and name == figure.char_class
+
+
+def _finalize_figures(figures: list[Figure], rng: random.Random | None = None) -> None:
+    """The single step every builder routes its figures through before returning.
+
+    Centralising name finalization here means a fighter cannot enter play without
+    it, whichever builder was used — the omission that let wizard/custom games
+    ship with bare class names (#355) can't recur at a new call site, because
+    there is only one call to get right.
+
+    Gives a distinct, characterful name to every fighter still carrying a bare
+    archetype/class default (:func:`_is_default_named`) — the archetype roster
+    used by :func:`build_game`/:func:`default_skirmish`/:func:`tarmar_skirmish`
+    names each fighter after its class, so they are all renamed — while leaving a
+    name the player typed or loaded from a saved character untouched.
 
     Uses its OWN RNG — an independent :class:`random.Random`, never the combat
     ``Dice`` — so switching names on leaves a seeded fight's dice byte-identical
-    (see :mod:`engine.names`). Each figure keeps its class as ``char_class``; the
-    generated name becomes its identity for the tracker, sheet, and log.
+    (see :mod:`engine.names`). Each renamed figure keeps its class as
+    ``char_class``; the generated name becomes its identity for the tracker,
+    sheet, and log.
     """
     rng = rng or random.Random()
-    names = generate_distinct_names(rng, len(figures))
-    for figure, generated in zip(figures, names):
+    targets = [figure for figure in figures if _is_default_named(figure)]
+    names = generate_distinct_names(rng, len(targets))
+    for figure, generated in zip(targets, names):
         if not figure.char_class:
             figure.char_class = figure.name   # preserve the archetype label
         figure.name = generated
@@ -123,7 +153,7 @@ def default_skirmish() -> tuple[Arena, list[Figure]]:
     red, blue = _archetypes("red"), _archetypes("blue")
     figures = _place(arena, [red["Swordsman"], red["Archer"]],
                      [blue["Knight"], blue["Spearman"]])
-    _assign_generated_names(figures)
+    _finalize_figures(figures)
     return arena, figures
 
 
@@ -133,7 +163,7 @@ def tarmar_skirmish() -> tuple[Arena, list[Figure]]:
     red, blue = _tarmar_archetypes("red"), _tarmar_archetypes("blue")
     figures = _place(arena, [red["Swordsman"], red["Archer"]],
                      [blue["Knight"], blue["Spearman"]])
-    _assign_generated_names(figures)
+    _finalize_figures(figures)
     return arena, figures
 
 
@@ -211,7 +241,7 @@ def build_game(
             figure.position = hex_position
             figure.facing = facing
             figures.append(figure)
-    _assign_generated_names(figures)
+    _finalize_figures(figures)
     return arena, figures
 
 
@@ -254,4 +284,9 @@ def build_custom_skirmish(
         for combatant_index, figure in enumerate(by_team[team_id]):
             figure.position, figure.facing = zones[team_index][combatant_index]
             figures.append(figure)
+    # #355: the wizard/character editor auto-seats fighters under their archetype
+    # label, so give those default-named fighters a creative name too — matching
+    # every other start path (build_game, default/tarmar skirmish) — while keeping
+    # any name the player typed or loaded from a saved character.
+    _finalize_figures(figures)
     return arena, figures

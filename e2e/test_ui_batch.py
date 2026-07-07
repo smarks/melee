@@ -107,6 +107,45 @@ def test_start_match_from_editor_locks_game_control(live_server, page: Page) -> 
 
 
 # --------------------------------------------------------------------------- #
+# #355 — a wizard game gives default archetype fighters creative names          #
+# --------------------------------------------------------------------------- #
+@pytest.mark.django_db
+def test_wizard_game_names_default_fighters(live_server, page: Page) -> None:
+    # The coverage that was missing: start a game through the WIZARD (editor ->
+    # Start match) with fighters left at their archetype defaults, and prove they
+    # come out with creative names, not the bare class names. Pre-fix
+    # build_custom_skirmish never generated names, so figures shipped as
+    # "Knight"/"Swordsman" and this failed.
+    _ARCHETYPE_NAMES = {"Knight", "Swordsman", "Spearman", "Archer"}
+
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add AI player").click()   # a 2nd team so a game can start
+    expect(page.locator("#profile")).to_be_enabled()
+
+    page.locator("#editCharBtn").click()                       # open the fighter editor
+    # The editor seats each fighter under its archetype label; start without editing.
+    page.get_by_role("button", name="Start match").click()
+
+    expect(page).to_have_url(re.compile(r"/game/[0-9a-f]+"), timeout=20_000)
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+
+    # Read the finalized roster straight from the state API (re-resolved from the
+    # live URL, so no stale handle) rather than scraping DOM text, which also
+    # carries the "— <class>" subtitle and would falsely match a class name.
+    gid = page.url.rsplit("/", 1)[-1]
+    state = page.request.get(f"{live_server.url}/api/game/{gid}").json()["state"]
+    figures = state["figures"]
+    names = [figure["name"] for figure in figures]
+    assert len(names) >= 2
+    assert len(set(names)) == len(names)                       # every fighter distinct
+    for figure in figures:
+        assert figure["name"] not in _ARCHETYPE_NAMES, \
+            f"fighter still bears its bare class name: {figure['name']!r}"
+        # the archetype survives only as the class subtitle
+        assert figure["char_class"] in _ARCHETYPE_NAMES
+
+
+# --------------------------------------------------------------------------- #
 # Shared: hand-build a game directly in the in-process store so combat-phase and #
 # dropped-weapon situations are deterministic. Omitting "seats" makes the game  #
 # unrestricted, so the browser controls every non-computer side (see            #
