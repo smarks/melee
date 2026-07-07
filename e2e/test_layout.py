@@ -268,6 +268,58 @@ def test_maximize_fills_area_and_revert_restores(live_server, page: Page) -> Non
     assert abs(back["height"] - before["height"]) < 3
 
 
+def _poll_assert(page: Page, assertion, *, timeout_ms: int = 5000) -> None:
+    """Retry ``assertion`` (which re-resolves its own locators each call) until it
+    passes or the timeout elapses. The resize handler debounces reclampAll by
+    100ms and re-renders panels, so boxes must be re-measured, never held stale."""
+    deadline = time.time() + timeout_ms / 1000
+    last_error: AssertionError | None = None
+    while time.time() < deadline:
+        try:
+            assertion()
+            return
+        except AssertionError as error:
+            last_error = error
+            page.wait_for_timeout(100)
+    assert last_error is not None
+    raise last_error
+
+
+@pytest.mark.django_db
+def test_maximized_panel_refills_after_viewport_resize(live_server, page: Page) -> None:
+    # #343: a maximized panel must keep FILLING the wrap across a viewport resize.
+    # reclampAll used to only slide x/y, so after a resize a still-maximized panel
+    # underfilled (window grew) or overflowed (window shrank) the new wrap. It now
+    # re-derives the fill geometry from the current bounds for a maximized panel.
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    _ctl(page, ".tracker", "Maximize").click()
+    expect(_ctl(page, ".tracker", "Restore")).to_be_visible()   # it is now maximized
+
+    def assert_fills() -> None:
+        wrap = _box(page, ".wrap")            # re-measured each retry (no stale handle)
+        panel = _box(page, ".tracker")
+        assert panel["width"] >= wrap["width"] - 4, "maximized panel underfills width"
+        assert panel["height"] >= wrap["height"] - 4, "maximized panel underfills height"
+        assert panel["width"] <= wrap["width"] + 4, "maximized panel overflows width"
+        assert panel["height"] <= wrap["height"] + 4, "maximized panel overflows height"
+
+    assert_fills()                             # fills at the original size
+
+    # Shrink (still wide enough to stay floating, > 1100px): the maximized panel
+    # must shrink to the smaller wrap, not overflow it, and stay maximized.
+    page.set_viewport_size({"width": 1180, "height": 740})
+    expect(_ctl(page, ".tracker", "Restore")).to_be_visible()
+    _poll_assert(page, assert_fills)
+
+    # Grow: it must expand to refill the larger wrap, not underfill it.
+    page.set_viewport_size({"width": 1520, "height": 960})
+    expect(_ctl(page, ".tracker", "Restore")).to_be_visible()
+    _poll_assert(page, assert_fills)
+
+
 @pytest.mark.django_db
 def test_fit_to_content_shrinks_a_sparse_panel(live_server, page: Page) -> None:
     # Blow the log panel up (maximize), then Fit-to-content: a near-empty log

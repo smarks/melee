@@ -21,10 +21,18 @@ let frAdvance = {};      // "attackerUid>targetUid" -> follow-into-vacated-hex t
 let YOU_CONTROL = [];    // sides this browser may act on (server-authoritative, #74/#85)
 let OPEN_SEATS = [];     // sides currently open to claim (#85)
 let IS_ADMIN = false;    // logged-in admin: may act on any figure (#86)
-// A figure is yours iff its side is in YOU_CONTROL (admins control all). Fall back
-// to the same screen rule (any non-computer side) only if the server sent no seats.
+let SEATED = false;      // this game HAS seats (server-authoritative, #343) — a
+                         // real multiplayer game; false only for seatless test
+                         // fixtures / games built outside _start_game.
+// A figure is yours iff its side is in YOU_CONTROL (admins control all). An empty
+// YOU_CONTROL means one of two very different things, and they must not be
+// conflated (#343): on a SEATED game it means "spectator — you own no seat", so
+// you control NOTHING; only on a genuinely seatless game does it fall back to the
+// same-screen rule (any non-computer side is yours). Mis-reading a spectator as
+// same-screen let a watcher "control" every human side.
 const myControlled = f => IS_ADMIN ? true
   : YOU_CONTROL.length ? YOU_CONTROL.includes(f.side)
+  : SEATED ? false
   : (S.controllers || {})[f.side] !== "computer";
 // A side driven by the AI (used by the Action panel's "computer is playing" state).
 const isComputerSide = side => (S.controllers || {})[side] === "computer";
@@ -42,6 +50,7 @@ function captureOwnership(data) {
   if ("you_control" in data) YOU_CONTROL = data.you_control || [];
   if ("open_seats" in data) OPEN_SEATS = data.open_seats || [];
   if ("is_admin" in data) IS_ADMIN = !!data.is_admin;
+  if ("seated" in data) SEATED = !!data.seated;
   pruneForeignPlan();
 }
 // Once the server has told this client which seats it holds (YOU_CONTROL
@@ -184,7 +193,7 @@ async function startGame(query) {
   const data = await api(`/api/game/new?${query}`);
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
-  optCache = {}; _lastStateJSON = "";
+  optCache = {}; _lastStateJSON = ""; _lastBoardSig = null; _lastRev = null;
   resetAll(); resetGameLifecycle(); ensureGameCatalog(); render();
   startPolling();                 // re-arm live polling for the new game (#308)
   GAME_ACTIVE = true; syncGameControl();
@@ -258,7 +267,8 @@ async function newGame() {
 function showPreGame() {
   GID = null; S = null; LAYOUT = null; GAME_ACTIVE = false;
   PLAYERS = [{type: "human"}];         // fresh roster: just the local human (#192)
-  _lastStateJSON = ""; resetAll(); resetGameLifecycle(); closeMenu();
+  _lastStateJSON = ""; _lastBoardSig = null; _lastRev = null;
+  resetAll(); resetGameLifecycle(); closeMenu();
   $("svg").innerHTML = "";
   $("phaseBanner").textContent = "No game — set up the players and press New Game.";
   $("hint").textContent = "";
@@ -489,13 +499,47 @@ function drawMegahexBorders(svg) {
 }
 
 // ---- rendering --------------------------------------------------------------
+// Rebuilding the whole SVG board (every hex, every figure <g>, every listener) is
+// by far the most expensive part of a render. render() runs on every poll whose
+// signature changed — during an opponent's or the AI's turn that is essentially
+// every 2s tick, even for an idle watcher whose figures did not move. So gate
+// drawArena on a signature of ONLY the board-affecting state: if just the log,
+// seats, or ownership changed, the SVG is left untouched (#343). Any change that
+// alters a hex, a token, a ring, a highlight, or the placement/selection overlay
+// is captured here, so the board never goes stale.
+let _lastBoardSig = null;
+// Test/telemetry hook: how many times render() ran, and of those, how many
+// actually rebuilt the SVG board. An e2e test asserts a board-irrelevant state
+// change (e.g. a seat/ownership update) bumps `renders` but NOT `arenaDraws`.
+const RENDER_STATS = {renders: 0, arenaDraws: 0};
+window.__MELEE_RENDER_STATS__ = RENDER_STATS;
+function boardSig() {
+  const reach = (chosenOption && optInfo)
+    ? (optInfo.options.find(o => o.option === chosenOption)?.reach || []) : [];
+  // Everything drawArena reads: the figures (position/posture/hp/facing/flags),
+  // dropped weapons, phase + active figure (rings), and the local selection /
+  // placement overlay (sel token, target set via sel, reach hexes, chosen hex,
+  // the per-figure plan rings). validTargets()/isTarget derive from sel+figures+
+  // phase, all already here, so the target highlight is covered too.
+  return JSON.stringify([
+    S.figures, S.dropped, S.phase, S.active_uid,
+    reach, pendingDest, sel, PLAN,
+  ]);
+}
+
 function render() {
   if (!S) return;
+  RENDER_STATS.renders += 1;
   dbgTransitions();                      // log phase / turn / active changes
   if (S.phase !== lastPhase) {           // new phase → fresh, empty plan
     lastPhase = S.phase; PLAN = {}; warnKind = null; resetSelection(); closeMenu();
   }
-  drawArena();
+  const bsig = boardSig();
+  if (bsig !== _lastBoardSig) {          // only rebuild the SVG when the board changed
+    _lastBoardSig = bsig;
+    RENDER_STATS.arenaDraws += 1;
+    drawArena();
+  }
   drawControls();
   drawSelInfo();
   drawRoster();
@@ -1484,8 +1528,8 @@ function weaponsLine(f) {
   const reserve = (f.weapons || []).filter(w => w !== f.weapon);
   const reloading = f.reloading > 0
     ? ` <span style="color:var(--target)">— reloading (${f.reloading})</span>` : "";
-  return `<div class="muted">In hand: <b>${ready}</b>${reloading}`
-    + (reserve.length ? ` · ready to switch: ${reserve.join(", ")}` : "") + `</div>`;
+  return `<div class="muted">In hand: <b>${escapeHtml(ready)}</b>${reloading}`
+    + (reserve.length ? ` · ready to switch: ${reserve.map(escapeHtml).join(", ")}` : "") + `</div>`;
 }
 function statusHeader(f) {
   const classLine = f.char_class
@@ -2201,7 +2245,7 @@ async function startCustom() {
   if (data.error) { $("editorErr").textContent = "Can't start: " + data.error; return; }
   GID = data.gid; LAYOUT = data.layout; S = data.state; PROFILE = data.profile;
   captureOwnership(data); history.replaceState({}, "", `/game/${GID}`);
-  optCache = {}; _lastStateJSON = "";
+  optCache = {}; _lastStateJSON = ""; _lastBoardSig = null; _lastRev = null;
   closeEditor(); closeSetup(); resetAll(); resetGameLifecycle(); render();
   startPolling();                 // re-arm live polling for the new game (#308)
   // Lock Game Control just like startGame does (#255): a custom match is a live
@@ -2575,7 +2619,17 @@ function bringToFront(panel) {
 
 function reclampAll() {
   const bounds = wrapBounds();
-  for (const panel of LAYOUT_PANELS) applyGeom(panel, clampGeom(getInlineGeom(panel), bounds));
+  for (const panel of LAYOUT_PANELS) {
+    // A maximized panel must keep FILLING the wrap across a viewport resize.
+    // clampGeom only slides x/y (it passes w/h through untouched), so re-clamping
+    // the stale geometry captured when the panel was maximized would leave it
+    // under/overflowing the resized wrap. Re-derive the fill geometry from the
+    // CURRENT bounds instead (#343). This also covers applyResponsiveLayout, which
+    // ends by calling reclampAll — so a maximized panel restored from localStorage
+    // is re-fitted to the current wrap too.
+    const geom = panel.mode === "maximized" ? maximizeGeom(bounds) : getInlineGeom(panel);
+    applyGeom(panel, clampGeom(geom, bounds));
+  }
 }
 
 // Measure a panel's natural content size for fit-to-content.
@@ -2970,6 +3024,10 @@ initLayout();
 // (Declared before the boot dispatch below, which calls showPreGame() ->
 // _lastStateJSON, so the reference isn't in the temporal dead zone.)
 let _lastStateJSON = "";
+// #343: the last server change token seen. The server bumps a monotonic `rev` on
+// every persisted mutation, so the poll can decide "did anything change?" in O(1)
+// instead of re-JSON.stringifying the whole just-parsed state every 2s tick.
+let _lastRev = null;
 // Deep link: /game/<gid> joins or spectates an existing game; a fresh load shows
 // the editable pre-game Game Control (no auto-boot -- New Game starts a match).
 const urlGid = (location.pathname.match(/^\/game\/([^/]+)/) || [])[1];
@@ -3003,11 +3061,21 @@ function startPolling() {
     if (data.error === "unknown game") gameLost();   // and say so, persistently (#275)
     return;
   }
-  // Include the seat/ownership fields: opening or claiming a seat changes these
-  // but NOT data.state, so a state-only signature would miss seat updates (#85).
-  const sig = JSON.stringify([data.state, data.you_control, data.open_seats, data.is_admin]);
-  if (sig === _lastStateJSON) return;
-  _lastStateJSON = sig;
+  // #343: when the server sends a change token, skip on it in O(1) rather than
+  // re-stringifying the entire state each tick. rev is bumped on every persisted
+  // mutation (including seat changes, which also persist), so it subsumes the
+  // seat/ownership fields the state signature had to include for #85. Fall back
+  // to the full state signature for a server (or reload path) that sends no rev.
+  if (data.rev != null) {
+    if (data.rev === _lastRev) return;
+    _lastRev = data.rev;
+  } else {
+    // Include the seat/ownership fields: opening or claiming a seat changes these
+    // but NOT data.state, so a state-only signature would miss seat updates (#85).
+    const sig = JSON.stringify([data.state, data.you_control, data.open_seats, data.is_admin]);
+    if (sig === _lastStateJSON) return;
+    _lastStateJSON = sig;
+  }
   // Keep the cached layout when the poll omitted it (?layout=0); only replace it
   // when the server actually sent one (first load / reconnect) (#256).
   if (data.layout) LAYOUT = data.layout;

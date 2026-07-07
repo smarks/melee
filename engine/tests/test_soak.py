@@ -720,6 +720,39 @@ def test_auto_hit_that_did_not_hit_is_caught() -> None:
         assert_log_truthful([contradictory])
 
 
+def _tarmar_result(**overrides) -> AttackResult:
+    """A Tarmar (d20 roll-over) AttackResult for the truthfulness guard (#343)."""
+    base = dict(
+        hit=True, rolled=15, needed=11, dice_count=1, multiplier=1,
+        raw_damage=3, damage=3, dropped_weapon=False, broke_weapon=False,
+        weapon=LONGBOW, zone=None, roll_under=False, note="hit")
+    base.update(overrides)
+    return AttackResult(**base)
+
+
+def test_tarmar_truthful_hit_and_miss_pass() -> None:
+    """A genuine Tarmar hit and a genuine miss must NOT trip the guard (#343)."""
+    assert_log_truthful([_tarmar_result(hit=True, rolled=15, note="hit")])
+    assert_log_truthful([_tarmar_result(hit=False, rolled=5, note="miss",
+                                        raw_damage=0, damage=0)])
+
+
+def test_tarmar_fumble_claimed_as_a_hit_is_caught() -> None:
+    """The Tarmar mirror of connects-on-a-miss: a natural 1 is an auto-miss
+    (fumble), so a result that claims a hit on a rolled 1 is fabricated (#343)."""
+    bogus = _tarmar_result(hit=True, rolled=1, note="fumble")
+    with pytest.raises(InvariantError, match="tarmar-fumble-is-a-hit"):
+        assert_log_truthful([bogus])
+
+
+def test_tarmar_natural_20_narrated_as_a_miss_is_caught() -> None:
+    """A natural 20 is an auto-hit in Tarmar, so a result that claims a miss on a
+    rolled 20 is fabricated and must make the guard go RED (#343)."""
+    bogus = _tarmar_result(hit=False, rolled=20, note="miss", raw_damage=0, damage=0)
+    with pytest.raises(InvariantError, match="tarmar-nat20-not-a-hit"):
+        assert_log_truthful([bogus])
+
+
 def _committed_shooter_scenario(cooldown: int) -> tuple[GameState, object, object]:
     """A bow-armed figure committed to a missile attack, a foe squarely in its front
     arc, its crossbow cooldown set to ``cooldown``."""

@@ -1117,6 +1117,54 @@ def test_spectator_sees_open_seat_then_claims_and_can_play(client: Client) -> No
 
 
 @pytest.mark.django_db
+def test_state_flags_seated_game_so_spectator_is_distinguishable(client: Client) -> None:
+    # #343: api_state stamps `seated` so the client can tell a spectator (seated
+    # game, owns no seat -> you_control []) apart from same-screen hotseat play (a
+    # seatless fixture game). An empty you_control alone cannot distinguish them,
+    # which let a spectator "control" every human side.
+    gid = _new(client)["gid"]
+    creator = client.get(f"/api/game/{gid}").json()
+    assert creator["seated"] is True                       # a real _start_game game
+    assert sorted(creator["you_control"]) == ["blue", "red"]
+
+    spectator = Client()
+    seen = spectator.get(f"/api/game/{gid}").json()
+    assert seen["seated"] is True                          # still a seated game...
+    assert seen["you_control"] == []                       # ...this session owns none
+
+
+@pytest.mark.django_db
+def test_state_marks_seatless_fixture_game_as_unseated(client: Client) -> None:
+    # A game built outside _start_game (a test fixture) carries no seats, so
+    # seated is False and an empty you_control legitimately means same-screen play.
+    from board.views import GAMES
+
+    _combat_duel()
+    try:
+        seen = client.get("/api/game/duel-test").json()
+        assert seen["seated"] is False
+        assert seen["you_control"] == []
+    finally:
+        del GAMES["duel-test"]
+
+
+@pytest.mark.django_db
+def test_api_state_returns_a_rev_that_bumps_on_a_mutation(client: Client) -> None:
+    # #343: the change token the client polls on. Present on every state, unchanged
+    # across an idle re-poll, and advanced by a persisted mutation so the client
+    # can short-circuit the full state-diff when nothing moved.
+    gid = _new(client)["gid"]
+    rev1 = client.get(f"/api/game/{gid}").json()["rev"]
+    assert isinstance(rev1, int)
+    assert client.get(f"/api/game/{gid}").json()["rev"] == rev1   # idle poll: no bump
+
+    client.post(f"/api/game/{gid}/action", data=json.dumps({"type": "end_turn"}),
+                content_type="application/json")
+    rev2 = client.get(f"/api/game/{gid}").json()["rev"]
+    assert rev2 > rev1                                            # a mutation bumped it
+
+
+@pytest.mark.django_db
 def test_admin_can_edit_a_figure_outside_the_rules(client: Client, django_user_model) -> None:
     # #86/#323: a live figure re-spec is admin-only. A regular owner is refused
     # outright (they build their fighters pre-game); an admin may edit even past

@@ -789,3 +789,57 @@ def test_networked_combat_resolve_waits_for_both_humans(
     finally:
         joiner_context.close()
         GAMES.pop(gid, None)
+
+
+@pytest.mark.django_db
+def test_spectator_on_a_seated_game_controls_nothing(live_server, page: Page) -> None:
+    # #343: a spectator is a browser viewing a SEATED game on which it owns no seat,
+    # so the server sends you_control == [] with seated == True. Before the fix the
+    # client mistook an empty you_control for same-screen hotseat play and let the
+    # watcher "control" every human side. A spectator must control NOTHING: it sees
+    # the board but gets no live action controls and holds no seat.
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)                 # host owns both same-screen seats
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    # The host, owning the active figure, has exactly one live control block.
+    expect(page.locator("#controls .charctl.enabled")).to_have_count(1, timeout=20_000)
+    invite_url = page.url
+
+    spectator_context = page.context.browser.new_context()
+    try:
+        spectator = spectator_context.new_page()
+        spectator.goto(invite_url)                        # watches; never claims a seat
+        expect(spectator.locator("#svg circle").first).to_be_visible(timeout=20_000)
+        expect(spectator.get_by_text("— you")).to_have_count(0, timeout=20_000)  # no seat
+        # The spectator controls nothing: no enabled action controls for any figure,
+        # even though a human side's turn is live.
+        expect(spectator.locator("#controls .charctl.enabled")).to_have_count(
+            0, timeout=20_000)
+    finally:
+        spectator_context.close()
+
+
+@pytest.mark.django_db
+def test_a_seat_only_change_does_not_rebuild_the_svg_board(live_server, page: Page) -> None:
+    # #343 perf: render() rebuilds the whole SVG board only when the BOARD changed.
+    # Opening a seat updates ownership (a fresh poll + render) but moves no hex,
+    # token, ring, or highlight, so drawArena must be SKIPPED — an idle watcher must
+    # not burn O(board) DOM work on every state-changing tick.
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)                 # host owns both same-screen seats
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    expect(page.locator("#svg circle").first).to_be_visible(timeout=20_000)
+
+    stats_before = page.evaluate("() => ({...window.__MELEE_RENDER_STATS__})")
+    assert stats_before["arenaDraws"] >= 1                # the board was drawn at least once
+
+    # A board-irrelevant change: free one of the host's two seats. This forces a
+    # re-render (renders bumps) but the figures are untouched, so the SVG must NOT
+    # be rebuilt (arenaDraws stays put).
+    page.get_by_role("button", name="Open").first.click()
+    page.wait_for_function(
+        "(before) => window.__MELEE_RENDER_STATS__.renders > before",
+        arg=stats_before["renders"], timeout=20_000)
+    stats_after = page.evaluate("() => ({...window.__MELEE_RENDER_STATS__})")
+    assert stats_after["arenaDraws"] == stats_before["arenaDraws"], (
+        "a seat-only change rebuilt the whole SVG board — drawArena was not gated")

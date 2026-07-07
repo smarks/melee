@@ -457,3 +457,23 @@ def assert_log_truthful(results: list[AttackResult], *, context: str = "") -> No
                     f"needed {result.needed} on {result.dice_count} dice): {line!r}",
                     where,
                 )
+        elif not result.roll_under and result.note != "whiff":
+            # Tarmar d20 roll-over (#343). The mid-range hit needs the attack bonus,
+            # which the result does not carry, so we can't re-derive every outcome.
+            # But the two AUTO outcomes are pure functions of the die and can't lie:
+            # tarmar_rules.resolve_attack ALWAYS hits on a natural 20 and ALWAYS
+            # misses (fumbles) on a natural 1, whatever the bonus or target number.
+            # A result that claims otherwise is fabricated — the Tarmar mirror of
+            # the classic connects-on-a-miss check (#229/#270 truthfulness class).
+            if result.rolled == 20 and not result.hit:
+                _fail(
+                    "tarmar-nat20-not-a-hit",
+                    f"Tarmar natural 20 must hit but result.hit is False: {line!r}",
+                    where,
+                )
+            if result.rolled == 1 and result.hit:
+                _fail(
+                    "tarmar-fumble-is-a-hit",
+                    f"Tarmar natural 1 is a fumble (miss) but claimed a hit: {line!r}",
+                    where,
+                )

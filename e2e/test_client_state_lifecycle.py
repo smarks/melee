@@ -184,13 +184,16 @@ def test_new_game_resets_combat_resolved_turn(live_server, page: Page) -> None:
 
 
 @pytest.mark.django_db
-def test_claiming_a_seat_clears_queued_actions_for_unowned_sides(
+def test_claiming_a_seat_lets_a_spectator_act_only_for_its_own_side(
         live_server, page: Page) -> None:
-    # #345: before claiming a seat an unclaimed client treats every non-computer
-    # side as its own and auto-queues attacks for BOTH sides into PLAN. After it
-    # claims ONE seat, the stale entry for the OTHER side must be dropped -- pre-fix
-    # it lingered and got POSTed on Resolve, where the server rejects it (403 log
-    # noise). Claiming clears queued actions for sides the client does not control.
+    # #343 (superseding the #345 workaround at its root): a client viewing a SEATED
+    # game on which it owns no seat is a SPECTATOR — it controls NOTHING, so it
+    # never auto-queues an action for ANY side. The #345 bug was that the same-screen
+    # fallback made an unseated client treat every human side as its own and queue
+    # attacks for BOTH sides, which then 403'd on Resolve; #345 pruned the stale
+    # entries after a claim. #343 stops them being created: an empty you_control on a
+    # SEATED game (server sends seated=True) is a spectator. After the client claims
+    # ONE seat it may act for THAT side only; the unowned side is never queued or POSTed.
     import json as _json
 
     gid = "seat-plan-prune-345"
@@ -199,17 +202,14 @@ def test_claiming_a_seat_clears_queued_actions_for_unowned_sides(
         page.goto(f"{live_server.url}/game/{gid}")
         expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
 
-        # Unseated, the client auto-queued a shot for BOTH sides (#299 fallback).
-        def _plan_has_both() -> bool:
-            plan = _debug_snapshot(page).get("plan", {})
-            return red.uid in plan and blue.uid in plan
-
-        deadline = time.monotonic() + 15
-        while not _plan_has_both():
-            assert time.monotonic() < deadline, (
-                "the unseated client never auto-queued both sides; "
-                f"plan={_debug_snapshot(page).get('plan')}")
-            page.wait_for_timeout(300)
+        # A spectator (seated game, owns no seat) controls nothing: the background
+        # auto-target pass must NOT queue an action for either side. Give it time to
+        # run, then confirm the plan is empty.
+        page.wait_for_timeout(2000)
+        spectator_plan = _debug_snapshot(page).get("plan", {})
+        assert red.uid not in spectator_plan and blue.uid not in spectator_plan, (
+            "a spectator on a seated game auto-queued an action; it should control "
+            f"nothing (#343); plan keys={list(spectator_plan)}")
 
         # Record the /action POSTs a Resolve fires, to prove no unowned side is sent.
         action_posts: list[dict] = []
@@ -217,18 +217,24 @@ def test_claiming_a_seat_clears_queued_actions_for_unowned_sides(
             action_posts.append(_json.loads(request.post_data or "{}"))
             if request.method == "POST" and request.url.endswith("/action") else None))
 
-        # Claim the red seat. YOU_CONTROL becomes ['red']; the blue entry must go.
+        # Claim the red seat. YOU_CONTROL becomes ['red']; now — and only now — the
+        # client may act for red, and the auto-target pass queues red's sole-target shot.
         page.evaluate("() => window.seatAction('claim', 'red')")
         claim_deadline = time.monotonic() + 15
         while "red" not in _debug_snapshot(page).get("you_control", []):
             assert time.monotonic() < claim_deadline, "seat claim never took effect"
             page.wait_for_timeout(300)
 
-        pruned_plan = _debug_snapshot(page).get("plan", {})
-        assert red.uid in pruned_plan, "claiming red dropped red's own queued action"
-        assert blue.uid not in pruned_plan, (
-            "the stale queued action for the unowned blue side survived the seat "
-            f"claim (#345); plan keys={list(pruned_plan)}")
+        plan_deadline = time.monotonic() + 15
+        while red.uid not in _debug_snapshot(page).get("plan", {}):
+            assert time.monotonic() < plan_deadline, (
+                "claiming red never queued red's own sole-target action; "
+                f"plan={_debug_snapshot(page).get('plan')}")
+            page.wait_for_timeout(300)
+        owned_plan = _debug_snapshot(page).get("plan", {})
+        assert blue.uid not in owned_plan, (
+            "the unowned blue side was queued after claiming red (#343); "
+            f"plan keys={list(owned_plan)}")
 
         # Resolve: the client must POST only actions for the side it controls.
         resolve = page.get_by_role("button", name=re.compile("Resolve"))
