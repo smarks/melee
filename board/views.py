@@ -640,6 +640,13 @@ def _resident_game(gid: str) -> dict | None:
 
 def _persist_game(gid: str, game: dict) -> None:
     """Write (or overwrite) the saved snapshot for ``gid``."""
+    # #343: bump a monotonic change token on every persisted mutation. Every state
+    # change funnels through a persist (the #275 autosave-after-every-mutation
+    # invariant, plus explicit Save / award / experience), so this is a cheap,
+    # never-stale signal the poll returns as ``rev`` — the client skips re-diffing
+    # the whole state when rev is unchanged. It lives only in memory (not the saved
+    # snapshot); a reload restarts it at 0, which merely forces one extra render.
+    game["rev"] = game.get("rev", 0) + 1
     SavedGame.objects.update_or_create(
         gid=gid,
         defaults={"data": persistence.game_to_json(game),
@@ -726,37 +733,42 @@ def api_game_save_character(request, gid: str, uid: str) -> HttpResponse:
         return HttpResponse(status=405)
     if not request.user.is_authenticated:
         return JsonResponse({"error": "log in to save characters"}, status=401)
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
-    try:
-        body = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "bad JSON"}, status=400)
-    state: GameState = game["state"]
-    try:
-        figure = _figure(state, uid)
-    except IllegalAction as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
-    # The seat rule from _authorize_action: you may only keep a fighter of a
-    # side you control; an admin (#86) may save any figure; games built outside
-    # _start_game (test fixtures) carry no seats and are unrestricted.
-    seats = game.get("seats")
-    if (seats and not _is_admin(request)
-            and figure.side not in _owned_sides(game, request)):
-        return JsonResponse({"error": f"you do not control {figure.side}"},
-                            status=403)
-    requested_name = (body.get("name") or figure.name or "").strip()
-    if not requested_name:
-        return JsonResponse({"error": "a name is required"}, status=400)
-    if request.user.saved_characters.filter(name=requested_name).exists():
-        return JsonResponse(
-            {"error": f"you already have a saved character named "
-                      f"“{requested_name}” — pick another name",
-             "collision": True},
-            status=400)
-    fighter_spec = _edit_spec(figure)
-    fighter_spec["name"] = requested_name   # a rename applies to the spec too
+    # Under the per-game lock: the load-on-demand reload inside _resident_game is a
+    # check-then-act that must not race a concurrent locked action reloading /
+    # persisting the same gid (#305), and the figure spec is read straight off the
+    # live game. Matches api_state / api_options (#343).
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        try:
+            body = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "bad JSON"}, status=400)
+        state: GameState = game["state"]
+        try:
+            figure = _figure(state, uid)
+        except IllegalAction as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+        # The seat rule from _authorize_action: you may only keep a fighter of a
+        # side you control; an admin (#86) may save any figure; games built outside
+        # _start_game (test fixtures) carry no seats and are unrestricted.
+        seats = game.get("seats")
+        if (seats and not _is_admin(request)
+                and figure.side not in _owned_sides(game, request)):
+            return JsonResponse({"error": f"you do not control {figure.side}"},
+                                status=403)
+        requested_name = (body.get("name") or figure.name or "").strip()
+        if not requested_name:
+            return JsonResponse({"error": "a name is required"}, status=400)
+        if request.user.saved_characters.filter(name=requested_name).exists():
+            return JsonResponse(
+                {"error": f"you already have a saved character named "
+                          f"“{requested_name}” — pick another name",
+                 "collision": True},
+                status=400)
+        fighter_spec = _edit_spec(figure)
+        fighter_spec["name"] = requested_name   # a rename applies to the spec too
     saved_character = SavedCharacter.objects.create(
         owner=request.user, name=requested_name,
         profile=game.get("profile", ""), spec=fighter_spec)
@@ -1114,6 +1126,10 @@ def api_state(request, gid):
         payload = _payload(game, include_layout=include_layout)
         payload.update(_ownership_fields(game, _player_id(request)))
         payload["is_admin"] = _is_admin(request)
+        # #343: the change token the client polls on. Bumped on every persisted
+        # mutation (incl. seat changes, which persist), so it subsumes the seat
+        # fields too — an unchanged rev means nothing this client renders has moved.
+        payload["rev"] = game.get("rev", 0)
         return JsonResponse(payload)
 
 
@@ -1363,11 +1379,19 @@ def _owned_sides(game: dict, request) -> set[str]:
 
 
 def _ownership_fields(game: dict, pid: str | None) -> dict:
-    """Seat info the client needs: which sides are yours, which are open to join."""
+    """Seat info the client needs: which sides are yours, which are open to join.
+
+    ``seated`` tells the client this game HAS seats (a real multiplayer game from
+    :func:`_start_game`) as opposed to a seatless test fixture. It lets the client
+    tell a spectator (seated game, own no seat -> ``you_control == []``) apart from
+    same-screen hotseat play (no seats at all), which an empty ``you_control``
+    alone cannot distinguish (#343).
+    """
     seats = game.get("seats", {})
     return {
         "you_control": sorted(_sides_owned_by(seats, pid)),
         "open_seats": sorted(side for side, owner in seats.items() if owner == "open"),
+        "seated": bool(seats),
     }
 
 
@@ -1513,10 +1537,15 @@ def api_debug(request, gid):
     game) so the owner can grab it without an auth dance; it exposes only the
     action shapes already visible in normal play, never secrets.
     """
-    game = _resident_game(gid)
-    if not game:
-        return JsonResponse({"error": "unknown game"}, status=404)
-    return JsonResponse({"gid": gid, "trail": game.get("_debug", [])})
+    # Under the per-game lock: the load-on-demand reload inside _resident_game is a
+    # check-then-act that must not race a concurrent locked action reloading /
+    # persisting the same gid (#305), and the trail is read while an action may be
+    # mid-append. Matches api_state / api_options (#343).
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if not game:
+            return JsonResponse({"error": "unknown game"}, status=404)
+        return JsonResponse({"gid": gid, "trail": game.get("_debug", [])})
 
 
 @csrf_exempt

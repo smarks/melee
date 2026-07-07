@@ -24,5 +24,12 @@ tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@v0.2.1
 # deliberately when a new release is cut. origami-common is origami-auth's own
 # dependency, but pip does not resolve a git dependency's transitive git deps
 # automatically, so it must be listed explicitly here (and before origami-auth).
+# DO NOT PIN the v0.2.0 tag of origami-common OR origami-auth: both are historical
+# tag/version mismatches (#261 class, #343) — each v0.2.0 tag's committed pyproject
+# still reads version = "0.1.0". They predate each repo's tag-version-guard
+# workflow (added AFTER those tags), so the guard never caught them, and the tags
+# are left as-is (re-cutting/deleting a published tag is an irreversible remote-ref
+# op). The pins below are the correct, guard-checked releases and must stay ahead
+# of v0.2.0; future bumps are safe because the guard now fails a mismatched tag.
 origami-common @ git+https://github.com/smarks/origami-common.git@v0.2.1
 origami-auth @ git+https://github.com/smarks/origami-auth.git@v0.3.2
