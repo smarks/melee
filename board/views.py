@@ -1818,9 +1818,8 @@ def _act_force_retreat(game: dict, body: dict, *, is_admin: bool = False, owner_
 def _act_end_turn(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     """End the turn — but no-op a stale duplicate (#242).
 
-    ``end_turn`` runs in any phase (the post-victory "Start next round" reuses
-    it), so nothing else stops a second end_turn from landing in the fresh select
-    phase the first one just opened. A double-click or a retried POST on a flaky
+    ``end_turn`` runs in any phase, so nothing else stops a second end_turn from
+    landing in the fresh select phase the first one just opened. A double-click or a retried POST on a flaky
     connection would then call :func:`state.end_turn` twice for one player
     intent: it would skip a whole turn, erase the per-turn injury flags (a
     figure's mandatory -2 DX wounded penalty vanishes), grant a free missile

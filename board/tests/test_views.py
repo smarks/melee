@@ -1807,9 +1807,9 @@ def test_debug_trail_survives_a_registry_wipe(client: Client) -> None:
 
 
 # ---- end_turn idempotency (#242) --------------------------------------------
-# end_turn is registered with phase None (the post-victory "Start next round"
-# reuses it), so nothing else stops a second end_turn from landing in the fresh
-# select phase the first one opened. A double-click or a retried POST would then
+# end_turn is registered with phase None (it runs in any phase), so nothing else
+# stops a second end_turn from landing in the fresh select phase the first one
+# opened. A double-click or a retried POST would then
 # advance the turn twice for one player intent. The expected-turn token makes a
 # stale duplicate a safe no-op.
 
