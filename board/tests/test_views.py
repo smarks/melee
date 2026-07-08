@@ -657,6 +657,85 @@ def test_update_figure_preserves_tarmar_fumble_state() -> None:
         del GAMES["fumble-test"]
 
 
+def test_update_figure_preserves_monster_traits() -> None:
+    """#359: a mid-fight edit rebuilds the figure via chargen.build, which knows
+    nothing of a creature's traits, so the pre-fix edit path silently collapsed a
+    giant to size 1, grounded an airborne gargoyle, stripped a snake's
+    all_front/hard_to_hit, and reset its ST-scaled injury thresholds to human
+    values. The edit must now preserve exactly what the save/load round-trip does.
+    """
+    from board.views import GAMES, _update_figure
+    from engine.arena import Arena
+    from engine.monsters import create_monster
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=9, rows=9)
+    giant = create_monster("Giant", "Grond", "red")
+    giant.position, giant.uid = Hex(3, 3), "giant"
+    gargoyle = create_monster("Gargoyle", "Stone", "blue")
+    gargoyle.position, gargoyle.uid, gargoyle.flying = Hex(5, 5), "gargoyle", True
+    snake = create_monster("Giant snake", "Sss", "blue")
+    snake.position, snake.uid = Hex(6, 6), "snake"
+    GAMES["mon-edit"] = {"state": GameState(arena, [giant, gargoyle, snake]),
+                         "profile": "Classic Melee"}
+    # A monster's statline is outside the human point-spread, so the edit rides the
+    # admin (allow_invalid) path -- the same _update_figure the owner path uses.
+    edit = {"weapon": "Broadsword", "weapon2": "None",
+            "armor": "None", "shield": "None"}
+    try:
+        _update_figure(GAMES["mon-edit"], "giant",
+                       {**edit, "strength": 30, "dexterity": 9}, allow_invalid=True)
+        new_giant = GAMES["mon-edit"]["state"].figures[0]
+        assert new_giant.size == 3                     # not collapsed to single-hex
+        assert new_giant.needs_two_to_engage is True
+        assert new_giant.wound_hits_threshold == 9     # scaled, not human 5
+        assert new_giant.knockdown_hits_threshold == 16  # not human 8
+
+        _update_figure(GAMES["mon-edit"], "gargoyle",
+                       {**edit, "strength": 20, "dexterity": 11}, allow_invalid=True)
+        new_gargoyle = GAMES["mon-edit"]["state"].figures[1]
+        assert new_gargoyle.fly_movement_allowance == 16  # still a flyer
+        assert new_gargoyle.flying is True                # stays airborne
+
+        _update_figure(GAMES["mon-edit"], "snake",
+                       {**edit, "strength": 12, "dexterity": 12}, allow_invalid=True)
+        new_snake = GAMES["mon-edit"]["state"].figures[2]
+        assert new_snake.all_front is True             # no-flank quirk survives
+        assert new_snake.hard_to_hit == 3
+    finally:
+        del GAMES["mon-edit"]
+
+
+def test_update_figure_preserves_dropped_out() -> None:
+    """#359: a fighter that bowed out of a practice bout (dropped_out, p.22) must
+    stay out after a mid-fight edit. Pre-fix the rebuild cleared the flag,
+    resurrecting a fighter that had left the bout back into the fight.
+    """
+    from board.views import GAMES, _update_figure
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import SHORTSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    fighter = create_human("Quitter", 12, 12, "red",
+                           weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    fighter.position, fighter.uid = Hex(3, 3), "quitter"
+    fighter.dropped_out = True                          # bowed out of the bout
+    GAMES["drop-edit"] = {"state": GameState(arena, [fighter]),
+                          "profile": "Classic Melee"}
+    try:
+        _update_figure(GAMES["drop-edit"], "quitter", {
+            "strength": 13, "dexterity": 11, "weapon": "Broadsword",
+            "armor": "None", "shield": "None"})
+        new = GAMES["drop-edit"]["state"].figures[0]
+        assert new.dropped_out is True                  # stays out, not resurrected
+    finally:
+        del GAMES["drop-edit"]
+
+
 def test_catalog_endpoint_lists_legal_choices(client: Client) -> None:
     data = client.get("/api/catalog?profile=Tarmar").json()
     assert data["stat_rules"]["model"] == "tarmar"

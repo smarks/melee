@@ -250,6 +250,64 @@ def test_pending_serialization_covers_every_field() -> None:
     assert persisted_keys == dataclass_fields
 
 
+def test_figure_serialization_covers_every_field() -> None:
+    """Drift guard (#369): the persisted figure key set must equal the dataclass
+    field set, for both profiles.
+
+    This is the #245 protection built for PendingAttack, finally applied to
+    figures. If a field is added to Figure/TarmarFigure but not accounted for in
+    ``_figure_to_json``, the persisted keys stop matching ``dataclasses.fields``
+    and this fails loudly -- so the silent save/load-drop bug that already hit
+    dropped_out (#257), off_balance/stressed_weapons (#233), and the #155 flag
+    drift can never recur. ``type`` is the one persisted key that is not a
+    dataclass field (it selects the subclass on load), so it is excluded.
+    """
+    import dataclasses
+
+    from engine.figure import Figure
+
+    melee = chargen.build("Classic Melee", _spec("Classic Melee", "Red", "red"))
+    tarmar = chargen.build("Tarmar", _spec("Tarmar", "Blue", "blue"))
+
+    melee_keys = set(persistence._figure_to_json(melee)) - {"type"}
+    tarmar_keys = set(persistence._figure_to_json(tarmar)) - {"type"}
+    assert melee_keys == {field.name for field in dataclasses.fields(Figure)}
+    assert tarmar_keys == {field.name for field in dataclasses.fields(TarmarFigure)}
+
+
+def test_monster_traits_survive_a_round_trip() -> None:
+    """A saved monster reloads with its size, flight, no-flank quirk, and scaled
+    injury thresholds -- plus dropped_out -- intact (#369).
+
+    The hand-maintained round-trip roster (``_FIGURE_FIELDS``) omits char_class,
+    race, size and the monster fields, so their round-trip was entirely
+    unasserted; this exercises them directly through _MONSTER_FIELDS.
+    """
+    from engine.monsters import create_monster
+
+    giant = create_monster("Giant", "Grond", "red")
+    giant.dropped_out = True
+    restored = persistence._figure_from_json(persistence._figure_to_json(giant))
+    assert restored.size == 3
+    assert restored.needs_two_to_engage is True
+    assert restored.wound_hits_threshold == 9      # ST-30 scaled, not human 5
+    assert restored.knockdown_hits_threshold == 16  # not human 8
+    assert restored.dropped_out is True
+
+    gargoyle = create_monster("Gargoyle", "Stone", "blue")
+    gargoyle.flying = True
+    restored_gargoyle = persistence._figure_from_json(
+        persistence._figure_to_json(gargoyle))
+    assert restored_gargoyle.fly_movement_allowance == 16
+    assert restored_gargoyle.flying is True
+
+    snake = create_monster("Giant snake", "Sss", "blue")
+    restored_snake = persistence._figure_from_json(
+        persistence._figure_to_json(snake))
+    assert restored_snake.all_front is True
+    assert restored_snake.hard_to_hit == 3
+
+
 @pytest.mark.django_db
 def test_saved_game_model_round_trips() -> None:
     state = _two_figure_game("Tarmar")

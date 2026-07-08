@@ -35,7 +35,7 @@ from hexarena.dice import Dice
 from hexarena.hex import Hex
 
 from engine import ai, chargen, experience
-from engine.figure import PER_TURN_FLAGS
+from engine.figure import CARRY_OVER_STATE, MONSTER_FIELDS, PER_TURN_FLAGS
 from engine.options import Option, spec
 from engine.profile import PROFILES
 from engine.rules_data import WEAPONS, WeaponKind, max_missile_shots
@@ -1930,35 +1930,45 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
     # The archetype label is identity, not a rules field the editor touches, so an
     # edit never drops it (the "— Knight" subtitle survives a mid-game re-spec).
     rebuilt.char_class = figure.char_class
-    # Section IX progression (#10): keep banked XP and re-apply bought points. The
-    # edit spec carries the *basic* spread, so fold the added points back in.
-    rebuilt.experience = figure.experience
-    rebuilt.added_st = figure.added_st
-    rebuilt.added_dx = figure.added_dx
-    rebuilt.strength += figure.added_st
-    rebuilt.dexterity += figure.added_dx
     rebuilt.position = figure.position
     rebuilt.facing = figure.facing
     rebuilt.posture = figure.posture
     # A shield voluntarily un-readied (e.g. to grapple) stays un-readied; the new
     # gear is otherwise readied as built.
     rebuilt.shield_ready = figure.shield_ready
-    # This turn's declared action and the per-turn movement/attack flags.
+    # This turn's declared action.
     rebuilt.current_option = figure.current_option
     # Per-turn flags carried verbatim from the single source, so they can't drift (#155).
     for flag in PER_TURN_FLAGS:
         setattr(rebuilt, flag, getattr(figure, flag))
-    # Injury carried into the rest of the fight (wounds + the DX-penalty flags).
+    # Plain carry-over fight state -- the SAME set the save/load round-trip
+    # preserves, from the one shared enumeration, so the edit path and persistence
+    # cannot drift (engine.figure.CARRY_OVER_STATE; #359/#369). This is what keeps
+    # wounds/consciousness/death and an unspent missile reload, restores
+    # dropped_out (a fighter that bowed out of a practice bout stays out, not
+    # resurrected), and carries banked XP + the bought ST/DX points.
+    for name in CARRY_OVER_STATE:
+        setattr(rebuilt, name, getattr(figure, name))
+    # Nonhuman creature traits chargen.build never sets from a spec, so without
+    # this a rebuilt monster collapses to single-hex human defaults: a giant to
+    # size 1, a grounded gargoyle, a snake stripped of all_front/hard_to_hit, and
+    # human injury thresholds (#359). Carried, not re-derived: the injury
+    # thresholds follow from a creature's *beginning* ST and are baked in at
+    # monster creation, but a spec-rebuilt figure has no monster template to
+    # re-derive from, so the old figure's values are authoritative -- exactly what
+    # the save/load round-trip already preserves.
+    for name in MONSTER_FIELDS:
+        setattr(rebuilt, name, getattr(figure, name))
+    # Section IX progression (#10): the edit spec carries the *basic* spread, so
+    # fold the (already-carried) bought points back into the live attributes.
+    rebuilt.strength += figure.added_st
+    rebuilt.dexterity += figure.added_dx
+    # Injury carried into the rest of the fight, clamped to the (possibly changed)
+    # new ST so a rebuilt-weaker figure never carries damage above its new ST.
     rebuilt.damage_taken = min(figure.damage_taken, rebuilt.strength)
-    rebuilt.wounded_last_turn = figure.wounded_last_turn
-    rebuilt.unconscious = figure.unconscious
-    rebuilt.dead = figure.dead
-    # A reloading missile weapon stays spent, and an active grapple stays linked
-    # (hth_opponents are uids, and the uid is preserved, so the foe's reciprocal
-    # link still points here).
-    rebuilt.missile_cooldown = figure.missile_cooldown
+    # An active grapple stays linked (hth_opponents are uids, and the uid is
+    # preserved, so the foe's reciprocal link still points here).
     rebuilt.hth_opponents = list(figure.hth_opponents)
-    rebuilt.hth_drew_dagger = figure.hth_drew_dagger
 
     if isinstance(rebuilt, TarmarFigure) and isinstance(figure, TarmarFigure):
         rebuilt.fatigue_roll = figure.fatigue_roll
