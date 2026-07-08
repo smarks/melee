@@ -89,5 +89,50 @@ def test_custom_swatch_layers_over_preset_and_reset_returns_to_preset(
     assert _token(page, "--bg") != "#123456"
 
 
+def _set_swatch(page: Page, input_id: str, value: str) -> None:
+    """Drive a corner colour swatch the way a real edit does: set its value and fire
+    the input event its handler listens on (which applies + persists the tweak)."""
+    page.evaluate(
+        """([id, value]) => {
+            const el = document.getElementById(id);
+            el.value = value;
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+        }""",
+        [input_id, value],
+    )
+
+
+@pytest.mark.django_db
+def test_text_swatch_updates_ink_token_and_persists(live_server, page: Page) -> None:
+    # The Text-colour swatch drives --ink. Mirror the background-swatch test: a custom
+    # value applies live and survives a reload (re-layered pre-paint over the preset).
+    # Pick a light ink so it clears the readability floor against the dark background
+    # and ensureTextContrast() leaves it as chosen.
+    page.goto(live_server.url)
+    assert _token(page, "--ink") != "#cfe8ff"
+
+    _set_swatch(page, "textColor", "#cfe8ff")
+    assert _token(page, "--ink") == "#cfe8ff"
+
+    page.reload()
+    expect(page.locator("#themePicker")).to_have_value("Dark")
+    assert _token(page, "--ink") == "#cfe8ff"
+
+
+@pytest.mark.django_db
+def test_hex_swatch_updates_hex_token_and_persists(live_server, page: Page) -> None:
+    # The Hex/board-colour swatch drives --hex (the board fill). A custom value applies
+    # live and persists across a reload, layered on top of the active preset.
+    page.goto(live_server.url)
+    assert _token(page, "--hex") != "#654321"
+
+    _set_swatch(page, "hexColor", "#654321")
+    assert _token(page, "--hex") == "#654321"
+
+    page.reload()
+    expect(page.locator("#themePicker")).to_have_value("Dark")
+    assert _token(page, "--hex") == "#654321"
+
+
 def picker_value(page: Page) -> str:
     return page.locator("#themePicker").input_value()

@@ -396,6 +396,60 @@ def test_auto_shrink_grows_content_panel_but_not_a_manual_one(live_server, page:
     assert abs(after_log - log_manual) < 5, "a manual panel must not auto-resize"
 
 
+def _inject_log_lines(page: Page, count: int) -> None:
+    """Append plain text rows to #log to grow the Game-status panel's content. On the
+    pre-game landing page GID is null, so the render poll never rewrites #log (drawLog
+    only runs on a live-game render), leaving our injected content in place."""
+    page.evaluate(
+        """count => {
+            const log = document.getElementById('log');
+            for (let i = 0; i < count; i++) {
+                const row = document.createElement('div');
+                row.textContent = 'guard content line ' + i;
+                log.appendChild(row);
+            }
+        }""",
+        count,
+    )
+
+
+@pytest.mark.django_db
+def test_content_panel_autofits_when_content_changes_but_manual_one_does_not(
+        live_server, page: Page) -> None:
+    # #321 content-mode auto-fit via the per-panel MutationObserver: a content-mode
+    # panel re-fits to its content whenever the content changes (scheduleFit->fitPanel),
+    # while a manually-sized one is frozen. This drives the content change DIRECTLY (DOM
+    # mutation), isolating the observer path that only game-driven growth touched before.
+    page.goto(live_server.url)
+    expect(page.locator(".wrap.floating")).to_have_count(1)
+
+    # The Game-status (log) panel is content mode by default. Growing its content fires
+    # the observer, which (debounced 140ms) re-fits the panel taller.
+    before = _box(page, ".logcol")["height"]
+    _inject_log_lines(page, 18)
+    page.wait_for_function(
+        "h0 => document.querySelector('.logcol').getBoundingClientRect().height > h0 + 80",
+        arg=before,
+        timeout=5_000,
+    )
+    grown = _box(page, ".logcol")["height"]
+    assert grown > before + 80, "a content-mode panel did not auto-fit to grown content"
+
+    # Freeze it MANUAL with a resize drag; auto-fit now stops (scheduleFit early-returns).
+    _drag_handle(page, ".logcol", "se", 10, -40)
+    page.wait_for_function(
+        "() => (JSON.parse(localStorage.getItem('melee.layout.v3') || '{}').log || {}).mode === 'manual'"
+    )
+    manual_height = _box(page, ".logcol")["height"]
+
+    # More content now must NOT change the frozen size (it scrolls inside instead).
+    _inject_log_lines(page, 18)
+    page.wait_for_timeout(500)                     # well past the 140ms fit debounce
+    after = _box(page, ".logcol")["height"]
+    assert abs(after - manual_height) < 6, (
+        "a manually-sized panel must not auto-fit when its content changes")
+
+
 @pytest.mark.django_db
 def test_maximize_map_then_game_still_plays(live_server, page: Page) -> None:
     # Non-regression: maximizing the map keeps a full game renderable and its token
