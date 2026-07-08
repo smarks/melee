@@ -38,6 +38,12 @@ MELEE_MIN = HUMAN_MIN_ATTRIBUTE      # each at least this
 # ---- Tarmar stat rules (portable to tarmar_rules / the studio) -------------
 TARMAR_STATS = ("strength", "dexterity", "intelligence",
                 "wisdom", "constitution", "charisma")
+# The four attributes a Tarmar fighter carries *beyond* the Melee ST/DX pair,
+# derived from the one source (TARMAR_STATS) so serializers can emit the extra
+# attributes by iterating instead of re-typing their names. ST/DX are handled
+# specially everywhere they appear (they map to the st/max_st/dx display fields
+# and to the basic-spread round-trip), so only these four surface verbatim.
+TARMAR_EXTRA_STATS = tuple(stat for stat in TARMAR_STATS if stat not in MELEE_STATS)
 TARMAR_MIN, TARMAR_MAX = 3, 18
 TARMAR_BUDGET = 65
 # The spec's skill ladder stops at Master (level 3, +6 to hit); its locked §4
@@ -222,12 +228,15 @@ def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figur
         skills = {weapon.name: spec.get("skill", 0)}
         if second is not None and second is not weapon:
             skills[second.name] = spec.get("skill2", 0)
+        # The six attribute kwargs are derived from the one source (TARMAR_STATS)
+        # rather than hand-listed, so adding an attribute there flows through to the
+        # build without editing this call. Each is still a required field (a missing
+        # one raises the same ValueError, in the same TARMAR_STATS order as before).
         figure: Figure = create_tarmar_fighter(
             _required(spec, "name"), side=_required(spec, "side"),
-            strength=_required(spec, "strength"), dexterity=_required(spec, "dexterity"),
-            intelligence=_required(spec, "intelligence"), wisdom=_required(spec, "wisdom"),
-            constitution=_required(spec, "constitution"), charisma=_required(spec, "charisma"),
-            weapon_skill=skills, **gear)
+            weapon_skill=skills,
+            **{stat: _required(spec, stat) for stat in TARMAR_STATS},
+            **gear)
     else:
         race, _ = _race_from_spec(spec)
         figure = create_fighter(
