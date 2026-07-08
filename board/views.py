@@ -376,46 +376,17 @@ class AttackTargets:
 
 
 def _attack_targets(state: GameState, figure) -> AttackTargets:
-    """Which foes ``figure`` could attack this combat phase, by kind.
+    """Which foes ``figure`` could attack this combat phase, by kind, as uids.
 
-    Based on where it stands and what weapon is ready — attacks are chosen in the
-    combat phase, so no movement-time attack declaration is required. A figure
-    that committed to defending (dodge/defend) does not attack.
+    A thin serialization layer over the engine's single source of attack legality,
+    :meth:`GameState.attack_candidates` (#362): the same rule now drives the human
+    UI here and the AI in ``ai.queue_attacks``, so they can no longer diverge. The
+    uid lists returned are byte-for-byte what this helper produced before.
     """
-    if not (figure.can_act() and not figure.attacked_this_turn
-            and figure.position is not None):
-        return AttackTargets([], [], [])
-    option = figure.current_option
-    if option is not None and (spec(option).sets_dodge or spec(option).sets_defend):
-        return AttackTargets([], [], [])
-    # A figure that chose to disengage moves instead of attacking (option n,
-    # p.19); it may never attack the turn it disengages.
-    if option == Option.DISENGAGE:
-        return AttackTargets([], [], [])
-    # Already grappling: the only attack is the hand-to-hand strike on that foe.
-    if figure.in_hth:
-        return AttackTargets([], [], [e.uid for e in state.hth_targets(figure)])
-    hth = [e.uid for e in state.hth_targets(figure)]   # foes it could grapple
-    weapon = figure.ready_weapon
-    if weapon is None:
-        return AttackTargets([], [], hth)
-    if weapon.kind == WeaponKind.MISSILE:
-        if figure.missile_cooldown > 0:
-            return AttackTargets([], [], hth)   # still reloading — can't fire
-        # Any foe may be targeted — the shooter turns to aim (queue_attack faces
-        # it), satisfying the p.16 front-arc rule; missiles get no facing bonus
-        # so turning costs nothing. (#117 — was silently dropping un-faced foes.)
-        return AttackTargets([], [e.uid for e in state.enemies_of(figure)
-                                  if e.position is not None], hth)
-    melee = [e.uid for e in state.melee_targets(figure, weapon)]
-    # A throwable weapon can be hurled at any foe out of melee reach (p.15); the
-    # thrower turns to aim (queue_attack faces it), so the front arc is satisfied.
-    throw: list = []
-    if weapon.throwable:
-        in_reach = set(melee)
-        throw = [e.uid for e in state.enemies_of(figure)
-                 if e.position is not None and e.uid not in in_reach]
-    return AttackTargets(melee, throw, hth)
+    candidates = state.attack_candidates(figure)
+    return AttackTargets([enemy.uid for enemy in candidates.melee],
+                         [enemy.uid for enemy in candidates.ranged],
+                         [enemy.uid for enemy in candidates.hth])
 
 
 def _auto_facing(state: GameState, figure, final_hex, path=None):
@@ -442,18 +413,11 @@ def _auto_facing(state: GameState, figure, final_hex, path=None):
 def _aim(state: GameState, attacker, target) -> None:
     """Turn a ranged attacker to face its target before it fires (#117).
 
-    Option (f) lets a missile attacker change facing, and missiles get no facing
-    bonus, so aiming is free and satisfies the front-arc rule (p.16) — without it
-    a shot the player deliberately chose at an un-faced foe would silently not
-    fire.
+    The aim-to-face geometry now lives in the engine as :meth:`GameState.aim`
+    (#362), so the human path here and the AI turn to aim through one rule. Kept as
+    a thin wrapper because callers (and a test) import ``_aim`` by name.
     """
-    if attacker.position is None or target.position is None:
-        return
-    line = state.arena.layout.line(attacker.position, target.position)
-    if len(line) >= 2:
-        direction = state.arena.layout.direction_to(attacker.position, line[1])
-        if direction is not None:
-            attacker.facing = direction
+    state.aim(attacker, target)
 
 
 def _ensure_attack_option(state: GameState, figure) -> None:

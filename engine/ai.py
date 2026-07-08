@@ -439,21 +439,25 @@ def queue_attacks(state: GameState, side: str) -> None:
             continue
         if option is None or not spec(option).is_attack:
             continue
+        by_kind = state.attack_candidates(figure)   # the one engine source (#362)
         if weapon.kind == WeaponKind.MISSILE:
             if figure.missile_cooldown > 0:
                 continue                        # still reloading
-            # Only fire at a foe in the front arc (p.16); the AI faces the nearest
-            # enemy in its movement, so the lane is normally clear. Never aim at
-            # a foe grappling one of our own: a shot into an HTH pile strikes a
-            # RANDOM member (p.18), so it could hit the friend (#275).
+            # Drive off the engine's candidate list so a computer archer sees the
+            # same foes a human does (#362): any foe may be targeted, the shooter
+            # turns to aim. Keep the AI's own self-preservation filter -- never
+            # fire into an HTH pile grappling one of our own, since a shot there
+            # strikes a RANDOM member (p.18) and could hit the friend (#275).
             candidates = [
-                e for e in state.enemies_of(figure)
-                if e.position is not None
-                and state.in_front_arc(figure, e.position)
-                and not (e.in_hth and any(
+                e for e in by_kind.ranged
+                if not (e.in_hth and any(
                     friend.side == figure.side and friend.position == e.position
                     for friend in state.figures))]
-        else:
-            candidates = state.melee_targets(figure, weapon)   # front hexes + pole jab
+            if candidates:
+                target = _best_target(state, figure, candidates)
+                state.aim(figure, target)       # turn to aim, like the human path
+                state.queue_attack(figure, target)
+            continue
+        candidates = by_kind.melee              # front hexes + pole jab
         if candidates:
             state.queue_attack(figure, _best_target(state, figure, candidates))

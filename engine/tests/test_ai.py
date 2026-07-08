@@ -190,6 +190,36 @@ def test_ai_queues_a_missile_attack_in_combat() -> None:
     assert state._pending and state._pending[-1].target is foe
 
 
+def test_ai_turns_to_aim_at_a_foe_outside_its_front_arc() -> None:
+    # #362: the AI now drives its missile targets off the engine's single source
+    # (GameState.attack_candidates) and turns to aim, exactly as the human path
+    # does. Before the fix the AI re-derived candidates with an in_front_arc filter
+    # and never aimed, so a computer archer with a loaded bow SILENTLY DECLINED a
+    # shot at a foe in its flank/rear that a human archer on the same board could
+    # take -- option (f) is a free facing change and missiles get no facing bonus
+    # (p.16), so aiming to face is always legal. This pins the corrected behavior.
+    arena = Arena(cols=7, rows=9)
+    layout = arena.layout
+    archer = _archer("Archer", "red")
+    foe = _fighter("Foe", "blue")
+    archer.position, archer.facing = Hex(3, 4), 0     # facing "north" (dir 0)
+    foe.position = archer.position
+    for _ in range(3):                                # foe stands three hexes to the REAR
+        foe.position = layout.neighbor(foe.position, 3)
+    foe.facing = 0
+    archer.missile_cooldown = 0                        # bow is loaded
+    archer.current_option = Option.MISSILE_ATTACK      # committed to shoot
+    state = GameState(arena, [archer, foe], dice=Dice(seed=1))
+
+    assert not state.engaged(archer)                   # free to loose
+    assert not state.in_front_arc(archer, foe.position)  # foe is behind it to start
+
+    ai.queue_attacks(state, "red")
+
+    assert state._pending and state._pending[-1].target is foe   # it took the shot
+    assert state.in_front_arc(archer, foe.position)    # having turned to aim (#362)
+
+
 def test_ai_stands_a_prone_figure() -> None:
     arena = Arena(cols=7, rows=7)
     layout = arena.layout
