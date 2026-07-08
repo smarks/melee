@@ -6,14 +6,38 @@ anonymous player never sees the affordance.
 from __future__ import annotations
 
 import os
+import re
 
 os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "1")
 
 import pytest
 from playwright.sync_api import Page, expect
 
+from test_interactions import (
+    POLL_SAFE_TIMEOUT_MS,
+    _login_admin,
+    _start_inline_game,
+)
+
 # Deterministic skirmish: red = the local human, blue = the AI.
 _SEED = 1
+
+
+def _login_player(context, live_server, django_user_model, username: str):
+    """Plant a NON-admin session cookie so the board SPA loads authenticated as a
+    regular player (the same cookie trick the admin/accounts e2e tests use)."""
+    from django.test import Client as DjangoClient
+
+    player = django_user_model.objects.create_user(
+        username=username, password="player-pass-123")
+    django_client = DjangoClient()
+    django_client.force_login(player)
+    context.add_cookies([{
+        "name": "sessionid",
+        "value": django_client.cookies["sessionid"].value,
+        "url": live_server.url,
+    }])
+    return player
 
 
 def _new_game(page: Page, live_server) -> dict:
@@ -154,3 +178,120 @@ def test_anonymous_player_sees_no_save_button(live_server, page: Page) -> None:
     panel = page.locator("#selInfo")
     expect(panel.locator(".charsheet")).to_be_visible()
     expect(panel.get_by_role("button", name="💾 Save character")).to_have_count(0)
+
+
+@pytest.mark.django_db
+def test_load_saved_character_dropdown_populates_the_editor_card(
+        live_server, context, page: Page, django_user_model) -> None:
+    # #388 control coverage: the setup editor's per-card "Load saved…" dropdown was
+    # never driven by an e2e. A logged-in player picks one of their saved characters
+    # from that select; the card's editable fields must fill from the saved spec
+    # (applySpecToCard). Prove the CLICK has its observable effect on the card.
+    from board.models import SavedCharacter
+
+    player = _login_player(context, live_server, django_user_model, "loader")
+    # A distinctive spec so the fill is unambiguous (ST+DX total 24 = a legal
+    # Classic Melee build; the name/stat values are deliberately off-default).
+    SavedCharacter.objects.create(
+        owner=player, name="Loadable Hero", profile="Classic Melee",
+        spec={"name": "Loadable Hero", "strength": 9, "dexterity": 15,
+              "weapon": "Broadsword", "weapon2": "None",
+              "armor": "Leather", "shield": "None"})
+
+    page.goto(live_server.url)
+    expect(page.locator("#profile")).to_be_enabled(timeout=20_000)   # editable pre-game
+    page.locator("#editCharBtn").click()
+    expect(page.locator("#editor")).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+
+    card = page.locator("#editorRoster .card").first
+    # The card starts on the default archetype, NOT the saved spec (guards against a
+    # false pass where the field already held the target value).
+    name_field = card.locator("[data-name]")
+    strength_field = card.locator('[data-stat="strength"]')
+    expect(name_field).not_to_have_value("Loadable Hero")
+
+    # Pick the saved character from this card's Load dropdown.
+    card.locator("select.loadsel").select_option(label="Loadable Hero")
+
+    # The card's fields populated from the saved spec.
+    expect(name_field).to_have_value("Loadable Hero", timeout=POLL_SAFE_TIMEOUT_MS)
+    expect(strength_field).to_have_value("9")
+    expect(card.locator('[data-stat="dexterity"]')).to_have_value("15")
+    expect(card.locator('[data-eq="weapon"]')).to_have_value("Broadsword")
+
+
+@pytest.mark.django_db
+def test_editor_start_match_blocks_an_invalid_roster_then_starts_a_valid_one(
+        live_server, page: Page) -> None:
+    # #388 control coverage: the editor's "Start match" button, end to end. A regular
+    # (non-admin) roster is rules-validated server-side, so an illegal fighter is
+    # BLOCKED with an error and no game is created; fixing it lets the same button
+    # start the match. Both halves are driven through the real button.
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add AI player").click()   # a 2nd side so a game can start
+    page.locator("#editCharBtn").click()
+    expect(page.locator("#editor")).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+
+    card = page.locator("#editorRoster .card").first
+    strength = card.locator('[data-stat="strength"]')
+    expect(strength).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+
+    # Break the first fighter: ST 30 + the default DX 11 = 41, past the Classic Melee
+    # ST+DX total of 24, so the server rejects the roster.
+    strength.fill("30")
+    page.get_by_role("button", name="Start match").click()
+    # The validation error is shown and the match is BLOCKED: the editor stays open
+    # and the URL never advances to a game.
+    expect(page.locator("#editorErr")).to_contain_text(
+        "Can't start", timeout=POLL_SAFE_TIMEOUT_MS)
+    expect(page.locator("#editor")).to_be_visible()
+    assert "/game/" not in page.url, "an invalid roster must not create a game"
+
+    # Fix the fighter (ST 13 + DX 11 = 24) and start again: now it launches.
+    strength.fill("13")
+    page.get_by_role("button", name="Start match").click()
+    page.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    expect(page.locator("#editor")).to_be_hidden()
+
+
+@pytest.mark.django_db
+def test_admin_inline_edit_apply_renames_the_live_figure_on_the_board(
+        live_server, context, page: Page, django_user_model) -> None:
+    # #388 control coverage, composing with the #323/#347 admin inline-edit. The
+    # existing test_interactions coverage edits ST and reads the Selected-character
+    # SHEET; this adds the MISSING half -- editing the figure's NAME inline and
+    # asserting Apply's POST lands on the live board (the roster row for that uid
+    # renders the new name) AND on the served game state (the server accepted it).
+    _login_admin(context, live_server, django_user_model, "gm388")
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+
+    # Inspect a non-active fighter (clicking the active one opens the action menu).
+    row = page.locator("#roster .row:not(.active)").first
+    row.click()
+    uid = row.get_attribute("data-uid")
+    card = page.locator("#selInfo .card")
+    expect(card).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)   # the admin inline card
+
+    # Edit two observable fields at once: the name and ST (a rules-bypass value; ST
+    # is unarmored-penalty-free, so the sheet shows it verbatim).
+    card.locator("[data-name]").fill("Renamed Warrior")
+    card.locator('input[data-stat="strength"]').fill("22")
+    card.get_by_role("button", name="Apply to game").click()
+
+    # The live board reflects the edit: the SAME roster row (keyed by uid) now shows
+    # the new name, and the Selected-character sheet reports the new ST.
+    row_after = page.locator(f'#roster .row[data-uid="{uid}"]')
+    expect(row_after).to_contain_text("Renamed Warrior", timeout=POLL_SAFE_TIMEOUT_MS)
+    expect(page.locator("#selInfo .charsheet .sheet-vitals")).to_contain_text(
+        "ST 22/22", timeout=POLL_SAFE_TIMEOUT_MS)
+
+    # ...and the POST actually reached the server: the served game state carries the
+    # renamed, re-statted figure (proof the update_figure write succeeded).
+    gid = page.url.rsplit("/game/", 1)[-1]
+    state = page.request.get(f"{live_server.url}/api/game/{gid}").json()["state"]
+    figure = next(f for f in state["figures"] if f["uid"] == uid)
+    assert figure["name"] == "Renamed Warrior"
+    assert figure["st"] == 22
