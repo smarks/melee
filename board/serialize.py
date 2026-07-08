@@ -6,11 +6,30 @@ geometry produced by :mod:`board.geometry`.
 """
 from __future__ import annotations
 
+from engine.chargen import TARMAR_EXTRA_STATS
 from engine.figure import Figure
 from engine.state import GameState
 from engine.tarmar import TarmarFigure
 
 from .geometry import label_of
+
+
+def _basic_spread(figure: Figure) -> tuple[int, int]:
+    """The figure's *basic* ST/DX: its live attributes with any Section IX
+    advancement (#10) stripped back out, so the editor and :func:`chargen.build`
+    still see ST+DX summing to the race total.
+
+    This is one half of a round-trip invariant, defined here once so both readers
+    share a single notion of "basic spread":
+
+    * The mid-game edit path re-applies the bought points -- ``_update_figure`` in
+      :mod:`board.views` does ``rebuilt.strength += figure.added_st`` (and DX),
+      the exact inverse, so a re-spec neither gains nor loses XP-bought ST/DX.
+    * The save-character path (``api_game_save_character``) instead keeps this
+      basic spread as the stored *base* character and deliberately does NOT re-add,
+      so a saved fighter loads fresh from the setup wizard.
+    """
+    return figure.strength - figure.added_st, figure.dexterity - figure.added_dx
 
 
 def _edit_spec(figure: Figure) -> dict:
@@ -33,20 +52,22 @@ def _edit_spec(figure: Figure) -> dict:
     shield_name = ("None" if ready_is_two_handed and not has_one_handed_backup
                    else figure.shield.name)
     # Report the *basic* spread (before any Section IX advancement, #10) so the
-    # editor and chargen.build still see ST+DX summing to the race total. The
-    # added points are re-applied when the rebuilt figure is swapped back in.
+    # editor and chargen.build still see ST+DX summing to the race total. See
+    # :func:`_basic_spread` for the re-add half of the invariant.
+    basic_strength, basic_dexterity = _basic_spread(figure)
     spec = {
         "name": figure.name, "side": figure.side, "char_class": figure.char_class,
-        "strength": figure.strength - figure.added_st,
-        "dexterity": figure.dexterity - figure.added_dx,
+        "strength": basic_strength,
+        "dexterity": basic_dexterity,
         "weapon": ready_name, "weapon2": second.name if second else "None",
         "armor": figure.armor.name, "shield": shield_name,
         "shield_ready": figure.shield_ready,
     }
     if isinstance(figure, TarmarFigure):
+        # The four extra Tarmar attributes come from the one source (TARMAR_EXTRA_STATS)
+        # so their names live in engine.chargen, not re-typed here.
+        spec.update({stat: getattr(figure, stat) for stat in TARMAR_EXTRA_STATS})
         spec.update(
-            intelligence=figure.intelligence, wisdom=figure.wisdom,
-            constitution=figure.constitution, charisma=figure.charisma,
             skill=figure.weapon_skill.get(ready_name, 0),
             skill2=figure.weapon_skill.get(second.name, 0) if second else 0)
     return spec
@@ -113,10 +134,10 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         # The full attribute spread + per-weapon skills, public for every figure so
         # the read-only sheet is as complete for opponents as for your own (#323).
         # These are display-only wire fields, distinct from the owner/admin edit_spec.
-        data["intelligence"] = figure.intelligence
-        data["wisdom"] = figure.wisdom
-        data["constitution"] = figure.constitution
-        data["charisma"] = figure.charisma
+        # Iterated from the one source (TARMAR_EXTRA_STATS) in its declared order,
+        # so the wire keys and their order are identical to the hand-listed four.
+        for stat in TARMAR_EXTRA_STATS:
+            data[stat] = getattr(figure, stat)
         data["weapon_skills"] = {
             carried.name: figure.weapon_skill.get(carried.name, 0)
             for carried in figure.weapons
