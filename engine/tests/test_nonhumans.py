@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import pytest
 from hexarena.dice import Dice
-from hexarena.hex import FLAT, Hex, HexLayout
+from hexarena.hex import Hex
 
 from engine import chargen
+from engine.arena import DEFAULT_LAYOUT as LAYOUT
 from engine.arena import Arena
 from engine.facing import FRONT, REAR, attack_zone
 from engine.figure import Figure, Race, create_fighter
@@ -20,15 +21,13 @@ from engine.options import Option
 from engine.rules_data import (
     CLOTH,
     DAGGER,
-    DamageDice,
     LEATHER,
     NO_ARMOR,
     PLATE,
     SHORTSWORD,
+    DamageDice,
 )
 from engine.state import GameState
-
-LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
 def _aim(figure: Figure, target: Figure) -> None:

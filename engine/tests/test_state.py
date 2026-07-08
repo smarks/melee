@@ -2,17 +2,15 @@
 from __future__ import annotations
 
 import pytest
-
 from hexarena.dice import Dice
-from hexarena.hex import FLAT, Hex, HexLayout
+from hexarena.hex import Hex
 
+from engine.arena import DEFAULT_LAYOUT as LAYOUT
 from engine.arena import Arena
 from engine.figure import Posture, create_human
 from engine.options import Option
 from engine.rules_data import BROADSWORD, NO_ARMOR, SHORTSWORD
 from engine.state import GameState, IllegalAction
-
-LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
 def _aim(figure, target) -> None:
@@ -519,8 +517,8 @@ def test_initiative_order_is_adjdx_desc_then_uid() -> None:
 
 def test_main_gauche_parry_rules() -> None:
     from engine.facing import FRONT, SIDE
-    from engine.ruleset import main_gauche_parry
     from engine.rules_data import BROADSWORD, MAIN_GAUCHE, RAPIER, TWO_HANDED_SWORD
+    from engine.ruleset import main_gauche_parry
 
     duelist = create_human("Duelist", 12, 12, "b",
                            weapons=[RAPIER, MAIN_GAUCHE], ready_weapon=RAPIER)
@@ -1734,7 +1732,8 @@ def test_shield_rush_resolves_in_adjdx_order_so_a_faster_victim_strikes_first() 
 def test_main_gauche_adds_a_separate_minus_four_jab() -> None:
     """A figure wielding a main weapon plus a ready off-hand main-gauche may add a
     second attack on the same foe, rolled at -4 DX (from #7, p.13)."""
-    from engine.rules_data import MAIN_GAUCHE, SHORTSWORD as SWORD
+    from engine.rules_data import MAIN_GAUCHE
+    from engine.rules_data import SHORTSWORD as SWORD
 
     arena = Arena(cols=9, rows=15)
     duelist = create_human("Duelist", 12, 12, "a",
@@ -2010,8 +2009,8 @@ def test_pole_plus_two_vs_charge_is_denied_after_a_shift_that_moved() -> None:
 def test_dodge_defends_vs_ranged_and_defend_vs_melee_only() -> None:
     """Four dice to hit a DODGING figure only with a missile/thrown weapon, and a
     DEFENDING figure only with another (melee) attack (p.20) — #123."""
-    from engine.ruleset import Ruleset
     from engine.rules_data import SHORTSWORD
+    from engine.ruleset import Ruleset
 
     rules = Ruleset()
     dodger = create_human("Dodger", 12, 12, "a",

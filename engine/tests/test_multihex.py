@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import pytest
 from hexarena.dice import Dice
-from hexarena.hex import FLAT, Hex, HexLayout
+from hexarena.hex import Hex
 
+from engine.arena import DEFAULT_LAYOUT as LAYOUT
 from engine.arena import Arena
 from engine.facing import front_hexes
 from engine.figure import Figure
@@ -21,8 +22,6 @@ from engine.options import Option
 from engine.rules_data import SHORTSWORD
 from engine.ruleset import KNOCKDOWN, Ruleset
 from engine.state import GameState, IllegalAction
-
-LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
 def _aim(figure: Figure, target_hex: Hex) -> None:

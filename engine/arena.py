@@ -24,9 +24,19 @@ CLEAR_COST = 1
 # it into the hex beyond) costs 3 MA rather than 1 (p.8).
 BODY_COST = 3
 
+# The one canonical arena geometry: flat-top, odd-q -- the same orientation the
+# printed Melee map uses. This is the single source of geometric truth. Both the
+# Arena default below and any test that needs a bare layout import THIS constant
+# so the two can never silently diverge. HexLayout is immutable read-only
+# geometry, so sharing the one instance is safe.
+DEFAULT_LAYOUT = HexLayout(orientation=FLAT, odd=True)
+
 
 class Arena:
     """A bounded, flat-top hex field with entrance hexes at each end."""
+
+    #: Canonical default geometry, also importable as ``engine.arena.DEFAULT_LAYOUT``.
+    DEFAULT_LAYOUT = DEFAULT_LAYOUT
 
     def __init__(
         self,
@@ -38,7 +48,7 @@ class Arena:
     ) -> None:
         self.cols = cols
         self.rows = rows
-        self.layout = layout or HexLayout(orientation=FLAT, odd=True)
+        self.layout = layout or DEFAULT_LAYOUT
         self.name = name
         self.walls: set[Hex] = set()
 
