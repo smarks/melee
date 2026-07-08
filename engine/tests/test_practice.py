@@ -9,7 +9,6 @@ from __future__ import annotations
 from hexarena.dice import Dice
 from hexarena.hex import Hex
 
-from engine.arena import DEFAULT_LAYOUT as LAYOUT
 from engine.arena import Arena
 from engine.experience import PRACTICE_DROPOUT_ST, CombatType
 from engine.facing import FRONT
@@ -18,13 +17,9 @@ from engine.options import Option
 from engine.rules_data import BROADSWORD, LEATHER, NO_ARMOR, SHORTSWORD, SMALL_BOW
 from engine.ruleset import Ruleset
 from engine.state import GameState
+from engine.tests.geometry import aim as _aim
 
 RULES = Ruleset()
-
-
-def _aim(figure, target) -> None:
-    figure.facing = LAYOUT.direction_to(
-        figure.position, LAYOUT.line(figure.position, target.position)[1])
 
 
 # ---- 1. blunted weapons do half damage, rounded down (p.22) -----------------

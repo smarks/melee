@@ -713,6 +713,35 @@ def _json_endpoint(view):
     return wrapper
 
 
+def _post_only(view):
+    """Wrap a write view so a non-POST request short-circuits to the shared 405
+    before any lookup/body/lock work — the single definition of the 'mutating
+    endpoint is POST-only' guard that every write view opened by hand (#375)."""
+    @functools.wraps(view)
+    def wrapper(request, *args, **kwargs):
+        if request.method != "POST":
+            return HttpResponse(status=405)
+        return view(request, *args, **kwargs)
+
+    return wrapper
+
+
+def _forbidden_endpoint(view):
+    """Wrap a write view so a :class:`Forbidden` raised by an authorize call
+    becomes the shared 403 — the 'unauthorized -> 403' half of the mutating
+    envelope, hoisted out of the per-view ``try/except`` bodies (#375). (Views
+    that must do more than translate — e.g. :func:`api_action`, which also records
+    the refusal to its debug log — keep their own inline handler.)"""
+    @functools.wraps(view)
+    def wrapper(request, *args, **kwargs):
+        try:
+            return view(request, *args, **kwargs)
+        except Forbidden as exc:
+            return JsonResponse({"error": str(exc)}, status=403)
+
+    return wrapper
+
+
 # ---- views ------------------------------------------------------------------
 @ensure_csrf_cookie
 def index(request, gid=None):
@@ -756,6 +785,8 @@ def api_character_delete(request, pk):
 
 @_game_endpoint
 @_json_endpoint
+@_forbidden_endpoint
+@_post_only
 def api_game_save_character(request, gid: str, uid: str) -> HttpResponse:
     """Keep a fighter from a running (or finished) game: snapshot it into the
     signed-in player's saved characters (#234).
@@ -768,8 +799,6 @@ def api_game_save_character(request, gid: str, uid: str) -> HttpResponse:
     a clean 400 with ``collision: true`` so the UI can offer a rename — saving a
     live fighter must never silently overwrite a stored character.
     """
-    if request.method != "POST":
-        return HttpResponse(status=405)
     if not request.user.is_authenticated:
         return JsonResponse({"error": "log in to save characters"}, status=401)
     # Under the per-game lock: the load-on-demand reload inside _resident_game is a
@@ -791,10 +820,7 @@ def api_game_save_character(request, gid: str, uid: str) -> HttpResponse:
         # path — a seatless caller owning nothing still gets 'you do not control').
         seats = game.get("seats")
         if seats and not _is_admin(request):
-            try:
-                _authorize_figure_control(game, request, uid)
-            except Forbidden as exc:
-                return JsonResponse({"error": str(exc)}, status=403)
+            _authorize_figure_control(game, request, uid)  # Forbidden -> shared 403
         requested_name = (body.get("name") or figure.name or "").strip()
         if not requested_name:
             return JsonResponse({"error": "a name is required"}, status=400)
@@ -1128,6 +1154,7 @@ def api_best_weapons(request):
 
 @csrf_exempt
 @_json_endpoint
+@_post_only
 def api_new_custom(request):
     """Start a game from player-edited fighter specs.
 
@@ -1135,8 +1162,6 @@ def api_new_custom(request):
     player; an admin (#180) may seat fighters outside those rules, the same
     bypass the mid-game figure edit grants in #86.
     """
-    if request.method != "POST":
-        return HttpResponse(status=405)
     body = _json_body(request)
     profile = PROFILES.get(body.get("profile", ""), PROFILES["Classic Melee"])
     computer_sides = {s for s in (body.get("computer") or "").split(",") if s}
@@ -1176,18 +1201,15 @@ def api_state(request, gid):
 
 @csrf_exempt
 @_game_endpoint
+@_forbidden_endpoint
+@_post_only
 def api_game_save(request, gid):
     """Persist a resident game so it survives a server restart (#12).
 
     A whole-game write: only a seat owner (or admin) may save (#257).
     """
-    if request.method != "POST":
-        return HttpResponse(status=405)
     with _locked_game(gid) as game:
-        try:
-            _authorize_game_write(game, request)
-        except Forbidden as exc:
-            return JsonResponse({"error": str(exc)}, status=403)
+        _authorize_game_write(game, request)   # Forbidden -> shared 403
         _persist_game(gid, game)
         return JsonResponse({"ok": True, "gid": gid})
 
@@ -1195,6 +1217,8 @@ def api_game_save(request, gid):
 @csrf_exempt
 @_game_endpoint
 @_json_endpoint
+@_forbidden_endpoint
+@_post_only
 def api_game_award(request, gid):
     """Award Section IX experience at game over (#10).
 
@@ -1209,13 +1233,8 @@ def api_game_award(request, gid):
     game over, so the game is stamped ``awarded`` and a second POST is a 400
     rather than farming another +50/+100 onto every figure.
     """
-    if request.method != "POST":
-        return HttpResponse(status=405)
     with _locked_game(gid) as game:
-        try:
-            _authorize_game_write(game, request)
-        except Forbidden as exc:
-            return JsonResponse({"error": str(exc)}, status=403)
+        _authorize_game_write(game, request)   # Forbidden -> shared 403
         if game.get("awarded"):
             return JsonResponse(
                 {"error": "experience has already been awarded for this game"},
@@ -1246,6 +1265,8 @@ def api_game_award(request, gid):
 @csrf_exempt
 @_game_endpoint
 @_json_endpoint
+@_forbidden_endpoint
+@_post_only
 def api_figure_advance(request, gid, uid):
     """Trade 100 XP for +1 basic ST or DX on one figure (Section IX, #10).
 
@@ -1257,13 +1278,9 @@ def api_figure_advance(request, gid, uid):
     otherwise an opponent or spectator could permanently buff — or drain — any
     figure on the board.
     """
-    if request.method != "POST":
-        return HttpResponse(status=405)
     with _locked_game(gid) as game:
         try:
-            _authorize_figure_write(game, request, uid)
-        except Forbidden as exc:
-            return JsonResponse({"error": str(exc)}, status=403)
+            _authorize_figure_write(game, request, uid)   # Forbidden -> shared 403
         except IllegalAction as exc:
             return JsonResponse({"error": str(exc)}, status=400)
         body = _json_body(request)
@@ -1525,9 +1542,11 @@ def _authorize_figure_write(game: dict, request, uid: str) -> None:
 @csrf_exempt
 @_game_endpoint
 @_json_endpoint
+@_post_only
 def api_action(request, gid):
-    if request.method != "POST":
-        return HttpResponse(status=405)
+    # api_action keeps its own inline `except Forbidden` (below) because it also
+    # records the refusal to the debug log, so it is not wrapped in
+    # _forbidden_endpoint; the POST-only guard is the shared decorator.
     # Hold the per-game lock across the whole load -> mutate -> persist so
     # concurrent requests on one gid serialize and can't lose an update (#253).
     with _locked_game(gid) as game:
@@ -1593,6 +1612,7 @@ def api_debug(request, gid):
 @csrf_exempt
 @_game_endpoint
 @_json_endpoint
+@_post_only
 def api_seat(request, gid):
     """Open / claim / release a seat — the multiplayer join mechanism (#85).
 
@@ -1603,8 +1623,6 @@ def api_seat(request, gid):
     Computer seats can't be reassigned. The per-figure-side authorization in
     :func:`_authorize_action` then enforces "control only your own figures".
     """
-    if request.method != "POST":
-        return HttpResponse(status=405)
     # The whole check-then-set of a claim runs under the per-game lock so two
     # joiners can't both pass the "seat is open" test and both take it (#253).
     with _locked_game(gid) as game:
