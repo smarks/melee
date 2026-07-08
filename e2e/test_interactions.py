@@ -853,3 +853,177 @@ def test_a_seat_only_change_does_not_rebuild_the_svg_board(live_server, page: Pa
     stats_after = page.evaluate("() => ({...window.__MELEE_RENDER_STATS__})")
     assert stats_after["arenaDraws"] == stats_before["arenaDraws"], (
         "a seat-only change rebuilt the whole SVG board — drawArena was not gated")
+
+
+# ---------------------------------------------------------------------------
+# UI-coverage additions (#388): click each control and assert its observable
+# effect. Discovery found no dead controls, so these are pure test coverage of
+# the Game-Control remove-player ✕, the post-combat force-retreat control (its
+# shove + advance toggle), and the hover-to-inspect token popup.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_remove_player_button_shrinks_roster_and_new_game_still_starts(
+        live_server, page: Page) -> None:
+    # #192 Game Control roster: the per-row ✕ (removePlayer) drops a player from
+    # the pre-game roster. Removing one from a three-player roster must update the
+    # count/rows AND leave a still-valid (>= 2) roster that New Game can start with
+    # the reduced line-up. (The five-player-cap test only re-enables the add
+    # buttons after a remove; it never starts a game from the shrunken roster.)
+    page.goto(live_server.url)
+    add_ai = page.get_by_role("button", name="Add AI player")
+    add_ai.click()
+    add_ai.click()                                   # roster: You (human) + 2 AI = 3
+    expect(page.locator("#playerCount")).to_have_text("3")
+    expect(page.locator("#playerRoster .pl-row")).to_have_count(3)
+    # The local human (row 0) has no ✕; only the two added players are removable.
+    expect(page.locator("#playerRoster .pl-remove")).to_have_count(2)
+
+    # Click one ✕: the roster shrinks to two, count and rows both reflect it.
+    page.locator("#playerRoster .pl-remove").first.click()
+    expect(page.locator("#playerCount")).to_have_text("2")
+    expect(page.locator("#playerRoster .pl-row")).to_have_count(2)
+
+    # New Game still works with the reduced two-player roster: it starts a match
+    # whose board carries exactly the two remaining sides.
+    new_game = page.get_by_role("button", name="New Game")
+    expect(new_game).to_be_enabled()
+    new_game.click()
+    expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
+    expect(page.locator("#svg circle").first).to_be_visible()
+    expect(page.locator("#roster .grouphd")).to_have_count(2)
+
+
+def _seed_force_retreat_combat(gid: str):
+    """Seed a combat where red has qualified to shove blue (dealt ST damage, took
+    none, adjacent) and the turn's attacks are already resolved -- so the client
+    lands in the ``combat_resolved`` state that renders the force-retreat control.
+
+    Mirrors the direct-arming idiom the engine's own force-retreat tests use
+    (test_state.py::test_force_retreat_breaks_ties_deterministically): set the
+    per-turn flags rather than driving a full combat, so the eligible pair is
+    deterministic. Returns ``(state, red, blue)`` -- the same in-process objects
+    the live server mutates, so the test reads the shove straight off them.
+    """
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    grid = arena.layout
+    red = create_human("Redcap", 12, 12, "red",
+                       weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue = create_human("Bluecap", 12, 12, "blue",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue.position = Hex(3, 3)
+    red.position = grid.neighbor(blue.position, 0)        # adjacent: a one-hex shove is legal
+    red.facing = next(direction for direction in range(6)
+                      if grid.neighbor(red.position, direction) == blue.position)
+    state = GameState(arena, [red, blue])       # building the state assigns final uids
+    # Arm the force retreat directly (AFTER the state is built, so blue.uid is final):
+    # red dealt ST damage to blue this turn and took no hits, so can_force_retreat(
+    # red, blue) holds -> the server lists the pair in force_retreat_options.
+    red.dealt_st_damage_this_turn = True
+    red.hits_this_turn = 0
+    red.force_retreat_targets_this_turn = [blue.uid]
+    GAMES[gid] = {
+        "state": state, "layout": board_layout(arena),
+        "phase": "combat",
+        "controllers": {"red": "human", "blue": "human"},
+        "combat_prepared": True,
+        # Attacks already resolved this turn -> the client shows the post-combat
+        # "push back beaten foes, then end the turn" screen (drawForceRetreat).
+        "combat_resolved": True, "combat_ready": [],
+    }
+    return red, blue
+
+
+@pytest.mark.django_db
+def test_force_retreat_control_shoves_the_foe_and_advance_follows(
+        live_server, page: Page) -> None:
+    # #388 coverage: the post-combat force-retreat control (drawForceRetreat) had no
+    # e2e. Click its push button (with the "advance" checkbox toggled on) and assert
+    # the observable effect on the board: the beaten foe is shoved one hex and, with
+    # advance on, the attacker follows into the vacated hex.
+    from board.views import GAMES
+
+    gid = "force-retreat-e2e"
+    red, blue = _seed_force_retreat_combat(gid)
+    try:
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text("Combat", timeout=20_000)
+
+        # The force-retreat control appears: a labelled push button + its advance
+        # checkbox, headed by the "push a beaten foe back a hex" prompt.
+        fr_row = page.locator("#controls .fr-row")
+        expect(fr_row).to_have_count(1, timeout=POLL_SAFE_TIMEOUT_MS)
+        push = fr_row.get_by_role("button")
+        expect(push).to_contain_text("Redcap")
+        expect(push).to_contain_text("Bluecap")
+        advance = fr_row.locator('input[type="checkbox"]')
+        expect(advance).not_to_be_checked()
+
+        # Toggle "advance (follow up)": the control registers the choice (it persists
+        # the flag, surviving the ~2s poll re-render, so it stays checked).
+        advance.check()
+        expect(advance).to_be_checked()
+
+        original_blue = blue.position
+        original_red = red.position
+        assert original_blue is not None and original_red is not None
+
+        # Fire the shove. The server mutates the in-process figures we seeded.
+        push.click()
+
+        state = GAMES[gid]["state"]
+        deadline = time.time() + 15
+        while time.time() < deadline and blue.position == original_blue:
+            page.wait_for_timeout(100)
+
+        # The beaten foe was shoved exactly one hex away...
+        assert blue.position != original_blue, "the foe was not force-retreated"
+        assert state.arena.distance(original_blue, blue.position) == 1
+        # ...and with advance on, the attacker followed into the vacated hex.
+        assert red.position == original_blue, "advance did not follow into the vacated hex"
+
+        # The push was spent, so its control clears (no transient prompt lingering);
+        # the End-turn affordance remains.
+        expect(page.locator("#controls .fr-row")).to_have_count(
+            0, timeout=POLL_SAFE_TIMEOUT_MS)
+        expect(page.get_by_role("button", name=re.compile("End turn"))).to_be_visible()
+    finally:
+        GAMES.pop(gid, None)
+
+
+@pytest.mark.django_db
+def test_hovering_a_figure_opens_its_inspect_popup_and_leaving_closes_it(
+        live_server, page: Page) -> None:
+    # #72 hover-to-inspect: hovering an actionable counter surfaces its action/inspect
+    # popup (openMenu) without a click, and a short grace timer closes it once the
+    # pointer leaves both the token and the popup (scheduleHoverClose). Drive both
+    # halves: hover the active figure -> popup shows its options; move away -> it closes.
+    page.goto(live_server.url)
+    _start_inline_game(page, human=True)
+    expect(page.locator("#phaseBanner")).to_contain_text(
+        "Action selection", timeout=10_000)
+    expect(page.locator("#tokenMenu")).to_be_hidden()
+
+    # Hover the active figure's counter (the one wearing the amber active ring).
+    active_token = page.locator("#svg g.fig:has(.activering)").first
+    expect(active_token).to_be_visible(timeout=10_000)
+    active_token.hover()
+
+    # The inspect/action popup opens on hover alone, listing that figure's options.
+    menu = page.locator("#tokenMenu")
+    expect(menu).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+    expect(menu.get_by_text("Do nothing (hold)")).to_be_visible()
+
+    # Move the pointer well away from both the token and the popup: the grace-timer
+    # close fires and the menu goes away (state-driven, not left dangling).
+    page.locator("#phaseBanner").hover()
+    expect(menu).to_be_hidden(timeout=POLL_SAFE_TIMEOUT_MS)
