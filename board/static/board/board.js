@@ -1,3 +1,13 @@
+// Pure helpers extracted to sibling ES modules so they are unit-testable under
+// `node --test` (js-tests/) instead of only through a live-server Playwright run.
+// Served statically alongside board.js (non-manifest storage keeps the filename),
+// so these relative imports resolve at /static/board/*.js in dev and production.
+import {
+  defaultModeFor, clampGeom, mergeLayout, snapGeom, fitGeom,
+  maximizeGeom, resizeGeom, snapResizeGeom,
+} from "./layout_geom.js";
+import {classifyControlState, needsTarget} from "./control_state.js";
+
 const SVG = "http://www.w3.org/2000/svg";
 let GID = null, S = null, LAYOUT = null, PROFILE = null;
 let GAME_ACTIVE = false;  // a match is running -> Game Control settings lock (#192)
@@ -755,60 +765,55 @@ function validTargets() {
 // ---- controls ---------------------------------------------------------------
 // One clear primary action per phase, a "what to do now" line, a per-figure
 // checklist, and inline (non-blocking) warnings -- no double-confirm. (#176)
+// drawControls is now a THIN RENDERER over classifyControlState (#364): the pure
+// classifier (control_state.js) decides WHICH turn-flow state this client is in
+// from plain state + the ownership predicates + the UI globals it needs, and this
+// function switches on the returned `kind` to do the DOM. All the side effects that
+// must stay in the renderer — ensureActiveOptions, the GATE dbg logging, the warn-
+// line click handlers, figureChecklist, drawForceRetreat — live here, unchanged.
+// See the classifier's comments for why each gate exists (#326/#333/#334/#347).
 function drawControls() {
   const c = $("controls"); c.innerHTML = "";
-  const phase = S.phase;
-  $("phaseBanner").textContent = bannerFor(phase);
+  $("phaseBanner").textContent = bannerFor(S.phase);
+  const state = classifyControlState(S, {
+    myTurnActor, isComputerSide,
+    plan: PLAN, chosenOption, sel, openSeats: OPEN_SEATS,
+  });
 
-  if (S.victory) {
-    setHint(`🏆 <b>${sideName(S.victory)}</b> wins the field!`);
-    bigPrimary(c, "Start next round →", () => act({type: "end_turn", expected_turn: S.turn}).then(after));
-    return;
-  }
+  switch (state.kind) {
+    case "victory":
+      setHint(`🏆 <b>${sideName(S.victory)}</b> wins the field!`);
+      bigPrimary(c, "Start next round →", () => act({type: "end_turn", expected_turn: S.turn}).then(after));
+      return;
 
-  if (phase === "select") {
-    // Per-character initiative selection (#192): only the active figure may act,
-    // and each choice submits immediately, lighting up the next figure. The
-    // action-selection buttons now live HERE in the Action panel (#326), rendered
-    // for the character whose turn it is, instead of inline under every roster row.
-    const active = S.active_uid ? figByUid(S.active_uid) : null;
-    if (!active) { setHint("Resolving the action pass…"); return; }
-    // Player-specific Action panel (#326): only the client controlling the active
-    // character sees its action controls. Another human's turn shows a NAMED waiting
-    // line (no controls, no Resolve); a computer's turn (rarely reached -- the server
-    // advances AI eagerly in api_action, not on poll) shows the "computer is playing"
-    // line. Hotseat controls all human sides, so it never hits the waiting branch
-    // (myTurnActor is true), with no special-casing. #347: an admin is NOT the
-    // AI's actor even though it may edit AI figures, so an AI turn falls into the
-    // "computer is playing" branch for an admin too (myTurnActor excludes AI sides).
-    if (!myTurnActor(active)) {
-      if (isComputerSide(active.side)) setHint("🤖 Computer is playing…");
-      else setHint(`Waiting for <span class="chip ${active.side}">${sideName(active.side)}</span>`
-                   + ` to set <b>${escapeHtml(active.name)}</b>'s action…`);
+    case "select_resolving":
+      setHint("Resolving the action pass…");
+      return;
+
+    case "select_computer":
+      setHint("🤖 Computer is playing…");
+      return;
+
+    case "select_waiting_human": {
+      const active = state.active;
+      setHint(`Waiting for <span class="chip ${active.side}">${sideName(active.side)}</span>`
+              + ` to set <b>${escapeHtml(active.name)}</b>'s action…`);
       return;                                              // non-owning client: no controls
     }
-    // Mine: name the active character, then render its action-selection block (the
-    // option list, or the mid-placement confirm once a destination option is chosen).
-    const placing = chosenOption && sel === active.uid;
-    setHint(placing
-      ? `Placing <b>${escapeHtml(active.name)}</b> — click a green hex on the board, then press <b>Set action</b>.`
-      : `<b>${escapeHtml(active.name)}</b> has initiative — choose its action below, on its counter, or the board.`);
-    drawActionActor(c, active);
-    ensureActiveOptions();   // load the active figure's real options, then re-draw
-    return;
-  }
 
-  if (phase === "combat") {
-    const actionable = new Set(S.combat_actionable || []);
-    const actors = S.figures.filter(f => f.label && myTurnActor(f) && actionable.has(f.uid));
-    const ready = new Set(S.combat_ready || []);
+    case "select_mine": {
+      // Mine: name the active character, then render its action-selection block (the
+      // option list, or the mid-placement confirm once a destination option is chosen).
+      const active = state.active;
+      setHint(state.placing
+        ? `Placing <b>${escapeHtml(active.name)}</b> — click a green hex on the board, then press <b>Set action</b>.`
+        : `<b>${escapeHtml(active.name)}</b> has initiative — choose its action below, on its counter, or the board.`);
+      drawActionActor(c, active);
+      ensureActiveOptions();   // load the active figure's real options, then re-draw
+      return;
+    }
 
-    // (#334) The "attacks resolved -> end the turn" state is SERVER-authoritative
-    // (S.combat_resolved), NOT the client-local combatResolvedTurn: in a networked
-    // 2-human game a client that resolved early must not jump to End-turn, which
-    // would advance the turn and silently discard the other human's queued attacks.
-    // It shows End-turn only once the server has resolved the combined queue.
-    if (S.combat_resolved) {
+    case "combat_resolved":
       setHint("Attacks resolved — push back any beaten foes, then end the turn.");
       drawForceRetreat(c);                 // post-combat shoves, if any
       bigPrimary(c, "End turn →", () => {
@@ -818,46 +823,28 @@ function drawControls() {
         resetAll(); act({type: "end_turn", expected_turn: S.turn}).then(after);
       });
       return;
-    }
 
-    // (#334) I've committed my side(s) (pressed Resolve) but another human still has
-    // to resolve. Wait -- no duplicate Resolve, no premature End-turn. Detected from
-    // server state (combat_ready), so this holds across clients until all resolve.
-    const myActionableSides = [...new Set(actors.map(f => f.side))];
-    if (myActionableSides.length && myActionableSides.every(side => ready.has(side))) {
+    case "combat_queued_waiting":
       setHint("Attacks queued — waiting for the other player to resolve…");
       return;
-    }
 
-    // Player-specific Action panel (#326): a client with no actionable figures this
-    // combat step may be waiting on ANOTHER human side -- but only a named human
-    // whose seat a client actually holds. A computer (or an unclaimed/abandoned seat
-    // nobody controls) must NOT hide Resolve, or the queued attacks can never be
-    // resolved and the game bricks (#333): we fall through to render Resolve so this
-    // human can drive resolve_combat, exactly as before the #326 split.
-    const others = actors.length ? [] : S.figures.filter(
-      f => f.label && actionable.has(f.uid) && !myTurnActor(f));
-    const humanOther = others.find(
-      f => !isComputerSide(f.side) && !OPEN_SEATS.includes(f.side) && !ready.has(f.side));
-    if (humanOther) {
+    case "combat_waiting_human": {
+      const humanOther = state.humanOther;
       setHint(`Waiting for <span class="chip ${humanOther.side}">${sideName(humanOther.side)}</span>`
               + ` to set <b>${escapeHtml(humanOther.name)}</b>'s action…`);
       return;
     }
-    {
+
+    case "combat_render": {
+      const {actors, others, untargeted, idle} = state;
       if (actors.length) setHint("Choose each figure's attack, then resolve.");
       else if (others.length) setHint("🤖 Computer is playing… resolve when ready.");
       else setHint("Resolve combat to continue.");
       figureChecklist(c, actors);
       // #212: a figure that committed to an attack option AND has a valid target
       // (server's must_attack) would silently waste its shot if combat resolved
-      // without a queued attack for it. Force those to be targeted first: gate
-      // Resolve on your own must-attack figures until each has a PLAN entry, and
-      // name the ones still needing a target. Figures that did NOT commit to an
-      // attack stay under the soft "will do nothing" warning, not this gate.
-      const mustAttack = new Set(S.must_attack || []);
-      const untargeted = actors.filter(f => mustAttack.has(f.uid) && !PLAN[f.uid]);
-      const idle = actors.filter(f => !PLAN[f.uid] && !mustAttack.has(f.uid)).length;
+      // without a queued attack for it. The classifier names the untargeted set;
+      // here we name each one and soft-warn the idle rest.
       if (idle) warnLine(c, `${idle} figure${idle > 1 ? "s" : ""} will do nothing.`);
       for (const f of untargeted) {
         const aimed = (f.option === "missile_attack" || f.option === "one_last_shot");
@@ -903,8 +890,8 @@ function drawControls() {
       } else {
         _dbgGateKey = null;
       }
+      return;
     }
-    return;
   }
 }
 
@@ -1173,6 +1160,25 @@ function setDoNothing(f) {
 function isActive(f) { return !!f && S.active_uid === f.uid; }
 function hasPassed(f) { return !!f && (S.passed || []).includes(f.uid); }
 function canPass(f) { return isActive(f) && !hasPassed(f); }
+// #365: the phase-aware "is this figure mine to act on right now, and can it act?"
+// predicate — select: the active figure, mine, that can act; combat: any figure of
+// mine that can act. The ONE place the two can_act-consulting sites (hoverActionable's
+// menu gate, planLine's "click this counter" hint) read the rule, so a phase/gating
+// tweak lands once. Deliberately NOT unified with the tracker (figActionHtml gates on
+// !dead, not can_act), the inline controls (figControlsHtml/onInlineOption gate on
+// isActive&&myTurnActor only), or drawControls combat (consults the server
+// combat_actionable set): those consult genuinely different signals (#365 is "risky"
+// precisely because the seven sites are not equivalent), so they stay separate.
+function figurePhaseActionable(f) {
+  if (S.phase === "select") return isActive(f) && myTurnActor(f) && !!f.can_act;
+  if (S.phase === "combat") return myTurnActor(f) && !!f.can_act;
+  return false;
+}
+// #365: "the active figure, and mine to act for" — the select-phase gate the inline
+// action controls share. figControlsHtml has already early-returned on dead/collapsed/
+// acted and onInlineOption only ever fires from that same enabled block, so neither
+// needs can_act/!dead here; both express exactly isActive&&myTurnActor.
+const isActiveOwnActor = f => isActive(f) && myTurnActor(f);
 function selectDoNothing(f) {
   dbg("INTERACT", `do-nothing ${f.name}`, {uid: f.uid});
   closeMenu();
@@ -1232,6 +1238,14 @@ function bannerFor(phase) {
 // across counters doesn't refetch on every pixel of movement. The cache is
 // cleared whenever the state changes (see act/refresh/startGame).
 let optCache = {};
+// #372: the union of a figure's missile and melee target lists. A throwable melee
+// weapon (spear/javelin/axe…) can both strike up close AND be hurled at range, so
+// picking missile XOR melee dropped its thrown shot (#217). The two lists are
+// disjoint, so the union is clean. ONE definition shared by loadOptions (which
+// caches it as ._targets) and maybeAutoTarget (which probes without warming the
+// cache) so the two can never diverge on what a committed shooter may aim at.
+const combatTargetUnion = info =>
+  [...new Set([...(info.missile_targets || []), ...(info.melee_targets || [])])];
 async function loadOptions(f) {
   if (optCache[f.uid]) return optCache[f.uid];
   const info = await api(`/api/game/${GID}/options?uid=${f.uid}`);
@@ -1244,8 +1258,7 @@ async function loadOptions(f) {
   // must-attack gate left Resolve disabled forever (#217). The two lists are
   // disjoint (thrown = foes out of melee reach), so the union is clean; for a pure
   // bow melee_targets is empty and for a pure melee weapon missile_targets is.
-  info._targets = [...new Set([...(info.missile_targets || []),
-                               ...(info.melee_targets || [])])];
+  info._targets = combatTargetUnion(info);
   optCache[f.uid] = info;
   return info;
 }
@@ -1283,6 +1296,16 @@ async function onFigureClick(f) {
   }
 }
 
+// #372: the resolve-gate's "committed shooter still needs a target" set — figures
+// I control that the server flagged as must-attack and that have no queued PLAN yet
+// (needsTarget is the same invariant the classifier's untargeted set uses). ONE
+// definition shared by the click-to-aim (queuePendingShotAt) and auto-target
+// (maybeAutoTarget) paths so they can never disagree on who still owes a shot.
+function pendingShooters() {
+  const mustAttack = new Set(S.must_attack || []);
+  return S.figures.filter(f => myTurnActor(f) && needsTarget(f, mustAttack, PLAN));
+}
+
 // #220: queue a committed-but-untargeted shooter's attack at ``enemy`` when the
 // player clicks that foe. Mirrors the Resolve gate's own "untargeted" set: a
 // figure I control that the server flagged in must_attack and that has no PLAN
@@ -1292,9 +1315,7 @@ async function onFigureClick(f) {
 // skips plain inspection), false if none applied (fall back to inspecting).
 async function queuePendingShotAt(enemy) {
   if (!S || S.phase !== "combat" || combatResolvedTurn === S.turn) return false;
-  const mustAttack = new Set(S.must_attack || []);
-  const pending = S.figures.filter(
-    f => myTurnActor(f) && mustAttack.has(f.uid) && !PLAN[f.uid]);
+  const pending = pendingShooters();
   for (const shooter of pending) {
     const info = await loadOptions(shooter);
     if ((info._targets || []).includes(enemy.uid)) {
@@ -1320,9 +1341,7 @@ let _autoTargetBusy = false;
 async function maybeAutoTarget() {
   if (_autoTargetBusy) return;
   if (!S || S.phase !== "combat" || combatResolvedTurn === S.turn) return;
-  const mustAttack = new Set(S.must_attack || []);
-  const pending = S.figures.filter(
-    f => myTurnActor(f) && mustAttack.has(f.uid) && !PLAN[f.uid]);
+  const pending = pendingShooters();
   if (!pending.length) return;
   _autoTargetBusy = true;
   let queued = false;
@@ -1335,8 +1354,7 @@ async function maybeAutoTarget() {
       // melee target lists (a throwable weapon can both strike and be hurled).
       const info = optCache[shooter.uid]
         || await api(`/api/game/${GID}/options?uid=${shooter.uid}`);
-      const targets = [...new Set([...(info.missile_targets || []),
-                                   ...(info.melee_targets || [])])];
+      const targets = combatTargetUnion(info);
       if (targets.length === 1 && !info.main_gauche_jab) {
         // Set the plan directly — this is a background pass, so it must NOT hijack
         // the player's current selection (sel) or cached options (optInfo); doing
@@ -1375,9 +1393,7 @@ function scheduleHoverClose() {
 }
 function hoverActionable(f) {
   if (!S || S.victory || chosenOption) return false;   // not mid-placement
-  if (S.phase === "select") return isActive(f) && !!f.can_act && myTurnActor(f);
-  if (S.phase === "combat") return myTurnActor(f) && !!f.can_act;
-  return false;
+  return figurePhaseActionable(f);
 }
 async function onFigureHover(f) {
   cancelHoverClose();
@@ -1638,8 +1654,7 @@ function planLine(f) {
     return `<div style="margin-top:8px" class="muted">Action set: <b>${optLabel(f.option)}</b></div>`;
   if (S.phase === "select" && hasPassed(f) && !f.acted)
     return `<div style="margin-top:8px" class="muted">Passed — waiting to choose last.</div>`;
-  if ((S.phase === "select" && isActive(f) && myTurnActor(f) && f.can_act) ||
-      (S.phase === "combat" && myTurnActor(f) && f.can_act))
+  if (figurePhaseActionable(f))
     return `<div style="margin-top:8px" class="muted">Click this counter on the board for its options.</div>`;
   return "";
 }
@@ -1700,7 +1715,7 @@ function figControlsHtml(f) {
   // block; once it comes up last to choose, isActive is true and it gets the
   // enabled block again (with Pass disabled -- it's already deferred).
   if (hasPassed(f) && !isActive(f)) return "";
-  const enabled = isActive(f) && myTurnActor(f);
+  const enabled = isActiveOwnActor(f);
   // Mid-placement: the active figure that chose a destination-requiring option
   // shows its placement confirm right here, under its own row -- reach hexes light
   // up on the board and Set action sits inches from the counter, not in a distant
@@ -1786,7 +1801,7 @@ function placementInnerHtml(f) {
 // once (like the board popup's do_nothing/pass did); destination-requiring ones
 // enter the inline placement step (reach hexes on the board + Set action here).
 function onInlineOption(f, option) {
-  if (!isActive(f) || !myTurnActor(f)) return;
+  if (!isActiveOwnActor(f)) return;
   optInfo = optCache[f.uid] || optInfo;      // reach data for placement + drawArena
   sel = f.uid;
   if (option === "do_nothing") selectDoNothing(f);
@@ -2355,16 +2370,15 @@ applyTheme();
 //   maximized  filling the available .wrap area; Restore returns to the saved geom.
 //   minimized  collapsed to the titlebar; Expand returns to the saved geom.
 // The pure helpers (clampGeom / mergeLayout / snapGeom / fitGeom / resizeGeom /
-// snapResizeGeom) are kept small so they are easy to reason about and to e2e-test.
+// snapResizeGeom) live in layout_geom.js so they are unit-testable in isolation (#366).
 const LAYOUT_KEY = "melee.layout.v3";  // {key:{x,y,w,h,mode,restoreGeom}} (#326: fighter->action panel split)
 const LAYOUT_KEY_V2 = "melee.layout.v2";  // prior shape (map/log/control/tracker/fighter) -- cleared on reset
 const LAYOUT_KEY_V1 = "melee.layout.v1";  // Stage 1 {key:{x,y,w,h}}
-const LAYOUT_SNAP_PX = 12;             // snap when an edge is within this many px (#325: eased from 9 for easier edge alignment)
-const LAYOUT_MIN_VISIBLE = 48;         // px of a panel that must stay grabbable
+// LAYOUT_SNAP_PX / LAYOUT_MIN_VISIBLE / LAYOUT_MODES now live in layout_geom.js
+// alongside the pure helpers that use them (#366).
 const LAYOUT_RESIZE_MIN_W = 96;        // smallest width a drag-resize allows
 const LAYOUT_Z_BASE = 10;              // bring-to-front band: 10..40, below overlays@50
 const LAYOUT_Z_MAX = 40;
-const LAYOUT_MODES = new Set(["content", "manual", "maximized", "minimized"]);
 const LAYOUT_RESIZE_DIRS = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 // Registry of the draggable panels. All drag/resize/persist/reset/snap/fit logic
 // iterates this, so behaviour is uniform rather than special-cased per panel.
@@ -2383,9 +2397,8 @@ const LAYOUT_PANELS = [
   {key: "tracker", selector: ".tracker",   label: "Character", defaultMode: "manual"},
   {key: "action",  selector: ".action",    label: "Action", defaultMode: "manual"},
 ];
-// A panel's out-of-the-box sizing mode: "content" (auto-fit to content) unless the
-// registry pins it to a fixed slot (the split tracker/fighter, #323).
-const defaultModeFor = panel => panel.defaultMode || "content";
+// defaultModeFor now lives in layout_geom.js (imported above) alongside mergeLayout,
+// its only cross-module consumer (#366).
 const LAYOUT_NARROW = window.matchMedia("(max-width: 1100px)");
 let DEFAULT_LAYOUT = null;             // {key: {x,y,w,h}} measured from the wide flex flow
 let defaultsMeasuredWide = false;      // true once DEFAULT_LAYOUT reflects a real wide measurement (#338)
@@ -2395,139 +2408,18 @@ const resizeMinH = panel => (panel.handle ? Math.round(panel.handle.offsetHeight
 
 const layoutStacked = () => LAYOUT_NARROW.matches;
 const layoutWrap = () => document.querySelector(".wrap");
-const numberOr = (value, fallback) =>
-  (typeof value === "number" && isFinite(value)) ? value : fallback;
 
 function wrapBounds() {
   const wrap = layoutWrap();
   return {width: wrap.clientWidth, height: wrap.clientHeight};
 }
 
-// Clamp a panel so a grabbable strip of its titlebar always stays on-screen: it
-// can never be pushed above the wrap top, nor slid so far that < MIN_VISIBLE px
-// remain horizontally. This is what guarantees a panel can never be lost.
-function clampGeom(geom, bounds) {
-  const minX = LAYOUT_MIN_VISIBLE - geom.w;
-  const maxX = bounds.width - LAYOUT_MIN_VISIBLE;
-  const maxY = bounds.height - LAYOUT_MIN_VISIBLE;
-  return {
-    x: Math.max(minX, Math.min(geom.x, maxX)),
-    y: Math.max(0, Math.min(geom.y, maxY)),
-    w: geom.w, h: geom.h,
-  };
-}
-
-// Per-field merge of a persisted layout over the measured defaults: a missing,
-// non-numeric, or corrupt field falls back to its default, so partial/garbage
-// saved data can never strand a panel.
-function sanitizeRestore(restore) {
-  // A persisted restore target is {geom:{x,y,w,h}, mode}; anything malformed drops
-  // to null so a corrupt field can never strand a panel on Expand/Restore.
-  if (!restore || typeof restore !== "object") return null;
-  const geom = restore.geom;
-  if (!geom || typeof geom !== "object") return null;
-  if (!["x", "y", "w", "h"].every(k => typeof geom[k] === "number" && isFinite(geom[k]))) return null;
-  const mode = LAYOUT_MODES.has(restore.mode) ? restore.mode : "content";
-  return {geom: {x: geom.x, y: geom.y, w: geom.w, h: geom.h}, mode};
-}
-
-function mergeLayout(defaults, saved) {
-  const merged = {};
-  for (const panel of LAYOUT_PANELS) {
-    const base = defaults[panel.key];
-    const over = (saved && saved[panel.key]) || {};
-    merged[panel.key] = {
-      x: numberOr(over.x, base.x), y: numberOr(over.y, base.y),
-      w: numberOr(over.w, base.w), h: numberOr(over.h, base.h),
-      mode: LAYOUT_MODES.has(over.mode) ? over.mode : defaultModeFor(panel),
-      restoreGeom: sanitizeRestore(over.restoreGeom),
-    };
-  }
-  return merged;
-}
-
-// The smallest shift (within the snap threshold) that lands one of `edges` onto
-// one of the candidate `lines`; 0 when nothing is close enough.
-function nearestSnapDelta(edges, lines) {
-  let bestDelta = 0;
-  let bestDistance = LAYOUT_SNAP_PX + 1;
-  for (const line of lines) {
-    for (const edge of edges) {
-      const distance = Math.abs(edge - line);
-      if (distance < bestDistance) { bestDistance = distance; bestDelta = line - edge; }
-    }
-  }
-  return bestDistance <= LAYOUT_SNAP_PX ? bestDelta : 0;
-}
-
-// Soft snap-assist: independently on each axis, nudge the dragged panel so its
-// leading/trailing edge aligns with a viewport edge or another panel's edge when
-// within the threshold. The user can still position/overlap freely away from an edge.
-function snapGeom(geom, others, bounds) {
-  const xLines = [0, bounds.width];
-  const yLines = [0, bounds.height];
-  for (const other of others) {
-    xLines.push(other.x, other.x + other.w);
-    yLines.push(other.y, other.y + other.h);
-  }
-  const dx = nearestSnapDelta([geom.x, geom.x + geom.w], xLines);
-  const dy = nearestSnapDelta([geom.y, geom.y + geom.h], yLines);
-  return {x: geom.x + dx, y: geom.y + dy, w: geom.w, h: geom.h};
-}
-
-// Cap a measured natural content size to what fits in the wrap from the panel's
-// current top-left, keeping x/y put and never dropping below the grabbable floor.
-function fitGeom(current, natural, bounds, minW, minH) {
-  const availW = Math.max(minW, bounds.width - current.x);
-  const availH = Math.max(minH, bounds.height - current.y);
-  return {
-    x: current.x, y: current.y,
-    w: Math.max(minW, Math.min(natural.w, availW)),
-    h: Math.max(minH, Math.min(natural.h, availH)),
-  };
-}
-
-// The geometry that fills the whole available wrap area (used by Maximize).
-function maximizeGeom(bounds) {
-  return {x: 0, y: 0, w: bounds.width, h: bounds.height};
-}
-
-// New geometry for a drag on the `dir` edge/corner: only the pulled edges move,
-// each clamped so the opposite edge stays put and the box keeps its min size and
-// stays within the wrap. Pure so the resize maths is unit-reasoned and e2e-testable.
-function resizeGeom(start, dir, dx, dy, minW, minH, bounds) {
-  let {x, y, w, h} = start;
-  if (dir.includes("e")) w = Math.min(Math.max(minW, start.w + dx), bounds.width - start.x);
-  if (dir.includes("s")) h = Math.min(Math.max(minH, start.h + dy), bounds.height - start.y);
-  if (dir.includes("w")) {
-    const right = start.x + start.w;
-    x = Math.max(0, Math.min(start.x + dx, right - minW));
-    w = right - x;
-  }
-  if (dir.includes("n")) {
-    const bottom = start.y + start.h;
-    y = Math.max(0, Math.min(start.y + dy, bottom - minH));
-    h = bottom - y;
-  }
-  return {x, y, w, h};
-}
-
-// Snap only the edges the drag is moving to nearby viewport / other-panel lines,
-// reusing the move-snap threshold and candidate-line logic.
-function snapResizeGeom(geom, dir, others, bounds) {
-  const xLines = [0, bounds.width];
-  const yLines = [0, bounds.height];
-  for (const other of others) {
-    xLines.push(other.x, other.x + other.w);
-    yLines.push(other.y, other.y + other.h);
-  }
-  const out = {...geom};
-  if (dir.includes("e")) out.w += nearestSnapDelta([out.x + out.w], xLines);
-  if (dir.includes("s")) out.h += nearestSnapDelta([out.y + out.h], yLines);
-  if (dir.includes("w")) { const d = nearestSnapDelta([out.x], xLines); out.x += d; out.w -= d; }
-  if (dir.includes("n")) { const d = nearestSnapDelta([out.y], yLines); out.y += d; out.h -= d; }
-  return out;
-}
+// The pure layout geometry/state helpers — clampGeom, sanitizeRestore, mergeLayout,
+// nearestSnapDelta, snapLines, snapGeom, fitGeom, maximizeGeom, resizeGeom,
+// snapResizeGeom — moved to layout_geom.js (imported at the top of this file) so
+// they can be unit-tested directly under `node --test` (#366/#367). Their behaviour
+// is unchanged; only mergeLayout gains an explicit `panels` argument (was the
+// module-global LAYOUT_PANELS) to keep it pure.
 
 function measureDefaults(wrap) {
   const wrapRect = wrap.getBoundingClientRect();
@@ -2753,70 +2645,61 @@ function revertPanel(panel) {
   saveLayout();
 }
 
-function onResizePointerDown(panel, dir, downEvent) {
-  if (layoutStacked() || downEvent.button !== 0) return;
-  downEvent.preventDefault();
-  downEvent.stopPropagation();          // never let a handle also start a titlebar drag
+// #372: the shared pointer-drag lifecycle for the move and resize handlers. The
+// ONLY per-interaction difference is `computeGeom(start, dx, dy, others, bounds)`
+// — the already-clamped geometry for this pointer delta (move: snap->clamp; resize:
+// resizeGeom->snapResize->min->clamp) — plus an optional `onSettle` run once on
+// release before the layout is persisted. Capture, the others-map, move/up wiring,
+// capture-release and save-on-release all live here, so a lifecycle fix (listener
+// cleanup, release, persist) can't reach one interaction and silently miss the other.
+function startPanelDrag(panel, downEvent, captureEl, computeGeom, onSettle) {
   bringToFront(panel);
   const start = getInlineGeom(panel);
   const startClientX = downEvent.clientX;
   const startClientY = downEvent.clientY;
   const pointerId = downEvent.pointerId;
-  const handle = downEvent.currentTarget;
-  const minH = resizeMinH(panel);
-  handle.setPointerCapture(pointerId);
+  captureEl.setPointerCapture(pointerId);
 
   const onMove = (moveEvent) => {
     const bounds = wrapBounds();
     const others = LAYOUT_PANELS.filter(other => other !== panel).map(getInlineGeom);
-    let geom = resizeGeom(start, dir, moveEvent.clientX - startClientX,
-      moveEvent.clientY - startClientY, LAYOUT_RESIZE_MIN_W, minH, bounds);
-    geom = snapResizeGeom(geom, dir, others, bounds);
-    geom.w = Math.max(LAYOUT_RESIZE_MIN_W, geom.w);
-    geom.h = Math.max(minH, geom.h);
-    applyGeom(panel, clampGeom(geom, bounds));
+    applyGeom(panel, computeGeom(start, moveEvent.clientX - startClientX,
+      moveEvent.clientY - startClientY, others, bounds));
   };
   const onUp = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
-    if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
-    setMode(panel, "manual");            // a drag-resize freezes auto-fit
+    if (captureEl.hasPointerCapture(pointerId)) captureEl.releasePointerCapture(pointerId);
+    if (onSettle) onSettle();
     saveLayout();
   };
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
 }
 
+function onResizePointerDown(panel, dir, downEvent) {
+  if (layoutStacked() || downEvent.button !== 0) return;
+  downEvent.preventDefault();
+  downEvent.stopPropagation();          // never let a handle also start a titlebar drag
+  const handle = downEvent.currentTarget;
+  const minH = resizeMinH(panel);
+  startPanelDrag(panel, downEvent, handle, (start, dx, dy, others, bounds) => {
+    let geom = resizeGeom(start, dir, dx, dy, LAYOUT_RESIZE_MIN_W, minH, bounds);
+    geom = snapResizeGeom(geom, dir, others, bounds);
+    geom.w = Math.max(LAYOUT_RESIZE_MIN_W, geom.w);
+    geom.h = Math.max(minH, geom.h);
+    return clampGeom(geom, bounds);
+  }, () => setMode(panel, "manual"));   // a drag-resize freezes auto-fit
+}
+
 function onPanelPointerDown(panel, downEvent) {
   if (layoutStacked() || downEvent.button !== 0) return;
   downEvent.preventDefault();
-  bringToFront(panel);
-  const start = getInlineGeom(panel);
-  const startClientX = downEvent.clientX;
-  const startClientY = downEvent.clientY;
-  const pointerId = downEvent.pointerId;
-  panel.handle.setPointerCapture(pointerId);
-
-  const onMove = (moveEvent) => {
-    const bounds = wrapBounds();
-    const others = LAYOUT_PANELS.filter(other => other !== panel).map(getInlineGeom);
-    let geom = {
-      x: start.x + (moveEvent.clientX - startClientX),
-      y: start.y + (moveEvent.clientY - startClientY),
-      w: start.w, h: start.h,
-    };
+  startPanelDrag(panel, downEvent, panel.handle, (start, dx, dy, others, bounds) => {
+    let geom = {x: start.x + dx, y: start.y + dy, w: start.w, h: start.h};
     geom = snapGeom(geom, others, bounds);
-    geom = clampGeom(geom, bounds);
-    applyGeom(panel, geom);
-  };
-  const onUp = () => {
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
-    if (panel.handle.hasPointerCapture(pointerId)) panel.handle.releasePointerCapture(pointerId);
-    saveLayout();
-  };
-  window.addEventListener("pointermove", onMove);
-  window.addEventListener("pointerup", onUp);
+    return clampGeom(geom, bounds);
+  });
 }
 
 // Measure the floating defaults from the wide flex flow. MUST run with the wrap
@@ -2856,18 +2739,32 @@ function applyResponsiveLayout() {
   // defaults now (deferred from initLayout because they can't be measured while
   // the stacked media query is in force) -- #338.
   if (!defaultsMeasuredWide) captureDefaults();
-  const merged = mergeLayout(DEFAULT_LAYOUT, loadSavedLayout());
+  const merged = mergeLayout(DEFAULT_LAYOUT, loadSavedLayout(), LAYOUT_PANELS);
   layoutZTop = LAYOUT_Z_BASE;
   wrap.classList.add("floating");
   for (const panel of LAYOUT_PANELS) {
     const record = merged[panel.key];
-    panel.restore = record.restoreGeom;
-    setMode(panel, record.mode);
-    applyGeom(panel, {x: record.x, y: record.y, w: record.w, h: record.h});
-    panel.el.style.zIndex = LAYOUT_Z_BASE;
-    if (panel.mode === "content") fitPanel(panel);   // default: size to content now
+    placePanel(panel, {
+      restore: record.restoreGeom,
+      mode: record.mode,
+      geom: {x: record.x, y: record.y, w: record.w, h: record.h},
+    });
   }
   reclampAll();
+}
+
+// #372: the shared per-panel placement sequence — set the restore target, set the
+// sizing mode, apply geometry, drop z to the base band, then content-fit if the
+// panel is in content mode. Both the reload (applyResponsiveLayout, merged saved-
+// over-defaults) and the Reset-layout (raw defaults) paths flow through this ONE
+// chokepoint, so a future placement step can't be added to one and forgotten in the
+// other.
+function placePanel(panel, {restore, mode, geom}) {
+  panel.restore = restore;
+  setMode(panel, mode);
+  applyGeom(panel, geom);
+  panel.el.style.zIndex = LAYOUT_Z_BASE;
+  if (panel.mode === "content") fitPanel(panel);
 }
 
 function resetLayout() {
@@ -2877,11 +2774,11 @@ function resetLayout() {
   layoutZTop = LAYOUT_Z_BASE;
   if (layoutStacked()) return;   // stacked flow IS the default; nothing to place
   for (const panel of LAYOUT_PANELS) {
-    panel.restore = null;
-    setMode(panel, defaultModeFor(panel));            // default mode, per #321/#323
-    applyGeom(panel, DEFAULT_LAYOUT[panel.key]);
-    panel.el.style.zIndex = LAYOUT_Z_BASE;
-    if (panel.mode === "content") fitPanel(panel);    // manual panels keep their slot
+    placePanel(panel, {                                 // default mode, per #321/#323
+      restore: null,
+      mode: defaultModeFor(panel),
+      geom: DEFAULT_LAYOUT[panel.key],
+    });
   }
 }
 
