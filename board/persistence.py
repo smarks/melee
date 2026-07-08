@@ -47,7 +47,14 @@ from hexarena.hex import Hex
 
 from engine.arena import Arena
 from engine.experience import CombatType
-from engine.figure import PER_TURN_FLAGS, Figure, Posture, Race
+from engine.figure import (
+    CARRY_OVER_STATE,
+    MONSTER_FIELDS,
+    PER_TURN_FLAGS,
+    Figure,
+    Posture,
+    Race,
+)
 from engine.options import Option
 from engine.profile import PROFILES
 from engine.rules_data import (
@@ -88,15 +95,30 @@ def _arena_from_json(data: dict) -> Arena:
 
 
 # ---- figures ----------------------------------------------------------------
-# Monster / quirk fields that default to ordinary single-hex behaviour on a plain
-# figure (engine.figure.Figure) but carry a creature's traits when set by
-# engine.monsters.create_monster. Listed once so the save and load halves cannot
-# drift; each round-trips only when present, so pre-monster snapshots load
-# unchanged at the dataclass defaults.
-_MONSTER_FIELDS: tuple[str, ...] = (
-    "size", "needs_two_to_engage", "flying", "fly_movement_allowance",
-    "all_front", "hard_to_hit", "wound_hits_threshold", "knockdown_hits_threshold",
-)
+# The figure carry-over state and monster/quirk fields both come from the single
+# canonical source in engine.figure (CARRY_OVER_STATE, MONSTER_FIELDS), shared
+# with the mid-fight edit path (board.views._update_figure) so the save/load and
+# edit halves preserve exactly the same fields and cannot drift (#359, #369).
+# Each monster field round-trips only when present, so pre-monster snapshots load
+# unchanged at the dataclass defaults. The carry-over defaults come straight off
+# the dataclass so a snapshot missing a field reloads at that field's default.
+_CARRY_OVER_DEFAULTS: dict[str, object] = {
+    figure_field.name: figure_field.default
+    for figure_field in dataclasses.fields(Figure)
+    if figure_field.name in CARRY_OVER_STATE
+}
+
+# Fail at import (not with a confusing AttributeError at runtime) if a shared
+# enumeration names a field the figure dataclasses no longer have (a rename).
+_FIGURE_FIELD_NAMES = {
+    figure_field.name for figure_field in dataclasses.fields(TarmarFigure)
+}
+_SHARED_FIGURE_FIELDS = set(CARRY_OVER_STATE) | set(MONSTER_FIELDS) | set(PER_TURN_FLAGS)
+if not _SHARED_FIGURE_FIELDS <= _FIGURE_FIELD_NAMES:
+    raise RuntimeError(
+        "figure persistence names unknown fields: "
+        f"{sorted(_SHARED_FIGURE_FIELDS - _FIGURE_FIELD_NAMES)}"
+    )
 
 
 def _damage_to_json(damage: DamageDice | None) -> list[int] | None:
@@ -204,7 +226,7 @@ def _figure_to_json(figure: Figure) -> dict:
         "shield_ready": figure.shield_ready,
         # Monster / quirk traits (defaults on an ordinary figure); round-tripped
         # so a saved monster reloads with its size, flight, and injury thresholds.
-        **{field: getattr(figure, field) for field in _MONSTER_FIELDS},
+        **{field_name: getattr(figure, field_name) for field_name in MONSTER_FIELDS},
         # ---- mutable fight state ----
         "position": [figure.position.col, figure.position.row]
         if figure.position is not None else None,
@@ -212,19 +234,13 @@ def _figure_to_json(figure: Figure) -> dict:
         "posture": figure.posture.value,
         "damage_taken": figure.damage_taken,
         **{flag: getattr(figure, flag) for flag in PER_TURN_FLAGS},
-        "wounded_last_turn": figure.wounded_last_turn,
-        "unconscious": figure.unconscious,
-        "dead": figure.dead,
-        "dropped_out": figure.dropped_out,
+        # Plain carry-over fight state (wounds/consciousness/death, dropped_out,
+        # missile cooldown, HTH dagger, XP), shared verbatim with the mid-fight
+        # edit path so the two cannot drift (engine.figure.CARRY_OVER_STATE).
+        **{name: getattr(figure, name) for name in CARRY_OVER_STATE},
         "current_option": figure.current_option.value
         if figure.current_option is not None else None,
-        "missile_cooldown": figure.missile_cooldown,
         "hth_opponents": list(figure.hth_opponents),
-        "hth_drew_dagger": figure.hth_drew_dagger,
-        # ---- experience / advancement (Section IX, #10) ----
-        "experience": figure.experience,
-        "added_st": figure.added_st,
-        "added_dx": figure.added_dx,
     }
     if isinstance(figure, TarmarFigure):
         data.update(
@@ -290,24 +306,20 @@ def _figure_from_json(data: dict) -> Figure:
         # shared alias of the PER_TURN_FLAGS default (pre-list snapshots) nor of a
         # decoded structure.
         setattr(figure, flag, list(stored) if isinstance(default, list) else stored)
-    figure.wounded_last_turn = data["wounded_last_turn"]
-    figure.unconscious = data["unconscious"]
-    figure.dead = data["dead"]
-    figure.dropped_out = data.get("dropped_out", False)  # default: pre-practice snapshots
+    # Plain carry-over fight state, restored from the single shared enumeration
+    # (engine.figure.CARRY_OVER_STATE). A snapshot missing a field (e.g. a
+    # pre-#257 save with no dropped_out, or a pre-#10 one with no experience)
+    # falls back to that field's dataclass default, so older saves still load.
+    for name in CARRY_OVER_STATE:
+        setattr(figure, name, data.get(name, _CARRY_OVER_DEFAULTS[name]))
     option = data["current_option"]
     figure.current_option = Option(option) if option is not None else None
-    figure.missile_cooldown = data["missile_cooldown"]
     figure.hth_opponents = list(data["hth_opponents"])
-    figure.hth_drew_dagger = data["hth_drew_dagger"]
-    # Experience/advancement (#10). Defaulted so pre-#10 snapshots still load.
-    figure.experience = data.get("experience", 0)
-    figure.added_st = data.get("added_st", 0)
-    figure.added_dx = data.get("added_dx", 0)
     # Monster / quirk traits: restore only what the snapshot carries, so a
     # pre-monster save keeps the ordinary single-hex defaults.
-    for field in _MONSTER_FIELDS:
-        if field in data:
-            setattr(figure, field, data[field])
+    for field_name in MONSTER_FIELDS:
+        if field_name in data:
+            setattr(figure, field_name, data[field_name])
     return figure
 
 

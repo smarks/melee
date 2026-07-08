@@ -325,6 +325,43 @@ PER_TURN_FLAGS: dict[str, int | bool] = {
 }
 
 
+# The mutable "carry-over" fight state that must survive a figure rebuild: the
+# running-fight state a figure keeps when it is edited mid-fight
+# (board.views._update_figure) AND when a game is saved and reloaded
+# (board.persistence). Named ONCE here, and consumed by both, so the edit path
+# preserves exactly what the save/load round-trip does and the two can never
+# drift (#359, #369). Every entry is a plain scalar copied verbatim; fields that
+# need a value transform or a clamp on rebuild -- damage_taken (clamped to the
+# new ST), position/facing/posture, current_option, hth_opponents, and the
+# added-point fold-in into strength/dexterity -- are deliberately NOT here and
+# stay handled explicitly by each consumer.
+CARRY_OVER_STATE: tuple[str, ...] = (
+    "wounded_last_turn",
+    "unconscious",
+    "dead",
+    "dropped_out",
+    "missile_cooldown",
+    "hth_drew_dagger",
+    "experience",
+    "added_st",
+    "added_dx",
+)
+
+# Nonhuman creature traits (Section VIII), set by engine.monsters.create_monster
+# and defaulting to ordinary single-hex/human behaviour on a plain figure.
+# chargen.build never reads these -- there is no spec key for them -- so a figure
+# rebuilt from a spec gets the dataclass defaults (size 1, grounded, human injury
+# thresholds) unless they are carried over from the old figure. They are creature
+# state that persists for the whole fight (a giant stays size 3, a gargoyle keeps
+# its flight, a snake keeps all_front/hard_to_hit, each keeps its ST-scaled injury
+# thresholds), so the save/load round-trip (board.persistence) and the mid-fight
+# edit (board.views._update_figure) preserve the SAME set and cannot drift (#359).
+MONSTER_FIELDS: tuple[str, ...] = (
+    "size", "needs_two_to_engage", "flying", "fly_movement_allowance",
+    "all_front", "hard_to_hit", "wound_hits_threshold", "knockdown_hits_threshold",
+)
+
+
 def create_fighter(
     name: str,
     strength: int,
