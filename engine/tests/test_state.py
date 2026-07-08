@@ -187,16 +187,42 @@ def test_kneeling_figure_option_availability() -> None:
     assert Option.MISSILE_ATTACK in state.legal_options(kneel_bow)
 
 
-def test_kneeling_figure_has_no_front() -> None:
+def test_kneeling_figure_keeps_its_front() -> None:
+    # #354: a KNEELING figure KEEPS its front (Spencer's rulebook ruling — only
+    # PRONE loses the front). So it is struck as FRONT from the front and as REAR
+    # only from behind, exactly like a standing figure.
+    from engine.facing import FRONT, REAR, attack_zone
+    arena = Arena(cols=9, rows=15)
+    a = create_human("A", 12, 12, "a", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    b = create_human("B", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    b.position = Hex(5, 5)
+    b.facing = 0
+    b.posture = Posture.KNEELING
+
+    a.position = LAYOUT.neighbor(Hex(5, 5), 0)               # squarely in b's front
+    assert attack_zone(arena.layout, a, b) == FRONT         # kneeling -> struck as front
+
+    a.position = LAYOUT.neighbor(Hex(5, 5), 3)               # squarely behind b
+    assert attack_zone(arena.layout, a, b) == REAR          # from behind -> rear
+
+
+def test_prone_figure_has_no_front() -> None:
+    # #354: a PRONE figure has NO front — it is struck as REAR from every
+    # direction, including squarely from where its front would be. This is the
+    # behavior that KNEELING no longer shares.
     from engine.facing import REAR, attack_zone
     arena = Arena(cols=9, rows=15)
     a = create_human("A", 12, 12, "a", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
     b = create_human("B", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
     b.position = Hex(5, 5)
     b.facing = 0
-    a.position = LAYOUT.neighbor(Hex(5, 5), 0)               # squarely in b's front
-    b.posture = Posture.KNEELING
-    assert attack_zone(arena.layout, a, b) == REAR          # kneeling -> struck as rear
+    b.posture = Posture.PRONE
+
+    a.position = LAYOUT.neighbor(Hex(5, 5), 0)               # squarely in b's "front"
+    assert attack_zone(arena.layout, a, b) == REAR          # prone -> struck as rear
+
+    a.position = LAYOUT.neighbor(Hex(5, 5), 3)               # from behind
+    assert attack_zone(arena.layout, a, b) == REAR          # prone -> still rear
 
 
 def test_thrown_weapon_strikes_a_figure_in_its_flight_path() -> None:
