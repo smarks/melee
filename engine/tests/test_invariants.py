@@ -3,38 +3,19 @@ from __future__ import annotations
 
 import pytest
 
-from engine.arena import Arena
 from engine.combat import DamageEvent
-from engine.figure import create_human
 from engine.invariants import InvariantError, assert_state_invariants
 from engine.profile import CLASSIC, TARMAR
-from engine.rules_data import BROADSWORD
-from engine.state import GameState
-from engine.tarmar import create_tarmar_fighter
-from hexarena.hex import Hex
+
+# The two-fighter setups now live in engine/tests/conftest.py as the shared
+# `two_fighter_state` / `two_tarmar_state` factory fixtures (#373); each test
+# takes the fixture and calls it for a fresh state, exactly as the old module
+# helpers did.
 
 
-def _two_fighter_state() -> GameState:
-    arena = Arena(cols=9, rows=15)
-    red = create_human("Red", 12, 12, "red",
-                       weapons=[BROADSWORD], ready_weapon=BROADSWORD)
-    blue = create_human("Blue", 12, 12, "blue",
-                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
-    red.position, blue.position = Hex(2, 2), Hex(6, 6)
-    return GameState(arena, [red, blue])
-
-
-def _two_tarmar_state() -> GameState:
-    arena = Arena(cols=9, rows=15)
-    red = create_tarmar_fighter("Red", strength=12, dexterity=12, side="red")
-    blue = create_tarmar_fighter("Blue", strength=12, dexterity=12, side="blue")
-    red.position, blue.position = Hex(2, 2), Hex(6, 6)
-    return GameState(arena, [red, blue])
-
-
-def test_live_damage_stream_passes_the_posthumous_check() -> None:
+def test_live_damage_stream_passes_the_posthumous_check(two_fighter_state) -> None:
     # An ordinary exchange: neither attacker has been felled before it strikes.
-    state = _two_fighter_state()
+    state = two_fighter_state()
     red, blue = state.figures
     state.damage_events.append(DamageEvent(
         attacker_side="red", target_side="blue",
@@ -45,10 +26,12 @@ def test_live_damage_stream_passes_the_posthumous_check() -> None:
     assert_state_invariants(state, CLASSIC)   # no raise
 
 
-def test_a_dead_figure_dealing_damage_trips_the_posthumous_check() -> None:
+def test_a_dead_figure_dealing_damage_trips_the_posthumous_check(
+    two_fighter_state,
+) -> None:
     # #272: blue (ST 10) is reduced to collapse by red, then the stream records
     # blue landing a later blow — a post-mortem attack the checker must catch.
-    state = _two_fighter_state()
+    state = two_fighter_state()
     red, blue = state.figures
     state.damage_events.append(DamageEvent(       # blue driven to ST 0 (collapsed)
         attacker_side="red", target_side="blue",
@@ -60,10 +43,12 @@ def test_a_dead_figure_dealing_damage_trips_the_posthumous_check() -> None:
         assert_state_invariants(state, CLASSIC)
 
 
-def test_a_blow_landing_on_an_already_downed_foe_trips_the_check() -> None:
+def test_a_blow_landing_on_an_already_downed_foe_trips_the_check(
+    two_fighter_state,
+) -> None:
     # #310: red drives blue (ST 10) to collapse, then a second blow lands fresh
     # damage on the corpse — a co-queued lower-adjDX blow the checker must catch.
-    state = _two_fighter_state()
+    state = two_fighter_state()
     red, blue = state.figures
     state.damage_events.append(DamageEvent(       # blue driven to ST 0 (collapsed)
         attacker_side="red", target_side="blue",
@@ -79,10 +64,10 @@ def test_a_blow_landing_on_an_already_downed_foe_trips_the_check() -> None:
 # A Tarmar figure dies when BODY reaches 0, not when Fatigue is exhausted, and
 # body = ceil(fatigue*2/3) < fatigue, so a crit-death leaves Fatigue remaining.
 # The checks must see the Body track, not just cumulative Fatigue damage.
-def test_a_tarmar_crit_death_still_passes_for_legal_play() -> None:
+def test_a_tarmar_crit_death_still_passes_for_legal_play(two_tarmar_state) -> None:
     # Body damage below the Body pool: the figure is hurt but not felled, so a
     # later exchange is legal and the checks must not false-positive.
-    state = _two_tarmar_state()
+    state = two_tarmar_state()
     red, blue = state.figures
     assert blue.body < blue.fatigue          # crit-death leaves Fatigue behind
     state.damage_events.append(DamageEvent(   # a crit, but not lethal
@@ -95,11 +80,13 @@ def test_a_tarmar_crit_death_still_passes_for_legal_play() -> None:
     assert_state_invariants(state, TARMAR)    # no raise
 
 
-def test_a_tarmar_figure_crit_killed_via_body_trips_the_posthumous_check() -> None:
+def test_a_tarmar_figure_crit_killed_via_body_trips_the_posthumous_check(
+    two_tarmar_state,
+) -> None:
     # #340: blue is crit-killed (Body exhausted) while Fatigue remains, then the
     # stream records blue landing a later blow. Pre-fix the checks read only
     # cumulative Fatigue damage and missed this — a body-death post-mortem attack.
-    state = _two_tarmar_state()
+    state = two_tarmar_state()
     red, blue = state.figures
     state.damage_events.append(DamageEvent(   # crit-death: Body to 0, Fatigue left
         attacker_side="red", target_side="blue",
@@ -113,10 +100,12 @@ def test_a_tarmar_figure_crit_killed_via_body_trips_the_posthumous_check() -> No
         assert_state_invariants(state, TARMAR)
 
 
-def test_a_blow_on_a_tarmar_crit_killed_foe_trips_the_downed_check() -> None:
+def test_a_blow_on_a_tarmar_crit_killed_foe_trips_the_downed_check(
+    two_tarmar_state,
+) -> None:
     # #340 mirror: blue is crit-killed via Body, then a second blow lands fresh
     # damage on the corpse — must trip even though Fatigue was never exhausted.
-    state = _two_tarmar_state()
+    state = two_tarmar_state()
     red, blue = state.figures
     state.damage_events.append(DamageEvent(   # crit-death: Body to 0, Fatigue left
         attacker_side="red", target_side="blue",
