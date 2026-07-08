@@ -782,8 +782,17 @@ function drawControls() {
 
   switch (state.kind) {
     case "victory":
+      // The match is decided. The old "Start next round →" here posted end_turn,
+      // but #277 makes the server short-circuit turn-advancement once there's a
+      // victor, so that action was a dead no-op (#387). A won game is over, so the
+      // only useful affordance is to play again: start a FRESH game reusing the
+      // existing setup machinery (the same startSetup() Game Control's New Game
+      // runs), keeping the current roster. startSetup() has no GAME_ACTIVE guard,
+      // so it works even though the finished game still holds GAME_ACTIVE (which
+      // disables New Game in Game Control until End Game). This reuses the new-game
+      // path wholesale — no rematch backend is invented.
       setHint(`🏆 <b>${sideName(S.victory)}</b> wins the field!`);
-      bigPrimary(c, "Start next round →", () => act({type: "end_turn", expected_turn: S.turn}).then(after));
+      bigPrimary(c, "New game →", () => startSetup());
       return;
 
     case "select_resolving":
