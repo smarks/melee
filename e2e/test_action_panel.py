@@ -37,12 +37,14 @@ POLL_SAFE_TIMEOUT_MS = 20_000
 
 
 def _seed_select_game(gid: str, *, controllers: dict, seats: dict | None = None,
-                      blue_side: str = "blue"):
+                      blue_side: str = "blue", adjacent: bool = False):
     """Register a deterministic two-figure SELECT-phase game in the live registry,
     with the blue figure forced first in initiative (so it is the active character).
 
     Returns (red, blue). The caller controls whether the viewing client owns a side
     via ``seats`` (claimed in-browser) or is anonymous (falls back to controllers).
+    When ``adjacent`` is set, red is placed next to and facing blue so each has a
+    melee target once combat opens (needed to exercise combat-actionable paths).
     """
     from board.geometry import layout as board_layout
     from board.views import GAMES
@@ -57,8 +59,17 @@ def _seed_select_game(gid: str, *, controllers: dict, seats: dict | None = None,
                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
     blue = create_human("Bluecap", 12, 12, "blue",
                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
-    red.position, red.facing = Hex(1, 1), 0
-    blue.position, blue.facing = Hex(4, 4), 0
+    if adjacent:
+        grid = arena.layout
+        blue.position = Hex(4, 4)
+        red.position = grid.neighbor(blue.position, 0)
+        red.facing = next(direction for direction in range(6)
+                          if grid.neighbor(red.position, direction) == blue.position)
+        blue.facing = next(direction for direction in range(6)
+                           if grid.neighbor(blue.position, direction) == red.position)
+    else:
+        red.position, red.facing = Hex(1, 1), 0
+        blue.position, blue.facing = Hex(4, 4), 0
     state = GameState(arena, [red, blue])
     # Force a fresh selection pass with blue (the non-host / computer side) active
     # first, so the viewing client's state is deterministic.
@@ -439,6 +450,56 @@ def test_combat_do_nothing_registers_and_does_not_block_resolve(
         expect(page.locator("#controls .checklist .done")).to_contain_text(
             "Do nothing", timeout=POLL_SAFE_TIMEOUT_MS)
         # ...and it does not hold the Resolve gate.
+        expect(page.get_by_role("button", name=re.compile("Resolve"))).to_be_enabled(
+            timeout=POLL_SAFE_TIMEOUT_MS)
+    finally:
+        from board.views import GAMES
+        GAMES.pop(gid, None)
+
+
+@pytest.mark.django_db
+def test_select_do_nothing_is_not_prompted_when_combat_opens(
+        live_server, page: Page) -> None:
+    # #394: a figure set to "do nothing" in the SELECT phase must NOT resurface as
+    # "needs you" / count toward "will do nothing" once combat opens, even though it
+    # is still physically able to attack an adjacent foe. Both sides are hotseat and
+    # adjacent (each has a melee target), so pre-fix both would be combat-actionable;
+    # committing both to do-nothing in select must leave the combat panel clean.
+    gid = "action-select-do-nothing-into-combat"
+    _seed_select_game(gid, controllers={"red": "human", "blue": "human"},
+                      adjacent=True)
+    try:
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "Action selection", timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # Commit each figure (in initiative order) to a deliberate do-nothing until
+        # the select pass completes and combat opens. (The last figure's roster row
+        # flips to a combat prompt the instant combat opens, so drive off the phase
+        # banner rather than a per-figure roster assertion.)
+        for _ in range(2):
+            if "Combat" in page.locator("#phaseBanner").inner_text():
+                break
+            active = page.locator("#roster .row.active").get_attribute("data-uid")
+            do_nothing = page.locator(
+                f'#controls .charctl[data-ctl="{active}"] button[data-opt="do_nothing"]')
+            expect(do_nothing).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
+            do_nothing.click()
+            # wait for this commit to take effect: either initiative moves on, or
+            # combat opens (last figure).
+            expect(page.locator(f'#roster .row.active[data-uid="{active}"]')
+                   ).to_have_count(0, timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # The select pass is complete -> combat opens.
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "Combat", timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # #394: no figure is falsely flagged. Nothing in the checklist "needs you",
+        # and there is no "will do nothing" warning -- both committed a real no-op.
+        expect(page.locator("#controls .checklist .todo")).to_have_count(
+            0, timeout=POLL_SAFE_TIMEOUT_MS)
+        expect(page.locator("#controls")).not_to_contain_text("will do nothing")
+        # Resolve stays available so the turn can end.
         expect(page.get_by_role("button", name=re.compile("Resolve"))).to_be_enabled(
             timeout=POLL_SAFE_TIMEOUT_MS)
     finally:
