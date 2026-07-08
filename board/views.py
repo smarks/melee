@@ -11,6 +11,7 @@ actions. This is same screen play -- every side is driven by a human.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import secrets
@@ -674,6 +675,80 @@ def _autosave_game(gid: str, game: dict) -> None:
         logger.exception("autosave of game %s failed — play continues in memory", gid)
 
 
+# ---- request-shaping chokepoints (#360, #370) -------------------------------
+class _GameNotFound(Exception):
+    """Raised inside :func:`_locked_game` when a gid resolves to no game. The
+    :func:`_game_endpoint` wrapper renders it as the shared 404 so no gid view
+    hand-writes its own 'unknown game' response (#360)."""
+
+
+@contextmanager
+def _locked_game(gid: str) -> Iterator[dict]:
+    """The single chokepoint for 'lock the game, resolve it, 404 if absent' (#360).
+
+    Acquires the per-game lock (#253), resolves ``gid`` via :func:`_resident_game`
+    — whose load-on-demand reload is itself a check-then-act that must run under
+    the lock so it can't race a concurrent locked action reloading/persisting the
+    same gid (#305) — and yields the live game. Raises :class:`_GameNotFound`
+    (rendered as the 404) when no such game exists anywhere.
+
+    Because a gid view can only obtain its ``game`` from
+    ``with _locked_game(gid) as game:``, holding the lock across the load ->
+    mutate -> persist critical section becomes structurally impossible to forget
+    rather than a prologue copied into (and occasionally dropped from, #305) every
+    endpoint.
+    """
+    with _game_lock(gid):
+        game = _resident_game(gid)
+        if game is None:
+            raise _GameNotFound(gid)
+        yield game
+
+
+def _game_endpoint(view):
+    """Wrap a gid view so a :class:`_GameNotFound` raised by :func:`_locked_game`
+    becomes the shared 404 — every gid endpoint returns the identical
+    'unknown game' response from one definition (#360)."""
+    @functools.wraps(view)
+    def wrapper(request, *args, **kwargs):
+        try:
+            return view(request, *args, **kwargs)
+        except _GameNotFound:
+            return JsonResponse({"error": "unknown game"}, status=404)
+
+    return wrapper
+
+
+class _BadJson(Exception):
+    """Raised by :func:`_json_body` on a malformed request body; the
+    :func:`_json_endpoint` wrapper renders it as the shared 400 (#370)."""
+
+
+def _json_body(request) -> dict:
+    """Parse the JSON request body (an empty body is ``{}``) — the single
+    definition of the 'bad JSON -> 400' contract (#370). Raises :class:`_BadJson`
+    on malformed input so a body-reading endpoint can't turn client garbage into
+    an uncaught 500."""
+    try:
+        return json.loads(request.body or "{}")
+    except json.JSONDecodeError as exc:
+        raise _BadJson from exc
+
+
+def _json_endpoint(view):
+    """Wrap a body-reading view so a :class:`_BadJson` raised by :func:`_json_body`
+    becomes the shared 400 — every such endpoint returns the identical 'bad JSON'
+    response from one definition (#370)."""
+    @functools.wraps(view)
+    def wrapper(request, *args, **kwargs):
+        try:
+            return view(request, *args, **kwargs)
+        except _BadJson:
+            return JsonResponse({"error": "bad JSON"}, status=400)
+
+    return wrapper
+
+
 # ---- views ------------------------------------------------------------------
 @ensure_csrf_cookie
 def index(request, gid=None):
@@ -683,6 +758,7 @@ def index(request, gid=None):
 
 
 # ---- saved characters (logged-in players) -----------------------------------
+@_json_endpoint
 def api_characters(request):
     """List (GET) or save (POST) the signed-in player's saved fighters."""
     if not request.user.is_authenticated:
@@ -694,10 +770,7 @@ def api_characters(request):
             saved = saved.filter(profile=profile)
         return JsonResponse({"characters": [c.as_dict() for c in saved]})
     if request.method == "POST":
-        try:
-            body = json.loads(request.body or "{}")
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "bad JSON"}, status=400)
+        body = _json_body(request)
         name = (body.get("name") or "").strip()
         if not name:
             return JsonResponse({"error": "a name is required"}, status=400)
@@ -717,6 +790,8 @@ def api_character_delete(request, pk):
     return JsonResponse({"ok": True})
 
 
+@_game_endpoint
+@_json_endpoint
 def api_game_save_character(request, gid: str, uid: str) -> HttpResponse:
     """Keep a fighter from a running (or finished) game: snapshot it into the
     signed-in player's saved characters (#234).
@@ -737,27 +812,25 @@ def api_game_save_character(request, gid: str, uid: str) -> HttpResponse:
     # check-then-act that must not race a concurrent locked action reloading /
     # persisting the same gid (#305), and the figure spec is read straight off the
     # live game. Matches api_state / api_options (#343).
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
-        try:
-            body = json.loads(request.body or "{}")
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "bad JSON"}, status=400)
+    with _locked_game(gid) as game:
+        body = _json_body(request)
         state: GameState = game["state"]
         try:
             figure = _figure(state, uid)
         except IllegalAction as exc:
             return JsonResponse({"error": str(exc)}, status=400)
-        # The seat rule from _authorize_action: you may only keep a fighter of a
+        # The single per-figure seat rule (#361): you may only keep a fighter of a
         # side you control; an admin (#86) may save any figure; games built outside
-        # _start_game (test fixtures) carry no seats and are unrestricted.
+        # _start_game (test fixtures) carry no seats and are unrestricted. The
+        # figure-side check itself lives once in _authorize_figure_control; here the
+        # seatless/admin bypass is handled inline (no 'not a player' 403 on this
+        # path — a seatless caller owning nothing still gets 'you do not control').
         seats = game.get("seats")
-        if (seats and not _is_admin(request)
-                and figure.side not in _owned_sides(game, request)):
-            return JsonResponse({"error": f"you do not control {figure.side}"},
-                                status=403)
+        if seats and not _is_admin(request):
+            try:
+                _authorize_figure_control(game, request, uid)
+            except Forbidden as exc:
+                return JsonResponse({"error": str(exc)}, status=403)
         requested_name = (body.get("name") or figure.name or "").strip()
         if not requested_name:
             return JsonResponse({"error": "a name is required"}, status=400)
@@ -802,6 +875,7 @@ def _user_dict(user) -> dict:
 
 
 @csrf_exempt
+@_json_endpoint
 def api_admin_users(request):
     """List (GET) or create (POST) user accounts -- admin only (#140)."""
     denied = _require_admin(request)
@@ -814,10 +888,7 @@ def api_admin_users(request):
                  .order_by("username"))
         return JsonResponse({"users": [_user_dict(user) for user in users]})
     if request.method == "POST":
-        try:
-            body = json.loads(request.body or "{}")
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "bad JSON"}, status=400)
+        body = _json_body(request)
         username = (body.get("username") or "").strip()
         password = body.get("password") or ""
         if not username or not password:
@@ -850,6 +921,7 @@ def api_admin_user_delete(request, uid):
 
 
 @csrf_exempt
+@_json_endpoint
 def api_admin_user_characters(request, uid):
     """List (GET) or create (POST) a specific user's saved characters -- admin
     only. This is how an admin creates/inspects characters on a player's behalf
@@ -865,10 +937,7 @@ def api_admin_user_characters(request, uid):
         characters = [c.as_dict() for c in owner.saved_characters.all()]
         return JsonResponse({"characters": characters})
     if request.method == "POST":
-        try:
-            body = json.loads(request.body or "{}")
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "bad JSON"}, status=400)
+        body = _json_body(request)
         name = (body.get("name") or "").strip()
         if not name:
             return JsonResponse({"error": "a name is required"}, status=400)
@@ -941,6 +1010,28 @@ def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
     return payload
 
 
+def _attach_owner_cookie(response, pid: str, minted: bool) -> None:
+    """Set the signed player cookie when ``pid`` was freshly minted for an
+    anonymous actor, so they keep control of what they now own (#370). The single
+    'mint -> set cookie' step, shared by the game-creation and seat-claim paths;
+    a no-op when the actor already had an id."""
+    if minted:
+        _set_player_cookie(response, pid)
+
+
+def _new_game_response(request, payload: dict, pid: str) -> JsonResponse:
+    """Finish a game-creation response (#370): attach the creator's seat/ownership
+    fields, flag admin, and set the player cookie when ``pid`` was just minted for
+    an anonymous creator — so a freshly-made anonymous game stays theirs to drive
+    rather than being orphaned by a missing cookie. Shared by :func:`api_new_game`
+    and :func:`api_new_custom`."""
+    payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
+    payload["is_admin"] = _is_admin(request)
+    response = JsonResponse(payload)
+    _attach_owner_cookie(response, pid, _player_id(request) is None)
+    return response
+
+
 def _int_param(request, name: str) -> int:
     try:
         return int(request.GET.get(name, "") or 0)
@@ -1003,12 +1094,7 @@ def api_new_game(request):
     payload = _start_game(
         arena, figures, profile, computer_sides, request.GET.get("seed"), pid,
         practice=_is_truthy(request.GET.get("practice")))
-    payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
-    payload["is_admin"] = _is_admin(request)
-    response = JsonResponse(payload)
-    if _player_id(request) is None:
-        _set_player_cookie(response, pid)
-    return response
+    return _new_game_response(request, payload, pid)
 
 
 def api_catalog(request):
@@ -1077,6 +1163,7 @@ def api_best_weapons(request):
 
 
 @csrf_exempt
+@_json_endpoint
 def api_new_custom(request):
     """Start a game from player-edited fighter specs.
 
@@ -1086,10 +1173,7 @@ def api_new_custom(request):
     """
     if request.method != "POST":
         return HttpResponse(status=405)
-    try:
-        body = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "bad JSON"}, status=400)
+    body = _json_body(request)
     profile = PROFILES.get(body.get("profile", ""), PROFILES["Classic Melee"])
     computer_sides = {s for s in (body.get("computer") or "").split(",") if s}
     is_admin = _is_admin(request)
@@ -1104,21 +1188,14 @@ def api_new_custom(request):
     payload = _start_game(
         arena, figures, profile, computer_sides, body.get("seed"), pid,
         practice=_is_truthy(body.get("practice")))
-    payload.update(_ownership_fields(GAMES[payload["gid"]], pid))
-    payload["is_admin"] = is_admin
-    response = JsonResponse(payload)
-    if _player_id(request) is None:
-        _set_player_cookie(response, pid)
-    return response
+    return _new_game_response(request, payload, pid)
 
 
+@_game_endpoint
 def api_state(request, gid):
     # Read under the per-game lock so a poll never serializes a half-mutated game
     # while a concurrent action is mid-resolve (#253).
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
+    with _locked_game(gid) as game:
         # A client that already has the immutable layout polls with ``?layout=0``
         # so the server skips re-serializing/re-shipping it every 2s (#256). The
         # first load / deep-link / reconnect path omits the param and gets it.
@@ -1134,6 +1211,7 @@ def api_state(request, gid):
 
 
 @csrf_exempt
+@_game_endpoint
 def api_game_save(request, gid):
     """Persist a resident game so it survives a server restart (#12).
 
@@ -1141,10 +1219,7 @@ def api_game_save(request, gid):
     """
     if request.method != "POST":
         return HttpResponse(status=405)
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
+    with _locked_game(gid) as game:
         try:
             _authorize_game_write(game, request)
         except Forbidden as exc:
@@ -1154,6 +1229,8 @@ def api_game_save(request, gid):
 
 
 @csrf_exempt
+@_game_endpoint
+@_json_endpoint
 def api_game_award(request, gid):
     """Award Section IX experience at game over (#10).
 
@@ -1170,10 +1247,7 @@ def api_game_award(request, gid):
     """
     if request.method != "POST":
         return HttpResponse(status=405)
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
+    with _locked_game(gid) as game:
         try:
             _authorize_game_write(game, request)
         except Forbidden as exc:
@@ -1182,10 +1256,7 @@ def api_game_award(request, gid):
             return JsonResponse(
                 {"error": "experience has already been awarded for this game"},
                 status=400)
-        try:
-            body = json.loads(request.body or "{}")
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "bad JSON"}, status=400)
+        body = _json_body(request)
         state: GameState = game["state"]
         # Default to the bout's own variant (a practice game awards practice XP) so
         # the mode set at creation is the single source of truth; an explicit body
@@ -1209,6 +1280,8 @@ def api_game_award(request, gid):
 
 
 @csrf_exempt
+@_game_endpoint
+@_json_endpoint
 def api_figure_advance(request, gid, uid):
     """Trade 100 XP for +1 basic ST or DX on one figure (Section IX, #10).
 
@@ -1222,20 +1295,14 @@ def api_figure_advance(request, gid, uid):
     """
     if request.method != "POST":
         return HttpResponse(status=405)
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
+    with _locked_game(gid) as game:
         try:
             _authorize_figure_write(game, request, uid)
         except Forbidden as exc:
             return JsonResponse({"error": str(exc)}, status=403)
         except IllegalAction as exc:
             return JsonResponse({"error": str(exc)}, status=400)
-        try:
-            body = json.loads(request.body or "{}")
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "bad JSON"}, status=400)
+        body = _json_body(request)
         try:
             attribute = experience.Attribute(body.get("attribute", ""))
         except ValueError:
@@ -1256,28 +1323,24 @@ def api_figure_advance(request, gid, uid):
         return JsonResponse(payload)
 
 
+@_game_endpoint
 def api_game_load(request, gid):
     """Load a saved game on demand, reconstructing it into the live registry."""
     # Under the per-game lock so the load-on-demand reload can't race a concurrent
     # locked action and write a stale copy over freshly-persisted state (#305).
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
+    with _locked_game(gid) as game:
         payload = _payload(game)
         payload["gid"] = gid
         payload["you_control"] = sorted(_owned_sides(game, request))
         return JsonResponse(payload)
 
 
+@_game_endpoint
 def api_options(request, gid):
     # Under the per-game lock for symmetry with api_state: the load-on-demand
     # reload inside _resident_game is a check-then-act that must not race a
     # concurrent locked action reloading/persisting the same gid (#305).
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
+    with _locked_game(gid) as game:
         return _options_payload(request, game, gid)
 
 
@@ -1414,6 +1477,43 @@ def _is_admin(request) -> bool:
     return bool(user is not None and user.is_authenticated and user.is_staff)
 
 
+def _require_seat_holder(game: dict, request) -> set[str] | None:
+    """The prologue shared by the three ``_authorize_*`` guards (#370): a seatless
+    game (test fixtures) or an admin (#86) is unrestricted — returns ``None``, the
+    signal that no seat check applies; otherwise the caller must own at least one
+    seat, and the set of sides they own is returned. Raises :class:`Forbidden`
+    ('you are not a player in this game') for a seated non-admin who owns no seat.
+
+    Only this truly-shared preamble is factored here — each guard keeps its own
+    differing tail (game-write stops at 'owns a seat'; action/figure-write add the
+    per-figure check in :func:`_authorize_figure_control`).
+    """
+    seats = game.get("seats")
+    if not seats:
+        return None
+    if _is_admin(request):
+        return None
+    mine = _owned_sides(game, request)
+    if not mine:
+        raise Forbidden("you are not a player in this game")
+    return mine
+
+
+def _authorize_figure_control(game: dict, request, uid: str) -> None:
+    """The single per-figure seat rule (#361): raise :class:`Forbidden` unless the
+    caller may command/edit the figure named by ``uid`` — you may only act on a
+    figure of a side you own. The seatless/admin bypass is the callers' concern
+    (they reach here only for a seated non-admin), so this is the one place the
+    figure-side ownership check and its 'you do not control <side>' message live,
+    shared by :func:`_authorize_action`, :func:`_authorize_figure_write`, and
+    :func:`api_game_save_character`. Keeping it single-sourced stops the authz rule
+    from drifting on one path (the #305-class silent-omission risk applied to authz).
+    """
+    figure = _figure(game["state"], uid)
+    if figure.side not in _owned_sides(game, request):
+        raise Forbidden(f"you do not control {figure.side}")
+
+
 def _authorize_action(game: dict, request, body: dict) -> None:
     """Enforce seat ownership on a mutating action: you must own at least one seat
     to drive the shared turn state, and may only act on a figure of a side you own.
@@ -1428,18 +1528,16 @@ def _authorize_action(game: dict, request, body: dict) -> None:
     # A live figure re-spec is admin-only (#323): regular players build their
     # fighters pre-game via new_custom and never drive update_figure on a running
     # game. This mirrors the client gate (canEditInline = IS_ADMIN) and hardens the
-    # endpoint the same way #244/#257 gated the other per-figure writes.
+    # endpoint the same way #244/#257 gated the other per-figure writes. This gate
+    # precedes the shared prologue so a non-admin gets it whether or not they own a
+    # seat (matching the original ordering).
     if body.get("type") == "update_figure" and not _is_admin(request):
         raise Forbidden("only an admin may edit a figure mid-game")
-    if _is_admin(request):
+    mine = _require_seat_holder(game, request)
+    if mine is None:                          # admin (seatless returned above)
         return
-    mine = _owned_sides(game, request)
-    if not mine:
-        raise Forbidden("you are not a player in this game")
     if body.get("type") in _FIGURE_ACTIONS:
-        figure = _figure(game["state"], body.get("uid", ""))
-        if figure.side not in mine:
-            raise Forbidden(f"you do not control {figure.side}")
+        _authorize_figure_control(game, request, body.get("uid", ""))
 
 
 def _authorize_game_write(game: dict, request) -> None:
@@ -1448,46 +1546,28 @@ def _authorize_game_write(game: dict, request) -> None:
     spectators. A seatless game (test fixtures) is unrestricted, matching
     :func:`_authorize_action`.
     """
-    seats = game.get("seats")
-    if not seats:
-        return
-    if _is_admin(request):
-        return
-    if not _owned_sides(game, request):
-        raise Forbidden("you are not a player in this game")
+    _require_seat_holder(game, request)
 
 
 def _authorize_figure_write(game: dict, request, uid: str) -> None:
     """Gate a per-figure mutating write (attribute advance): you must own that
     figure's side, or be an admin (#257). A seatless game is unrestricted.
     """
-    seats = game.get("seats")
-    if not seats:
+    if _require_seat_holder(game, request) is None:
         return
-    if _is_admin(request):
-        return
-    mine = _owned_sides(game, request)
-    if not mine:
-        raise Forbidden("you are not a player in this game")
-    figure = _figure(game["state"], uid)
-    if figure.side not in mine:
-        raise Forbidden(f"you do not control {figure.side}")
+    _authorize_figure_control(game, request, uid)
 
 
 @csrf_exempt
+@_game_endpoint
+@_json_endpoint
 def api_action(request, gid):
     if request.method != "POST":
         return HttpResponse(status=405)
     # Hold the per-game lock across the whole load -> mutate -> persist so
     # concurrent requests on one gid serialize and can't lose an update (#253).
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
-        try:
-            body = json.loads(request.body or "{}")
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "bad JSON"}, status=400)
+    with _locked_game(gid) as game:
+        body = _json_body(request)
 
         try:
             _authorize_action(game, request, body)
@@ -1528,6 +1608,7 @@ def api_action(request, gid):
         return JsonResponse(payload)
 
 
+@_game_endpoint
 def api_debug(request, gid):
     """The diagnostic action trail for a game (#222).
 
@@ -1541,14 +1622,13 @@ def api_debug(request, gid):
     # check-then-act that must not race a concurrent locked action reloading /
     # persisting the same gid (#305), and the trail is read while an action may be
     # mid-append. Matches api_state / api_options (#343).
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
+    with _locked_game(gid) as game:
         return JsonResponse({"gid": gid, "trail": game.get("_debug", [])})
 
 
 @csrf_exempt
+@_game_endpoint
+@_json_endpoint
 def api_seat(request, gid):
     """Open / claim / release a seat — the multiplayer join mechanism (#85).
 
@@ -1563,14 +1643,8 @@ def api_seat(request, gid):
         return HttpResponse(status=405)
     # The whole check-then-set of a claim runs under the per-game lock so two
     # joiners can't both pass the "seat is open" test and both take it (#253).
-    with _game_lock(gid):
-        game = _resident_game(gid)
-        if not game:
-            return JsonResponse({"error": "unknown game"}, status=404)
-        try:
-            body = json.loads(request.body or "{}")
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "bad JSON"}, status=400)
+    with _locked_game(gid) as game:
+        body = _json_body(request)
         seats = game.get("seats")
         if not seats:
             return JsonResponse({"error": "this game has no seats"}, status=400)
@@ -1602,8 +1676,7 @@ def api_seat(request, gid):
         payload = _payload(game)
         payload.update(_ownership_fields(game, pid))
         response = JsonResponse(payload)
-        if minted:
-            _set_player_cookie(response, pid)
+        _attach_owner_cookie(response, pid, minted)
         return response
 
 
