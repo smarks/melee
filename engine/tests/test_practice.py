@@ -7,8 +7,9 @@ as ``GameState.practice``); these tests pin the three rule effects it gates.
 from __future__ import annotations
 
 from hexarena.dice import Dice
-from hexarena.hex import FLAT, Hex, HexLayout
+from hexarena.hex import Hex
 
+from engine.arena import DEFAULT_LAYOUT as LAYOUT
 from engine.arena import Arena
 from engine.experience import PRACTICE_DROPOUT_ST, CombatType
 from engine.facing import FRONT
@@ -18,7 +19,6 @@ from engine.rules_data import BROADSWORD, LEATHER, NO_ARMOR, SHORTSWORD, SMALL_B
 from engine.ruleset import Ruleset
 from engine.state import GameState
 
-LAYOUT = HexLayout(orientation=FLAT, odd=True)
 RULES = Ruleset()
 
 

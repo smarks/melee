@@ -8,12 +8,11 @@ from __future__ import annotations
 
 from collections import Counter
 
-from hexarena.hex import FLAT, Hex, HexLayout
+from hexarena.hex import Hex
 
+from engine.arena import DEFAULT_LAYOUT as LAYOUT
 from engine.megahex import megahex_coord, megahex_distance
 from engine.ruleset import Ruleset
-
-LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
 def test_hex_to_megahex_mapping_is_deterministic() -> None:

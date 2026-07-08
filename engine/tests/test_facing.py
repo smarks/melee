@@ -1,8 +1,9 @@
 """Facing zones and engagement (Section VI)."""
 from __future__ import annotations
 
-from hexarena.hex import FLAT, Hex, HexLayout
+from hexarena.hex import Hex
 
+from engine.arena import DEFAULT_LAYOUT as LAYOUT
 from engine.facing import (
     FRONT,
     REAR,
@@ -14,8 +15,6 @@ from engine.facing import (
     zone_of_direction,
 )
 from engine.figure import Figure, Posture
-
-LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
 def test_zone_split_is_three_front_two_side_one_rear() -> None:

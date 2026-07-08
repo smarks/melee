@@ -8,16 +8,15 @@ outcome. They double as worked examples of how to swap in different mechanics.
 from __future__ import annotations
 
 from hexarena.dice import Dice
-from hexarena.hex import FLAT, Hex, HexLayout
+from hexarena.hex import Hex
 
+from engine.arena import DEFAULT_LAYOUT as LAYOUT
 from engine.arena import Arena
 from engine.figure import Posture, create_human
 from engine.options import Option
 from engine.rules_data import BROADSWORD, CHAINMAIL
 from engine.ruleset import KNOCKDOWN, Ruleset
 from engine.state import GameState
-
-LAYOUT = HexLayout(orientation=FLAT, odd=True)
 
 
 def _duel(ruleset: Ruleset | None, dice: Dice, *, target_armor=CHAINMAIL):
