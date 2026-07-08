@@ -11,16 +11,7 @@ from engine.figure import Posture, create_human
 from engine.options import Option
 from engine.rules_data import BROADSWORD, NO_ARMOR, SHORTSWORD
 from engine.state import GameState, IllegalAction
-
-
-def _aim(figure, target) -> None:
-    """Face ``figure`` toward ``target`` (a shooter aims along the line of fire).
-
-    Works at any range: ``direction_to`` wants adjacent hexes, so take the first
-    step of the line from the figure to its target.
-    """
-    figure.facing = LAYOUT.direction_to(
-        figure.position, LAYOUT.line(figure.position, target.position)[1])
+from engine.tests.geometry import aim as _aim
 
 
 def _rear_grapple(defense_roll):

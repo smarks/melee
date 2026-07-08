@@ -33,6 +33,22 @@ def zone_of_direction(facing: int, direction_index: int) -> str:
     return REAR  # offset == 3
 
 
+def facing_toward(layout: HexLayout, from_hex: Hex, to_hex: Hex) -> int:
+    """Direction index (0-5) whose front points most directly at ``to_hex``.
+
+    Walk the six headings out of ``from_hex`` and keep the one whose front hex
+    lands nearest ``to_hex``. For an adjacent target this is the heading that puts
+    it in the front hex. The single source for "turn to face that hex", shared by
+    the AI (:mod:`engine.ai`) and the scenario seater (:mod:`board.scenario`).
+    """
+    best_dir, best_dist = 0, None
+    for direction in range(6):
+        distance = layout.distance(layout.neighbor(from_hex, direction), to_hex)
+        if best_dist is None or distance < best_dist:
+            best_dir, best_dist = direction, distance
+    return best_dir
+
+
 def front_hexes(layout: HexLayout, figure: Figure) -> list[Hex]:
     """The hexes in front of ``figure`` (no bounds-checking).
 

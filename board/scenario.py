@@ -13,6 +13,7 @@ from hexarena.hex import Hex
 
 from engine import chargen
 from engine.arena import Arena
+from engine.facing import facing_toward as _facing_toward
 from engine.figure import Figure, create_human
 from engine.names import generate_distinct_names
 from engine.rules_data import (
@@ -181,16 +182,6 @@ MAX_TEAMS = len(TEAM_IDS)
 MAX_PER_TEAM = 3
 
 
-def _facing_toward(layout, from_hex: Hex, to_hex: Hex) -> int:
-    """Heading (0-5) whose front points most directly at ``to_hex``."""
-    best_dir, best_dist = 0, None
-    for direction in range(6):
-        distance = layout.distance(layout.neighbor(from_hex, direction), to_hex)
-        if best_dist is None or distance < best_dist:
-            best_dir, best_dist = direction, distance
-    return best_dir
-
-
 def _perimeter(arena: Arena) -> list[Hex]:
     """Boundary hexes clockwise from the top-left corner."""
     cols, rows = arena.cols, arena.rows
@@ -221,6 +212,26 @@ def _start_zones(arena: Arena, team_count: int, per_team: int) -> list[list[tupl
     return zones
 
 
+def _seat_around_edges(
+    teams: list[list[Figure]], zones: list[list[tuple[Hex, int]]]
+) -> list[Figure]:
+    """Seat each team's figures onto its allotted start zone and collect them.
+
+    ``teams[i]`` is placed into ``zones[i]``: each figure takes the next
+    ``(hex, facing)`` seat its team was carved from the arena perimeter by
+    :func:`_start_zones`, in order. The single "walk the zones, stamp
+    position+facing, gather" step shared by :func:`build_game` and
+    :func:`build_custom_skirmish` (the two edge-seated construction paths;
+    ``_place`` seats the fixed north/south duel differently).
+    """
+    figures: list[Figure] = []
+    for team_index, team in enumerate(teams):
+        for combatant_index, figure in enumerate(team):
+            figure.position, figure.facing = zones[team_index][combatant_index]
+            figures.append(figure)
+    return figures
+
+
 def build_game(
     profile_name: str, team_count: int, per_team: int
 ) -> tuple[Arena, list[Figure]]:
@@ -232,15 +243,13 @@ def build_game(
     arena = Arena(cols=13, rows=13)
     zones = _start_zones(arena, team_count, per_team)
     make = _tarmar_archetypes if profile_name == "Tarmar" else _archetypes
-    figures: list[Figure] = []
+    teams: list[list[Figure]] = []
     for team_index, team_id in enumerate(TEAM_IDS[:team_count]):
         roster = make(team_id)
-        for combatant_index, (hex_position, facing) in enumerate(zones[team_index]):
-            name = ARCHETYPE_NAMES[combatant_index % len(ARCHETYPE_NAMES)]
-            figure = roster[name]
-            figure.position = hex_position
-            figure.facing = facing
-            figures.append(figure)
+        teams.append([
+            roster[ARCHETYPE_NAMES[combatant_index % len(ARCHETYPE_NAMES)]]
+            for combatant_index in range(len(zones[team_index]))])
+    figures = _seat_around_edges(teams, zones)
     _finalize_figures(figures)
     return arena, figures
 
@@ -279,11 +288,7 @@ def build_custom_skirmish(
         raise ValueError(
             f"too many fighters on one side: {largest} (max {MAX_PER_TEAM})")
     zones = _start_zones(arena, max(1, len(team_ids)), largest)
-    figures: list[Figure] = []
-    for team_index, team_id in enumerate(team_ids):
-        for combatant_index, figure in enumerate(by_team[team_id]):
-            figure.position, figure.facing = zones[team_index][combatant_index]
-            figures.append(figure)
+    figures = _seat_around_edges([by_team[team_id] for team_id in team_ids], zones)
     # #355: the wizard/character editor auto-seats fighters under their archetype
     # label, so give those default-named fighters a creative name too — matching
     # every other start path (build_game, default/tarmar skirmish) — while keeping

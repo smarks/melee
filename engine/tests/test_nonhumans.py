@@ -28,11 +28,7 @@ from engine.rules_data import (
     DamageDice,
 )
 from engine.state import GameState
-
-
-def _aim(figure: Figure, target: Figure) -> None:
-    figure.facing = LAYOUT.direction_to(
-        figure.position, LAYOUT.line(figure.position, target.position)[1])
+from engine.tests.geometry import aim as _aim
 
 
 # ---- fantasy-race spreads (p.21) -------------------------------------------

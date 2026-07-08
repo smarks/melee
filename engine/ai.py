@@ -37,24 +37,11 @@ sets a real action (or holds when truly boxed in).
 """
 from __future__ import annotations
 
+from .facing import facing_toward as _facing_toward
 from .figure import Figure, Posture
 from .options import Option, spec
 from .rules_data import WeaponKind
 from .state import GameState
-
-
-def _facing_toward(layout, from_hex, to_hex) -> int:
-    """Direction index (0-5) whose front points most directly at ``to_hex``.
-
-    For an adjacent target this is the heading that puts it in the front hex.
-    """
-    best_dir, best_dist = 0, None
-    for direction in range(6):
-        neighbour = layout.neighbor(from_hex, direction)
-        distance = layout.distance(neighbour, to_hex)
-        if best_dist is None or distance < best_dist:
-            best_dir, best_dist = direction, distance
-    return best_dir
 
 
 def _best_target(state: GameState, figure: Figure, candidates: list[Figure]) -> Figure:

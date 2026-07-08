@@ -19,11 +19,13 @@ from board.views import (
     Forbidden,
     _authorize_figure_control,
     _BadJson,
+    _forbidden_endpoint,
     _game_endpoint,
     _GameNotFound,
     _json_body,
     _json_endpoint,
     _locked_game,
+    _post_only,
     _require_seat_holder,
 )
 
@@ -135,6 +137,56 @@ def test_json_endpoint_renders_bad_json_as_400() -> None:
     response = view(request)
     assert response.status_code == 400
     assert json.loads(response.content) == {"error": "bad JSON"}
+
+
+# ---- #375: _post_only / _forbidden_endpoint (mutating-endpoint envelope) ----
+def test_post_only_short_circuits_a_non_post_to_405() -> None:
+    called = False
+
+    @_post_only
+    def view(request):
+        nonlocal called
+        called = True
+        from django.http import JsonResponse
+        return JsonResponse({"ok": True})
+
+    response = view(RequestFactory().get("/"))
+    assert response.status_code == 405
+    assert called is False          # the wrapped view never ran
+
+
+def test_post_only_lets_a_post_through() -> None:
+    from django.http import JsonResponse
+
+    @_post_only
+    def view(request):
+        return JsonResponse({"ok": True})
+
+    response = view(RequestFactory().post("/"))
+    assert response.status_code == 200
+    assert json.loads(response.content) == {"ok": True}
+
+
+def test_forbidden_endpoint_renders_forbidden_as_403() -> None:
+    @_forbidden_endpoint
+    def view(request):
+        raise Forbidden("you do not control that side")
+
+    response = view(RequestFactory().post("/"))
+    assert response.status_code == 403
+    assert json.loads(response.content) == {"error": "you do not control that side"}
+
+
+def test_forbidden_endpoint_passes_through_a_normal_response() -> None:
+    from django.http import JsonResponse
+
+    @_forbidden_endpoint
+    def view(request):
+        return JsonResponse({"ok": True})
+
+    response = view(RequestFactory().post("/"))
+    assert response.status_code == 200
+    assert json.loads(response.content) == {"ok": True}
 
 
 # ---- #361: _authorize_figure_control (single per-figure seat rule) ----------
