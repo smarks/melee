@@ -1532,8 +1532,91 @@ class _ShieldRushMixin:
         return all(direction == directions[0] for direction in directions)
 
 
+@dataclass
+class AttackCandidates:
+    """The foes a figure may attack this combat phase, grouped by attack kind.
+
+    ``ranged`` covers a weapon attack made *at a distance* — a bow/crossbow's
+    missile targets **or** a throwable weapon's thrown targets (mutually exclusive
+    for one figure). This is the engine's single source for attack legality (#362);
+    the Django view's target list and the AI both consume it, so a human and a
+    computer figure standing in the same spot see the same options.
+    """
+
+    melee: list[Figure]
+    ranged: list[Figure]
+    hth: list[Figure]
+
+
 class _CombatMixin:
     # ---- combat ----
+    def attack_candidates(self, figure: Figure) -> AttackCandidates:
+        """Which foes ``figure`` may attack this combat phase, by kind (#362).
+
+        The one authority for "who may I hit": based on where the figure stands
+        and what weapon is ready. Attacks are chosen in the combat phase, so no
+        movement-time attack declaration is required. A figure that committed to
+        defending (dodge/defend) or to disengaging does not attack.
+
+        A missile/thrown attacker lists **every** foe with a position — the front
+        arc is satisfied by turning to aim (option f is a free facing change and
+        missiles get no facing bonus, p.16), which :meth:`aim` does before the
+        shot. That is a legality rule, not a preference: a figure *may* fire into
+        an HTH pile grappling a friend (a random member is struck, p.18); whether
+        that is *wise* is the caller's call (the AI declines it — #275).
+        """
+        empty = AttackCandidates([], [], [])
+        if not (figure.can_act() and not figure.attacked_this_turn
+                and figure.position is not None):
+            return empty
+        option = figure.current_option
+        if option is not None and (spec(option).sets_dodge or spec(option).sets_defend):
+            return empty
+        # A figure that chose to disengage moves instead of attacking (option n,
+        # p.19); it may never attack the turn it disengages.
+        if option == Option.DISENGAGE:
+            return empty
+        # Already grappling: the only attack is the hand-to-hand strike on that foe.
+        if figure.in_hth:
+            return AttackCandidates([], [], self.hth_targets(figure))
+        hth = self.hth_targets(figure)          # foes it could grapple
+        weapon = figure.ready_weapon
+        if weapon is None:
+            return AttackCandidates([], [], hth)
+        if weapon.kind == WeaponKind.MISSILE:
+            if figure.missile_cooldown > 0:
+                return AttackCandidates([], [], hth)   # still reloading — can't fire
+            ranged = [e for e in self.enemies_of(figure) if e.position is not None]
+            return AttackCandidates([], ranged, hth)
+        melee = self.melee_targets(figure, weapon)
+        # A throwable weapon can be hurled at any foe out of melee reach (p.15); the
+        # thrower turns to aim (:meth:`aim`), so the front arc is satisfied.
+        throw: list[Figure] = []
+        if weapon.throwable:
+            in_reach = {e.uid for e in melee}
+            throw = [e for e in self.enemies_of(figure)
+                     if e.position is not None and e.uid not in in_reach]
+        return AttackCandidates(melee, throw, hth)
+
+    def aim(self, attacker: Figure, target: Figure) -> None:
+        """Turn a ranged ``attacker`` to face ``target`` before it fires (#362, #117).
+
+        Option (f) lets a missile attacker change facing, and missiles get no facing
+        bonus, so aiming is free and satisfies the front-arc rule (p.16) that
+        :meth:`queue_attack` enforces. This is the single home for the aim-to-face
+        step — the Django view and the AI both call it, so a human and a computer
+        archer turn to aim identically rather than only the human doing so. It faces
+        the primary target only (a figure has one facing); a split shot's second
+        target must independently fall in that arc.
+        """
+        if attacker.position is None or target.position is None:
+            return
+        line = self.arena.layout.line(attacker.position, target.position)
+        if len(line) >= 2:
+            direction = self.arena.layout.direction_to(attacker.position, line[1])
+            if direction is not None:
+                attacker.facing = direction
+
     def in_front_arc(self, attacker: Figure, point: Hex) -> bool:
         """Whether ``point`` lies in ``attacker``'s front arc, ignoring posture.
 
