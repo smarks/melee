@@ -70,13 +70,31 @@ jobs:
           path: e2e/videos/
           if-no-files-found: ignore
 
+  # Browser-free unit tests for the pure client helpers extracted from board.js
+  # (layout_geom.js geometry/snap maths, control_state.js turn-flow classifier).
+  # Runs under node's built-in test runner — no bundler, no browser — so panel-
+  # layout and Action-panel gating bugs are caught by a fast assertion instead of
+  # only a Playwright scenario (#364/#366/#367).
+  js-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run client unit tests
+        run: node --test js-tests/*.test.js
+
   notify:
-    needs: [test, e2e]
+    needs: [test, e2e, js-unit]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Email on failure or green-after-red
         uses: smarks/base_repo_template/.github/actions/notify@main
         with:
-          job-status: ${{ (needs.test.result == 'success' && needs.e2e.result == 'success') && 'success' || 'failure' }}
+          job-status: ${{ (needs.test.result == 'success' && needs.e2e.result == 'success' && needs['js-unit'].result == 'success') && 'success' || 'failure' }}
           mail-password: ${{ secrets.MAIL_PASSWORD }}
