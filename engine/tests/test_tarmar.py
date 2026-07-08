@@ -41,6 +41,44 @@ def _target(*, st=10, dx=10, **kw):
     return create_tarmar_fighter("Def", strength=st, dexterity=dx, side="blue", **kw)
 
 
+def test_out_of_play_is_not_just_collapsed_under_tarmar() -> None:
+    # #363: the out_of_play predicate is `is_dead or collapsed`, NOT just collapsed,
+    # because Tarmar re-keys the two onto separate pools — a fighter whose Body is
+    # spent (dead) can still have Fatigue left (not collapsed). Pinning this proves
+    # the consolidated guard could not be simplified to a single-pool check.
+    fighter = create_tarmar_fighter("Body-dead", strength=12, dexterity=12,
+                                    side="red", armor=NO_ARMOR)
+    fighter.body_taken = fighter.body           # Body exhausted; Fatigue untouched
+    assert fighter.is_dead
+    assert not fighter.collapsed
+    assert fighter.out_of_play
+
+
+def test_armor_override_reaches_both_tarmar_resolve_paths() -> None:
+    # #371: the Tarmar profile now routes armor through Ruleset.absorbed() instead
+    # of reading target.hits_stopped() inline, so overriding absorbed() (the whole
+    # point of the ruleset seam) changes Tarmar damage in BOTH the armed and the
+    # grapple path — previously it silently changed neither. An Impervious armor
+    # hook that stops everything drives every landed hit's damage to 0.
+    class Impervious(TarmarRuleset):
+        def absorbed(self, target, *, zone) -> int:
+            return 999
+
+    rules = Impervious()
+    attacker = _attacker(BROADSWORD)
+    target = _target(armor=NO_ARMOR)
+
+    armed = rules.resolve_attack(
+        Dice(scripted=[10] + [6] * 6), attacker, target,
+        zone=FRONT, force_hit=True)
+    assert armed.hit and armed.raw_damage > 0 and armed.damage == 0
+
+    grappled = rules._resolve_hth(
+        Dice(scripted=[10] + [6] * 6), _attacker(BROADSWORD, dx=18), target,
+        FRONT, None, DamageDice(2, 0))
+    assert grappled.hit and grappled.raw_damage > 0 and grappled.damage == 0
+
+
 def test_off_balance_penalty_drags_a_grapple_strike() -> None:
     # A fumbler left off-balance carries the -2 into its NEXT action even when that
     # action is a hand-to-hand grapple, not an armed swing (#311). apply_attack_
