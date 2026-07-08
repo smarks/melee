@@ -503,11 +503,12 @@ class _MovementMixin:
     def _enemy_front_hexes(self, figure: Figure) -> set[Hex]:
         fronts: set[Hex] = set()
         for enemy in self.enemies_of(figure):
-            # A grounded enemy (prone OR kneeling) has no front: it engages no
-            # one (see ``is_engaged_by`` / ``zone_toward``, which treat a
-            # non-standing figure as having no front), so a mover is not forced
-            # to halt entering its "front" hex.
-            if enemy.posture != Posture.STANDING:
+            # A PRONE enemy has no front: it engages no one (see
+            # ``is_engaged_by`` / ``zone_toward``, which treat a prone figure as
+            # having no front), so a mover is not forced to halt entering its
+            # "front" hex. A KNEELING enemy keeps its front and its stop-hexes
+            # per Spencer's rulebook ruling (#354).
+            if enemy.posture == Posture.PRONE:
                 continue
             fronts.update(front_hexes(self.arena.layout, enemy))
         return fronts
@@ -1621,7 +1622,7 @@ class _CombatMixin:
         """Whether ``point`` lies in ``attacker``'s front arc, ignoring posture.
 
         A missile or thrown attack is legal only against a target in front of the
-        attacker (p.15-16). Unlike :func:`zone_toward` (which treats a non-standing
+        attacker (p.15-16). Unlike :func:`zone_toward` (which treats a prone
         figure as having no front), this classifies the bearing purely against the
         attacker's facing — a prone crossbowman still aims along the way it points,
         so it may fire at a foe ahead of it (p.16).

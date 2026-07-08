@@ -129,10 +129,11 @@ def test_must_stop_on_entering_enemy_front_hex() -> None:
         state.move(mover, Option.MOVE, path=path)
 
 
-def test_kneeling_enemy_creates_no_front_stop_hexes() -> None:
-    # A KNEELING figure engages no one (it has no front, like a prone figure),
-    # so a mover may pass through the hex in front of it without being forced to
-    # halt (matches the engagement logic in facing.is_engaged_by).
+def test_kneeling_enemy_keeps_its_front_stop_hexes() -> None:
+    # #354: a KNEELING figure KEEPS its front (only PRONE loses it, per Spencer's
+    # rulebook ruling). So a kneeling enemy still creates front stop-hexes like a
+    # standing figure, and a mover may NOT pass through its front hex without
+    # being forced to halt. A PRONE enemy, by contrast, has no front.
     from engine.figure import Posture
 
     arena = Arena(cols=9, rows=15)
@@ -150,11 +151,18 @@ def test_kneeling_enemy_creates_no_front_stop_hexes() -> None:
     standing_front = state._enemy_front_hexes(mover)
     assert standing_front
 
+    # Kneeling: still has a front, same stop-hexes as standing (#354).
     enemy.posture = Posture.KNEELING
     kneeling_front = state._enemy_front_hexes(mover)
-    assert kneeling_front == set()
+    assert kneeling_front == standing_front
 
-    # A path passing through what WAS the front hex no longer forces a stop.
+    # Prone: no front, so no stop-hexes.
+    enemy.posture = Posture.PRONE
+    prone_front = state._enemy_front_hexes(mover)
+    assert prone_front == set()
+
+    # A path passing through the kneeling guard's front hex is still forced to halt.
+    enemy.posture = Posture.KNEELING
     layout = state.arena.layout
     front_hex = next(iter(standing_front))
     # Approach the front hex along the guard's facing axis so the step into it
@@ -165,5 +173,5 @@ def test_kneeling_enemy_creates_no_front_stop_hexes() -> None:
     assert arena.distance(approach, front_hex) == 1
     assert arena.distance(front_hex, beyond) == 1
     assert beyond != enemy.position and arena.contains(beyond)
-    state.move(mover, Option.MOVE, path=[front_hex, beyond])
-    assert mover.position == beyond
+    with pytest.raises(IllegalAction):
+        state.move(mover, Option.MOVE, path=[front_hex, beyond])

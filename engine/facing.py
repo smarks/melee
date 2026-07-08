@@ -91,7 +91,9 @@ def zone_toward(layout: HexLayout, observer: Figure, point: Hex) -> str | None:
     # it is a frontal one.
     if observer.all_front:
         return FRONT
-    if observer.posture != Posture.STANDING:    # prone or kneeling: no front (p.7)
+    if observer.posture == Posture.PRONE:        # prone only: no front (#354)
+        # A KNEELING figure keeps its front per Spencer's rulebook ruling (#354);
+        # only PRONE loses it. The engine has no crawl/pick-up posture.
         return REAR
     return zone_of_direction(observer.facing, direction)
 
@@ -107,7 +109,7 @@ def _multi_zone_toward(
     """
     if observer.all_front:
         return FRONT
-    if observer.posture != Posture.STANDING:
+    if observer.posture == Posture.PRONE:        # prone only: no front (#354)
         return REAR
     if point in set(front_hexes(layout, observer)):
         return FRONT
