@@ -1070,6 +1070,66 @@ def test_a_co_queued_blow_never_lands_on_an_already_downed_foe() -> None:
     assert_state_invariants(state, CLASSIC)             # the #310 invariant stays green
 
 
+@pytest.mark.parametrize("path", ["melee", "first_shot", "second_shot"])
+@pytest.mark.parametrize("downed_kind", ["dead", "collapsed"])
+def test_no_flight_or_melee_path_strikes_a_downed_target(
+    path, downed_kind, monkeypatch
+) -> None:
+    # #363: the #310 "don't strike a downed/dead target" guard is ONE chokepoint
+    # in _resolve_attack_shot, so a downed EFFECTIVE target is never struck by ANY
+    # of the three flight/melee paths. Proven path-independently: whichever figure
+    # the path would land on (the melee/first-shot target, or a second arrow's own
+    # second_target), the resolver is never entered once that figure is out of play
+    # — and IS entered when it is alive, so the guard blocks only the corpse.
+    from engine.facing import attack_zone
+    from engine.rules_data import BROADSWORD, LONGBOW, NO_ARMOR
+    from engine.state import PendingAttack
+
+    arena = Arena(cols=9, rows=15)
+    weapon = BROADSWORD if path == "melee" else LONGBOW
+    attacker = create_human("Atk", 12, 12, "a", weapons=[weapon], ready_weapon=weapon)
+    landed_on = create_human("Foe", 12, 12, "b", weapons=[BROADSWORD],
+                             ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    decoy = create_human("Decoy", 12, 12, "b", weapons=[BROADSWORD],
+                         ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    attacker.position = Hex(2, 5)
+    landed_on.position = Hex(3, 5)   # adjacent, so the melee reach check would pass
+    decoy.position = Hex(6, 5)
+    _aim(attacker, landed_on)
+    state = GameState(arena, [attacker, landed_on, decoy])
+
+    zone = attack_zone(LAYOUT, attacker, landed_on)
+    if path == "second_shot":
+        # A two-shot bow whose FIRST target (pending.target) is the live decoy but
+        # whose SECOND arrow aims at ``landed_on`` — the effective target this shot.
+        pending = PendingAttack(attacker, decoy, zone=zone, ignore_facing=True,
+                                range_penalty=0, shots=2, second_target=landed_on)
+        shot_index = 1
+    else:
+        pending = PendingAttack(attacker, landed_on, zone=zone,
+                                ignore_facing=(path != "melee"), range_penalty=0)
+        shot_index = 0
+
+    entered: list[str] = []
+    monkeypatch.setattr(state, "_resolve_flight",
+                        lambda *a, **k: entered.append("flight"))
+    monkeypatch.setattr(state, "_resolve_one_melee",
+                        lambda *a, **k: entered.append("melee"))
+
+    # Alive: the guard passes and the path's resolver runs.
+    results: list = []
+    state._resolve_attack_shot(pending, shot_index, results)
+    assert entered, f"{path}: a live target should be struck"
+
+    # Down it (dead = ST -1, collapsed = ST 0) and the resolver is never entered.
+    entered.clear()
+    landed_on.damage_taken = (landed_on.strength + 1 if downed_kind == "dead"
+                              else landed_on.strength)
+    assert landed_on.out_of_play
+    state._resolve_attack_shot(pending, shot_index, results)
+    assert not entered, f"{path}: a downed target must not be struck (#310/#363)"
+
+
 def test_a_weaponless_figure_cannot_defend() -> None:
     # #304: p.20 / ITL p.117 — a figure defends only with a real weapon in hand to
     # parry with. A weaponless figure (disarmed, or an archer whose bow was dropped

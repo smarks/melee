@@ -207,6 +207,19 @@ class Figure:
         return self.current_st <= -1
 
     @property
+    def out_of_play(self) -> bool:
+        """Dead or collapsed — the figure can no longer be a legal attack target.
+
+        The single definition of the "#310: don't strike a downed/dead target"
+        predicate. Written as ``is_dead or collapsed`` because the two are NOT
+        redundant under every stat model: the Tarmar profile re-keys them onto
+        separate Fatigue/Body pools (:mod:`engine.tarmar`), so a figure can be
+        dead (Body exhausted) without being collapsed (Fatigue remaining). Both
+        subclasses inherit this by reading their own overridden properties.
+        """
+        return self.is_dead or self.collapsed
+
+    @property
     def movement_allowance(self) -> int:
         """Hexes per turn; set by armor (shields don't change MA).
 

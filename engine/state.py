@@ -557,13 +557,13 @@ class _MovementMixin:
     def _body_in_hex(self, hex_position: Hex, *, exclude: Figure | None = None) -> bool:
         """A fallen body (dead/collapsed figure) lies in ``hex_position``."""
         return any(f is not exclude and f.position == hex_position
-                   and (f.is_dead or f.collapsed) for f in self.figures)
+                   and f.out_of_play for f in self.figures)
 
     def _body_hexes(self, *, exclude: Figure | None = None) -> set[Hex]:
         """Every hex holding a fallen body — the costly-to-enter obstacles (p.8)."""
         return {f.position for f in self.figures
                 if f is not exclude and f.position is not None
-                and (f.is_dead or f.collapsed)}
+                and f.out_of_play}
 
     def _hth_pile_at(self, hex_position: Hex | None) -> list[Figure]:
         """The figures grappling in the HTH pile that shares ``hex_position``.
@@ -640,6 +640,28 @@ class _MovementMixin:
             return True
         return False
 
+    def _strike(
+        self, attacker: Figure, target: Figure, results: list,
+        *, thrown: bool = False, **resolve_kwargs
+    ) -> AttackResult:
+        """Resolve one attack and funnel it through the single record path (#371).
+
+        The "resolve -> tag thrown -> apply -> record" tail that every full attack
+        site shares: roll the attack via the ruleset, tag it with the thrown flag,
+        apply it (``_apply`` is the damage/status/DamageEvent chokepoint), and
+        append it to the returned ``results`` list. Extra keyword arguments pass
+        straight through to :meth:`Ruleset.resolve_attack`. Making this one seam
+        means a new attack path cannot forget ``result.thrown`` (mis-narrating a
+        fumble drop) or ``results.append`` (dropping the blow from the audited
+        list). The partial free-hit counter in :meth:`hth_attack` stays outside:
+        it deliberately omits the thrown tag and the results append.
+        """
+        result = self.rules.resolve_attack(self.dice, attacker, target, **resolve_kwargs)
+        result.thrown = thrown
+        self._apply(attacker, target, result)
+        results.append(result)
+        return result
+
     def _flight_hit_target(
         self, pending, target, declared_zone, range_penalty: int,
         situational: int, situational_note: str, results: list
@@ -664,27 +686,26 @@ class _MovementMixin:
             struck = pile[self.dice.dn(len(pile)) - 1]
         zone = (declared_zone if struck is target
                 else attack_zone(self.arena.layout, attacker, struck))
-        result = self.rules.resolve_attack(
-            self.dice, attacker, struck, zone=zone,
-            ignore_facing=pending.ignore_facing,
-            dice_count=self.rules.attack_dice_count(struck, ranged=True),
-            range_penalty=range_penalty,
-            situational=situational,
-            situational_note=situational_note,
-            ranged=True, blunted=self.practice)
-        result.thrown = pending.thrown
         # A shot the pile roll redirected onto the shooter's OWN side is the
         # p.18 rule working as written (like the melee miss-cascade): flag it so
-        # the recorded DamageEvent is not read as friendly fire (#231).
+        # the recorded DamageEvent is not read as friendly fire (#231). The flag
+        # wraps the whole strike (resolve is pure over the figures and never
+        # reads it, so setting it before the roll is harmless).
         redirected_to_friend = struck is not target and struck.side == attacker.side
         if redirected_to_friend:
             self._same_side_hit_ok = True
         try:
-            self._apply(attacker, struck, result)
+            result = self._strike(
+                attacker, struck, results, thrown=pending.thrown, zone=zone,
+                ignore_facing=pending.ignore_facing,
+                dice_count=self.rules.attack_dice_count(struck, ranged=True),
+                range_penalty=range_penalty,
+                situational=situational,
+                situational_note=situational_note,
+                ranged=True, blunted=self.practice)
         finally:
             if redirected_to_friend:
                 self._same_side_hit_ok = False
-        results.append(result)
         if result.hit:
             self._land_flight(pending, struck.position)
             return True
@@ -722,14 +743,11 @@ class _MovementMixin:
     def _flight_strike(self, pending, victim, dist, results: list) -> None:
         """A flying weapon that connected mid-flight: apply its damage, then land."""
         attacker = pending.attacker
-        result = self.rules.resolve_attack(
-            self.dice, attacker, victim,
+        self._strike(
+            attacker, victim, results, thrown=pending.thrown,
             zone=attack_zone(self.arena.layout, attacker, victim),
             ignore_facing=True, range_penalty=-dist, force_hit=True, ranged=True,
             blunted=self.practice)
-        result.thrown = pending.thrown
-        self._apply(attacker, victim, result)
-        results.append(result)
         self._land_flight(pending, victim.position)
 
     def _land_flight(self, pending, landing_hex=None) -> None:
@@ -1180,7 +1198,7 @@ class _ShieldRushMixin:
         if not attacker.can_act() or attacker.posture != Posture.STANDING:
             return                       # floored or downed before its slot — rush lost
         layout = self.arena.layout
-        if (target.is_dead or target.collapsed or target.position is None
+        if (target.out_of_play or target.position is None
                 or self.arena.distance(attacker.position, target.position) != 1
                 or target.position not in set(front_hexes(layout, attacker))):
             return                       # the foe is gone, down, or no longer in reach
@@ -1818,25 +1836,28 @@ class _CombatMixin:
         # jab; every other attack strikes with the ready weapon.
         weapon = pending.weapon or attacker.ready_weapon
         is_missile = weapon is not None and weapon.kind == WeaponKind.MISSILE
-        if pending.thrown or is_missile:
-            if shot_index >= 1:
-                # The second arrow waits for its own round and may aim elsewhere.
-                target = pending.second_target or pending.target
-                if target.is_dead or target.collapsed:
-                    return            # don't waste it on a foe already down
-                self._resolve_flight(pending, results, target=target)
-            else:
-                if pending.target.is_dead or pending.target.collapsed:
-                    return            # a co-queued blow already downed it (#310)
-                self._resolve_flight(pending, results)
+        flying = pending.thrown or is_missile
+        # The effective target this shot lands on: a two-shot bow's second arrow
+        # waits for its own round and may aim elsewhere (pending.second_target,
+        # p.5/p.10); every other blow strikes the declared target.
+        if flying and shot_index >= 1:
+            target = pending.second_target or pending.target
+        else:
+            target = pending.target
+        # THE single #310 chokepoint for every flight/melee path: a higher-adjDX
+        # attacker this phase may already have felled this foe, and a corpse keeps
+        # its hex so the reach check would still pass. Guarding the one effective
+        # target here — where all three paths converge — means a newly added
+        # flight/melee resolve path inherits the "don't strike a downed/dead
+        # target" rule by construction, instead of re-copying the predicate.
+        # (The shield-rush path guards separately: it is dispatched above, before
+        # _can_strike_now, and folds the down-check into its reach test.)
+        if target.out_of_play:
             return
-        if pending.target.is_dead or pending.target.collapsed:
-            # A higher-adjDX attacker this phase may already have felled this foe;
-            # a corpse keeps its hex so the reach check would still pass. Don't
-            # land a blow on an already-dead/collapsed target (#310), mirroring the
-            # second-shot guard above and the shield-rush guard in _resolve_shield_rush.
-            return
-        self._resolve_one_melee(pending, weapon, results)
+        if flying:
+            self._resolve_flight(pending, results, target=target)
+        else:
+            self._resolve_one_melee(pending, weapon, results)
 
     def _can_strike_now(self, attacker: Figure, shot_index: int) -> bool:
         """Whether ``attacker`` may still land this shot/blow — the prone /
@@ -1885,8 +1906,8 @@ class _CombatMixin:
         zone = pending.zone
         if not pending.ignore_facing and pending.hth_damage is None:
             zone = attack_zone(self.arena.layout, attacker, pending.target)
-        result = self.rules.resolve_attack(
-            self.dice, attacker, pending.target,
+        result = self._strike(
+            attacker, pending.target, results, thrown=pending.thrown,
             zone=zone, weapon=weapon,
             dice_count=self.rules.attack_dice_count(pending.target, ranged=False),
             ranged=False,
@@ -1898,9 +1919,6 @@ class _CombatMixin:
             hth_damage=pending.hth_damage,
             blunted=self.practice,
         )
-        result.thrown = pending.thrown
-        self._apply(attacker, pending.target, result)
-        results.append(result)
         # Hitting Your Friends (p.17-18): a STANDING figure that misses a foe down
         # in an HTH pile rolls on — same DX adjustments — against the other piled
         # enemies, then friends, stopping at the first hit. A fumble (dropped/broken
@@ -1966,7 +1984,7 @@ class _CombatMixin:
         Single source of the win condition, shared by the engine's victory log
         and the board's API payload (#157)."""
         standing = {f.side for f in self.figures
-                    if not f.collapsed and not f.is_dead}
+                    if not f.out_of_play}
         if len(self.sides) >= 2 and len(standing) == 1:
             return next(iter(standing))
         return None
@@ -2004,8 +2022,8 @@ class _CombatMixin:
         try:
             for victim in [*enemies, *friends]:
                 zone = attack_zone(self.arena.layout, attacker, victim)
-                result = self.rules.resolve_attack(
-                    self.dice, attacker, victim,
+                result = self._strike(
+                    attacker, victim, results, thrown=pending.thrown,
                     zone=zone, weapon=weapon,
                     dice_count=self.rules.attack_dice_count(victim, ranged=False),
                     ranged=False,
@@ -2014,9 +2032,6 @@ class _CombatMixin:
                     situational_note=pending.situational_note,
                     blunted=self.practice,
                 )
-                result.thrown = pending.thrown
-                self._apply(attacker, victim, result)
-                results.append(result)
                 if result.hit:
                     self.log.append(narrate_cascade(attacker, intended, victim))
                     return

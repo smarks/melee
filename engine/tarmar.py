@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 import tarmar_rules
 
 from .combat import AttackResult, roll_damage
-from .facing import FRONT, REAR, facing_bonus, format_situational_parts
+from .facing import FRONT, facing_bonus, format_situational_parts
 from .figure import Figure
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset, main_gauche_parry
 from .rules_data import KNOCKDOWN_HITS
@@ -221,8 +221,7 @@ class TarmarRuleset(Ruleset):
         skill = attacker.weapon_skill.get(weapon.name, 0)
         # A standing off-balance penalty (from a 1-3 fumble) drags this attack;
         # apply_attack_side_effects clears the flag once the attack is applied.
-        off_balance = (tarmar_rules.OFF_BALANCE_PENALTY
-                       if getattr(attacker, "off_balance", False) else 0)
+        off_balance = self._off_balance(attacker)
         situational = ((0 if ignore_facing else facing_bonus(zone))
                        + range_penalty + situational + off_balance)
         bonus = tarmar_rules.to_hit_bonus(
@@ -239,17 +238,8 @@ class TarmarRuleset(Ruleset):
             outcome = {**outcome, "hit": True, "critical": False, "fumble": False,
                        "outcome": "hit"}
 
-        # §7 natural 20: double dice, then a confirm d20 against the same TN —
-        # hitting again upgrades to the severe crit (triple dice, reaches Body).
-        multiplier = 1
-        confirm_roll = 0
-        severe_crit = False
-        if outcome["critical"]:
-            confirm_roll = dice.dn(20)
-            severe_crit = tarmar_rules.confirm_severe_crit(
-                confirm_roll, target_number, bonus)
-            multiplier = (tarmar_rules.SEVERE_CRIT_DAMAGE_MULTIPLIER if severe_crit
-                          else tarmar_rules.CRIT_DAMAGE_MULTIPLIER)
+        multiplier, confirm_roll, severe_crit = self._confirm_crit(
+            dice, outcome, target_number, bonus)
 
         # §7 natural 1: the d6 fumble table — unless the weapon already carries
         # stress, in which case this second fumble breaks it outright.
@@ -267,8 +257,9 @@ class TarmarRuleset(Ruleset):
         if outcome["hit"]:
             raw_damage = roll_damage(dice, weapon.damage, multiplier, extra_dice)
             raw_damage = self._blunt(raw_damage, blunted)  # practice bout (p.22)
-            stops = target.hits_stopped(
-                from_front=(zone == FRONT), from_rear=(zone == REAR))
+            # Route through the Ruleset.absorbed() seam (identical zone->armour
+            # mapping) so an absorbed() override reaches the Tarmar profile too.
+            stops = self.absorbed(target, zone=zone)
             damage = tarmar_rules.damage_after_armour(
                 raw_damage, stops, weapon_class, tier)
 
@@ -289,6 +280,33 @@ class TarmarRuleset(Ruleset):
                 situational_note, off_balance=off_balance,
                 main_gauche=main_gauche))
 
+    @staticmethod
+    def _off_balance(attacker) -> int:
+        """The standing off-balance to-hit penalty from a prior 1-3 fumble (§7).
+
+        Set on the attacker by :meth:`apply_attack_side_effects` and spent by the
+        next attack. Read identically by the armed and grapple resolve paths, so
+        it lives here once."""
+        return (tarmar_rules.OFF_BALANCE_PENALTY
+                if getattr(attacker, "off_balance", False) else 0)
+
+    def _confirm_crit(self, dice, outcome, target_number, bonus) -> tuple[int, int, bool]:
+        """§7 confirmed-crit math, shared by the armed and grapple paths (#233).
+
+        A natural 20 doubles the damage dice; a *confirm* d20 against the same
+        Target Number then upgrades to the severe crit (triple dice, reaches
+        Body). Returns ``(multiplier, confirm_roll, severe_crit)``. The confirm
+        die is drawn only on a crit, so the dice stream is identical to the two
+        inlined copies this replaces."""
+        if not outcome["critical"]:
+            return 1, 0, False
+        confirm_roll = dice.dn(20)
+        severe_crit = tarmar_rules.confirm_severe_crit(
+            confirm_roll, target_number, bonus)
+        multiplier = (tarmar_rules.SEVERE_CRIT_DAMAGE_MULTIPLIER if severe_crit
+                      else tarmar_rules.CRIT_DAMAGE_MULTIPLIER)
+        return multiplier, confirm_roll, severe_crit
+
     def _resolve_hth(self, dice, attacker, target, zone, weapon, hth_damage,
                      *, blunted=False) -> AttackResult:
         """A grapple strike under Tarmar — bare hands have no weapon class, so this
@@ -302,27 +320,18 @@ class TarmarRuleset(Ruleset):
         # grapple strike just as it drags an armed blow in resolve_attack;
         # apply_attack_side_effects clears the flag once this attack is applied,
         # so read it here or it is spent unused (#311).
-        off_balance = (tarmar_rules.OFF_BALANCE_PENALTY
-                       if getattr(attacker, "off_balance", False) else 0)
+        off_balance = self._off_balance(attacker)
         bonus = (tarmar_rules.dex_modifier(attacker.base_adj_dx)
                  + facing_bonus(zone) + off_balance)
         die = dice.dn(20)
         outcome = tarmar_rules.resolve_attack(die, target_number, bonus)
-        multiplier = 1
-        confirm_roll = 0
-        severe_crit = False
-        if outcome["critical"]:
-            confirm_roll = dice.dn(20)
-            severe_crit = tarmar_rules.confirm_severe_crit(
-                confirm_roll, target_number, bonus)
-            multiplier = (tarmar_rules.SEVERE_CRIT_DAMAGE_MULTIPLIER if severe_crit
-                          else tarmar_rules.CRIT_DAMAGE_MULTIPLIER)
+        multiplier, confirm_roll, severe_crit = self._confirm_crit(
+            dice, outcome, target_number, bonus)
         raw_damage = damage = 0
         if outcome["hit"]:
             raw_damage = roll_damage(dice, hth_damage, multiplier)
             raw_damage = self._blunt(raw_damage, blunted)  # practice bout (p.22)
-            damage = max(0, raw_damage - target.hits_stopped(
-                from_front=(zone == FRONT), from_rear=(zone == REAR)))
+            damage = max(0, raw_damage - self.absorbed(target, zone=zone))
         return AttackResult(
             hit=outcome["hit"], rolled=die, needed=target_number, dice_count=1,
             multiplier=multiplier, raw_damage=raw_damage, damage=damage,
