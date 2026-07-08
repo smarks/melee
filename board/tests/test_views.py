@@ -1457,6 +1457,27 @@ def test_combat_actionable_excludes_a_figure_with_no_action() -> None:
     assert loner.uid not in actionable                 # nothing to do -> auto do-nothing
 
 
+def test_combat_actionable_excludes_a_figure_committed_to_do_nothing() -> None:
+    # #394: a figure that CAN still attack but was set to DO_NOTHING in select
+    # has already made its decision, so it must not be listed as combat
+    # actionable (no false "needs you" / "will do nothing" prompt).
+    from board.views import _combat_actionable
+    from engine.figure import create_human
+    from engine.options import Option
+    from engine.rules_data import LONGBOW
+    from hexarena.hex import Hex
+    state, shooter, foe = _two_fig_combat_state()
+    other = create_human("Archer2", 11, 13, "a", weapons=[LONGBOW], ready_weapon=LONGBOW)
+    other.position = Hex(5, 6)                          # also has the foe in range
+    state.figures.append(other)
+    baseline = _combat_actionable(state)
+    assert shooter.uid in baseline and other.uid in baseline   # both have a target
+    shooter.current_option = Option.DO_NOTHING         # committed a deliberate no-op
+    actionable = _combat_actionable(state)
+    assert shooter.uid not in actionable               # #394: not prompted anymore
+    assert other.uid in actionable                     # a normal figure with a target still is
+
+
 def _hth_grapple_duel():
     """``_combat_duel`` red & blue, already locked into a grapple on the ground."""
     from engine.figure import Posture
