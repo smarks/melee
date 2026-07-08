@@ -17,6 +17,13 @@ import time
 import pytest
 from playwright.sync_api import Page, expect
 
+# CI-safe wait for state that only settles after the SPA's ~2s poll re-renders
+# the DOM (the End Game -> "No game" / panel-unlock reset). Playwright's default
+# 5s expect timeout races that poll on a loaded runner and reddens unrelated PRs
+# (same class as #328/#349/#382); expect auto-re-resolves the locator on each
+# retry, so widening the deadline never acts on a stale handle.
+POLL_SAFE_TIMEOUT_MS = 15_000
+
 
 def _start_inline_game(page: Page, *, human: bool = False, practice: bool = False) -> None:
     """Configure Game Control on a fresh (editable) load and start a new game.
@@ -86,11 +93,14 @@ def test_end_game_returns_controls_to_editable(live_server, page: Page) -> None:
 
     # Back to the editable pre-game state: settings unlocked, End Game disabled,
     # the roster reset to just the local human -> New Game gated off again.
-    expect(page.locator("#profile")).to_be_enabled()
-    expect(page.locator("#playerCount")).to_have_text("1")
-    expect(page.get_by_role("button", name="New Game")).to_be_disabled()
-    expect(page.get_by_role("button", name="End Game")).to_be_disabled()
-    expect(page.locator("#phaseBanner")).to_contain_text("No game")
+    expect(page.locator("#profile")).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
+    expect(page.locator("#playerCount")).to_have_text("1", timeout=POLL_SAFE_TIMEOUT_MS)
+    expect(page.get_by_role("button", name="New Game")).to_be_disabled(
+        timeout=POLL_SAFE_TIMEOUT_MS)
+    expect(page.get_by_role("button", name="End Game")).to_be_disabled(
+        timeout=POLL_SAFE_TIMEOUT_MS)
+    expect(page.locator("#phaseBanner")).to_contain_text(
+        "No game", timeout=POLL_SAFE_TIMEOUT_MS)
 
 
 @pytest.mark.django_db

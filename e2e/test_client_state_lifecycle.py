@@ -28,6 +28,14 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page, expect
 
+# CI-safe wait for text/state that only lands after the SPA's ~2s poll
+# re-renders the DOM (End Game -> "No game" banner, game-gone tick, panel
+# unlock). Playwright's default 5s expect timeout races that poll on a loaded
+# runner and reddens unrelated PRs (#328, #349, #382); expect auto-re-resolves
+# the locator on every retry, so it never acts on a stale handle across a
+# re-render — it just needs a deadline wide enough to clear one poll cycle.
+POLL_SAFE_TIMEOUT_MS = 15_000
+
 
 def _seed_combat_game(gid: str) -> None:
     """Register a deterministic two-fighter combat game at turn 1 in the live
@@ -127,7 +135,7 @@ def _resolve_combat(page: Page) -> None:
     expect(resolve).to_be_enabled(timeout=20_000)
     resolve.click()
     # After Resolve the gate is set for this turn, so the snapshot records it.
-    expect(page.locator("#phaseBanner")).to_be_visible()
+    expect(page.locator("#phaseBanner")).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
     snapshot = _debug_snapshot(page)
     assert snapshot["combatResolvedTurn"] == 1, snapshot["combatResolvedTurn"]
 
@@ -144,7 +152,8 @@ def test_end_game_resets_combat_resolved_turn(live_server, page: Page) -> None:
         _resolve_combat(page)
 
         page.get_by_role("button", name="End Game").click()
-        expect(page.locator("#phaseBanner")).to_contain_text("No game")
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "No game", timeout=POLL_SAFE_TIMEOUT_MS)
 
         snapshot = _debug_snapshot(page)
         assert snapshot["combatResolvedTurn"] == -1, (
@@ -169,7 +178,7 @@ def test_new_game_resets_combat_resolved_turn(live_server, page: Page) -> None:
         # A new game requires a 2nd player; End Game first to unlock the panel,
         # then add an AI opponent and start fresh -- all without a page reload.
         page.get_by_role("button", name="End Game").click()
-        expect(page.locator("#profile")).to_be_enabled()
+        expect(page.locator("#profile")).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
         page.get_by_role("button", name="Add AI player").click()
         page.get_by_role("button", name="New Game").click()
         expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
@@ -270,13 +279,13 @@ def test_new_game_rearms_polling_after_game_lost(live_server, page: Page) -> Non
         from board.views import GAMES
         GAMES.pop(gid, None)
         expect(page.locator("#phaseBanner")).to_contain_text(
-            "Game not found", timeout=8_000)
+            "Game not found", timeout=POLL_SAFE_TIMEOUT_MS)
         assert _debug_snapshot(page)["pollActive"] is False   # #275 clear happened
 
         # Start a NEW game in the same tab (no reload). End Game unlocks the panel
         # after the game-lost state, then a fresh AI match starts.
         page.get_by_role("button", name="End Game").click()
-        expect(page.locator("#profile")).to_be_enabled()
+        expect(page.locator("#profile")).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
         page.get_by_role("button", name="Add AI player").click()
         page.get_by_role("button", name="New Game").click()
         expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
