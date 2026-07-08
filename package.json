@@ -1,0 +1,9 @@
+{
+  "name": "melee-client",
+  "private": true,
+  "type": "module",
+  "description": "Browser-free unit tests for the pure client helpers in board/static/board/*.js (no bundler; board.js is served as a raw ES module).",
+  "scripts": {
+    "test": "node --test js-tests/*.test.js"
+  }
+}
