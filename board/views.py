@@ -290,9 +290,19 @@ def _must_attack(state: GameState) -> list:
 def _combat_actionable(state: GameState) -> list:
     """uids of figures with a real combat action (a target to attack/grapple/
     shield-rush, or a disengage step). A figure with none is already doing
-    nothing, so it shouldn't drive the 'anyway' warning (#117)."""
+    nothing, so it shouldn't drive the 'anyway' warning (#117).
+
+    A figure that committed to ``DO_NOTHING`` in select has *deliberately* chosen
+    a no-op (engine/options.py); even though it may still be physically able to
+    fire, that decision is already made, so it must not be listed as combat
+    actionable — otherwise it falsely drives the client's 'needs you' checklist
+    and the 'will do nothing' count (#394). It is already excluded from
+    ``_must_attack`` (DO_NOTHING is not an attack option), so dropping it here
+    only affects the soft checklist, consistent with the resolve-gate."""
     actionable = []
     for figure in state.figures:
+        if figure.current_option == Option.DO_NOTHING:
+            continue
         targets = _attack_targets(state, figure)
         if (targets.melee or targets.ranged or targets.hth
                 or state.shield_rush_targets(figure)
