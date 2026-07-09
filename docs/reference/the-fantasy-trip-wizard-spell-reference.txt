@@ -1,0 +1,492 @@
+Wizard Reference Pages
+
+SPELL TABLE________________________
+
+_________________________
+
+IQ 8 SPELLS
+Blur (T): Defensive spell. Makes subject harder to see/hear/smell. Subtracts
+4 from DX of all attacks/spells against subject. Costs 1 ST to cast, and 1
+more ST each turn thereafter until turned off.
+Drop Weapon (T): Makes victim drop whatever is in one hand – a weapon,
+shield, or whatever. Will not make a ring or amulet fall off. Costs 1 ST, or 2
+ST if victim’s basic ST is 20 or more.
+Image (C): Creates any image (see Images and Illusions) occupying one
+hex. Costs 1 ST.
+Magic Fist (M): A telekinetic blow. Does 1d-2 damage for every ST point
+used to cast it but never less damage than the ST used. Can also trigger traps
+or carry out other unsubtle manipulations within line of sight. A Magic Fist
+that does 6 or more hits before armor/shield protection will also trip its target,
+making him/her fall down, unless he/she makes a 3-die roll on ST or DX,
+whichever is higher. See the Trip spell.
+Slow Movement (T): Halves victim’s MA for 4 turns. Slow spells do not
+multiply, but do add. Two Slow spells do not reduce a victim to quarter
+speed; they keep him at half speed twice as long. Cost: 2 ST.
+Staff (S): This spell is used to make any piece of wood into a staff (see The Wizard’s Staff). This spell is rarely used during a game, because any wizard who
+knows it can start the game with a staff. If used during a game, its ST cost is 5.
+_________________________
+________________________
+IQ 9 SPELLS
+Aid (T): Temporarily adds 1 to ST, DX, or IQ of any figure (including wizard
+himself) for each 1 ST the wizard uses to cast it. Lasts 2 turns.
+Avert (T): Defensive spell. When a wizard throws Avert on a victim, the victim must end his movement at least 2 hexes farther from the wizard than he
+started, each turn the spell is on. A victim who cannot move away without
+running into something or falling into a river or chasm must make his saving
+roll (3 dice against adjDX) to avoid falling down. A figure which cannot
+move 2 hexes due to being engaged must move as far away as it can, even
+if it has to disengage. Costs 2 ST to cast, plus 1 each turn it is maintained.
+Clumsiness (T): Subtracts 2 from victim’s DX for every 1 ST the wizard uses
+to throw spell. Lasts 3 turns (1 turn if victim’s ST is 30 or more).
+Confusion (T): Subtracts 2 from victim’s IQ for every 1 ST the wizard uses
+to throw spell. Lasts 3 turns. A figure whose IQ is reduced by a Confusion
+spell cannot use high-IQ spells while ‘confused’ to a level lower than the IQ
+required for the spell, but can re-energize spells already cast.
+Fire (C): Fills one hex with magical flame. Effects of this flame are: No
+creature of less than IQ 8 will pass through or stay in it; animals are afraid
+of fire. (An illusion, of course, could pass through.) A figure who moves
+through a fire hex, or is in a hex when a wizard creates fire there, takes 2
+hits of damage. A figure which moves into a fire hex and stops (to attack,
+for instance) takes 4 hits and suffers -2 DX that turn. The effects of fire
+hexes are cumulative within a turn, but armor and protective spells do work.
+•1•
+
+Example: A figure moves through two fire hexes (4 hits damage) and stops
+in a third one to attack (4 more hits). The protection given by that figure’s
+armor and spells are taken from the total of 8 hits to see how many hits the
+figure actually took from the fire. The hits take effect as soon as the protection is used up. If the figure in the example had Stone Flesh (stopping 4
+hits) but no other armor, he would suffer no damage in the first two hexes.
+However, these would use up the protection, and upon stopping in the third
+hex he would take 4 hits. (The Stone Flesh would still take 4 hits off any
+other attack that turn.) Cost: 1 ST.
+Reveal Magic (S): A spell to tell the caster what secret protective spells have
+been cast by his foes during the combat. Caster can “see” the following
+spells and who they are on within 5 MH (not who cast them): Reverse Missiles, Spell Shields, Stone Flesh, Iron Flesh, and Shock Shields. Will also
+reveal location of Slippery Floors. Will not reveal whether any figures are
+images, illusions, or real. Cost: 1 ST.
+Summon Wolf (C): Brings a wolf (ST 10, DX 14, IQ 6, MA 12, bite does
+1d+1 damage) to follow wizard’s orders. (See Summoned Creatures.) Costs
+2 ST to cast, plus 1 each turn the wolf remains.
+_________________________
+_______________________
+IQ 10 SPELLS
+Dazzle (S): Creates a blinding psychic flash. All sighted creatures (friend or
+foe) in an area within 5 megahexes of the wizard’s own megahex (but not
+the wizard himself) suffer -3 DX for 3 turns. Images, illusions, etc. (anything with eyes) are affected. Cost: 3 ST.
+Shadow (C): Fills one hex with totally black shadow, extending some 10 feet
+in the air. A hex may be shadowed while a figure is in it. Figures may move
+freely through shadow hexes. A figure attacking from or through a shadow
+hex has DX -6. An attack into a shadow hex is DX -4. Cost: 1 ST.
+Shock Shield (T): Does 1 die of damage to any creature in the subject’s hex
+(except subject him/herself) at end of each turn the spell is on. Costs 2 ST,
+plus 1 each turn the shield is maintained.
+Speed Movement (T): Doubles MA of target figure for 4 turns. Speed spells
+do not multiply, but do add. Two Speed spells do not quadruple the subject’s
+speed; they double it for twice as long. Cost: 2 ST.
+Summon Myrmidon (C): Brings a warrior (ST 12, DX 12, IQ 8, MA 10, 2-die
+broadsword, no armor) to follow wizard’s orders. (See Summoned Creatures.)
+Costs 2 ST, plus 1 each turn the Myrmidon remains.
+Trip (T): Knocks victim down. Does no damage – but if victim is on the
+edge of a chasm, pit, river, etc., he must make a 4-die saving roll against
+adjDX to avoid falling in. The Trip spell costs 2 ST, or 4 ST if target has
+30 ST or over.
+_________________________
+_______________________
+IQ 11 SPELLS
+Control Animal (T): Puts any one animal under wizard’s control as long as
+spell is maintained. Works only on real animals; if the target was actually
+an illusion or image, it vanishes when the spell strikes. A controlled animal
+will follow most orders, including orders to attack its friends (see Control
+Spells) but gets a 3-die saving roll against IQ when the spell first hits. This
+spell does NOT affect humanoids or dragons. It does affect wolves, bears,
+etc. Cost: 2 ST, plus 1 per turn maintained.
+•2•
+
+Create Wall (C): Creates a solid wall in one hex – looks like a real 10-foot
+high wall. This spell cannot be cast over a figure or part of a figure to entomb him/her in solid rock; cast at a hex containing a figure, it fails. (A wall
+cast on an image, or part of one, will destroy it.) Cost: 2 ST.
+Destroy Creation (T): Removes any one thing created by a Creation spell,
+with the following exceptions: (1) Has no effect on summoned beings. (2)
+Only removes one hex of a multi-hex fire, wall, or shadow. (3) Has no effect
+on a multi-hex image or illusion of a living being. Costs 1 ST.
+Illusion (C): Creates any 1-hex illusion. See Images and Illusions. Cost: 2 ST.
+Reverse Missiles (T): Causes any missile spells (or missile or thrown weapons) aimed at the spell’s subject to turn against the one(s) who fired them
+instead. When this spell is cast, the player records the fact. He shows it to
+the other player at the end of the first turn in which missiles were fired at the
+spell’s subject. All missiles which hit that figure are then considered to have
+hit the figure who fired them, instead (same damage). This may result in “replaying” part of a turn, to achieve the proper unpleasant surprise to the player
+who fired the missiles. (Exception: In Melee, if a highly dexterous archer fired
+two arrows at the protected figure in one turn, only the first arrow turns back.
+The archer is then warned, and no second arrow is fired.) This spell has no
+effect against non-missile attacks. Cost: 2 ST, plus 1 each turn it is maintained.
+If the character who fired the missile is also protected by Reverse Missiles,
+the missile flies back and forth (one round trip per turn) until it strikes some
+intervening object or one of the spells ceases.
+Rope (C): Creates a magical rope to entangle victim, halving his MA. The
+rope also immediately reduces the victim’s DX by 2. Each later turn the rope
+remains, it reduces his DX by one more . . . so it is -3 on the 2nd turn the
+rope remains, -4 on the 3rd turn, etc. To remove the rope, the victim must
+stand still for a turn, doing nothing else, and make a saving roll on 3 dice
+against adjDX. A successful saving roll removes the rope, which vanishes. If
+a figure’s DX is reduced to 2 or less by a rope, he falls to the floor, helpless.
+Note: A figure in an adjoining hex can remove another figure’s rope in the
+same way – by standing still and making his own adjDX roll on 3 dice. The
+Rope spell is not effective against creatures with a ST of 20 or more. For that
+you need the Giant Rope spell (IQ 15). Cost of the regular Rope spell is 2 ST.
+Sleep (T): Puts victim to sleep until he (a) awakens naturally, which takes
+several hours, (b) is hit, or (c) is shaken awake (takes 2 turns) by a figure
+in an adjoining hex. A sleeping figure falls down. Does not work on figures
+with basic ST of 20 or more. Cost: 3 ST.
+Summon Bear (C): Brings a bear (ST 30, DX 11, IQ 6, MA 8, bite does 2d +
+2 damage) to follow the wizard’s orders. (See Summoned Creatures.) Costs
+4 ST, plus 1 each turn the bear remains.
+_________________________
+_______________________
+IQ 12 SPELLS
+3-Hex Fire (C): Like the Fire spell, but covering up to 3 connected hexes.
+Cost: 2 ST.
+3-Hex Shadow (C): Like the Shadow spell, but covering up to 3 connected
+hexes. Cost: 2 ST.
+Blast (S): Does 1 die of damage (roll separately) to every creature, friend
+or foe, in the wizard’s hex or adjacent to it, except the wizard. Costs 2 ST.
+•3•
+
+Break Weapon (T): Shatters one weapon, shield, staff, etc., in target’s
+hand. Does not work on enchanted swords, shields, and so on . . . they are
+constructed with protection against this spell. Broken weapons do half damage (round down); broken staffs are useless. Cost: 3 ST.
+Fireball (M): Does 1d-1 damage for every ST point the wizard puts into it,
+but never less damage than the ST used. Can set fire to flammable objects.
+Freeze (T): Totally freezes victim (stops all actions, stiffens body) for 2 to 12
+turns (after the spell strikes, wizard rolls two dice). Does not work on beings
+with basic ST of 30 or more. Costs 4 ST.
+Invisibility (T): Lets wizard make himself (or another) invisible. The counter
+for an invisible figure is removed from the map (see Hidden Movement).
+An attack against an invisible figure is made at -6 DX (and, of course, has
+no effect if directed against the wrong hex). Invisibility does not make one
+inaudible or unsmellable, and is no use in the dark except against creatures
+who see in the dark normally. Otherwise, the effects of invisibility on your
+foes’ DX are not cumulative with those of Blur, Dazzle, Shadowed hexes,
+or darkness. Cost: 3 ST to cast, plus 1 for each turn the spell is maintained.
+Mage Sight (T): Allows its subject to see objects concealed by Blur, Invisibility, Shadow, or ordinary darkness. Cost: 2 ST, plus 1 per later turn.
+_________________________
+_______________________
+IQ 13 SPELLS
+3-Hex Wall (C): Like the Wall spell, but affecting any 3 connected hexes.
+Cost: 4 ST.
+4-Hex Image (C): Lets wizard create an image (see Images and Illusions) of
+anything no greater than 4 hexes in size. Cost: 2 ST.
+Control Person (T): Puts any one human or humanoid, natural or summoned,
+under wizard’s control for as long as spell is maintained. If target was an image or illusion, it disappears. A controlled person will follow most orders, including orders to attack his former friends. (See Control Spells.) Note: target
+of the spell gets a saving roll against his IQ on 3 dice. This spell does not work
+on animals or dragons. Cost: 3 ST, plus 1 each turn the spell is maintained.
+Flight (T): Lets subject (temporarily) fly. (See Flight rules under Movement.)
+Any attack on a flying (one-hex) creature is at -4 DX. A creature flying by
+this spell has a MA of 12. Such a creature will not be used to flight – so if
+he/she attacks while in the air, his/her DX will be adjusted by -2 for regular
+physical attacks or magic spells cast on another, and -4 for attacks with
+physical thrown or missile weapons. This is in addition to the -4 DX mentioned above if a flying creature is the target attacked. If one flying wizard
+aims a staff stroke at another, his DX is -6; -2 because he’s flying, and -4
+because his target is. This is clearly not an effective way to attack. Costs 3
+ST to cast, plus 1 per turn flying.
+Slippery Floor (T): Makes the floor over one megahex extremely slick.
+When any figure enters the slippery area, the player who cast the spell reveals it. Any figure in a hex made slippery, or any figure entering a slippery
+hex, must make his saving roll (3 dice against DX) to avoid falling in that
+hex. If the figure then enters another slippery hex in the same turn, it must
+roll again, and so on . . . and even if a figure simply stands still in a slippery
+hex, it must make the saving roll to avoid falling. A figure which falls in a
+slippery hex may try to stand next turn, but must make its 3-die DX roll to
+•4•
+
+do so. Of course, it may choose to lie still, or to crawl out (see Crawling
+under Movement). This requires no DX roll.
+To figure the range for this spell, or any other thrown spell covering one
+MH, count the hexes from the wizard to the center of the MH involved; this
+is the DX penalty. This spell does affect images and illusions. Cost: 3 ST.
+Stone Flesh (T): Gives subject’s body the power to act as armor, stopping 4
+hits per attack. The protective effect of Stone Flesh is cumulative with any
+other natural or magical hit-stopping ability (armor, fur, etc.) of its possessor, but not with Iron Flesh. There is no way to tell if a figure is protected
+by this spell except to hit it or use Reveal Magic. Costs 2 ST to cast, plus 1
+each turn the spell continues.
+Stop (T): The victim of this spell has a MA of zero for the next four turns. He
+or she may do anything else, but may not move to another hex under any
+circumstances. Cost: 3 ST.
+Summon Gargoyle (C): Brings a Gargoyle (ST 20, DX 11, IQ 8, MA 8 on
+ground, 16 in air, fist does 2 dice damage) to serve wizard. (See Summoned
+Creatures.) Costs 4 ST, plus 1 each turn the Gargoyle stays.
+_________________________
+_______________________
+IQ 14 SPELLS
+4-Hex Illusion (C): Lets wizard create any illusion (see Images and Illusions) no greater than 4 hexes in size. Cost: 3 ST.
+Dispel Illusions (S): Causes all illusions within 5 megahexes of the wizard’s
+own megahex to vanish immediately, regardless of their size and who created them. Cost: 5 ST.
+Lightning (M): Does 1 die damage for each ST point the wizard puts into it.
+Can also be used to blast through solid objects – for instance, a created Wall
+hex will vanish after taking 5 hits from lightning, and the remainder (if any)
+of the lightning force passes straight through.
+Remove Thrown Spell (T): Negates the effect of any Thrown-­type spell . . .
+can be used to dissolve an enemy spell, or to eliminate a foe’s own magic
+protection. Has no effect on spells other than Thrown type, on magic items,
+or on the Spell Shield. Cost: 2 ST.
+Spell Shield (T): Prevents any spells (hostile or otherwise) from being cast
+on its subject – that is, protects against effects of all Special, Missile, and
+Thrown spells. Does not affect spells already cast. Does not protect against
+ordinary physical force, including damage done by created beings or things,
+damage done by weapons (ordinary, magical, or staffs), or the effects of
+magic ropes and slippery floors. When a spell hits a figure protected by
+Spell Shield, the wizard casting the spell loses the entire ST cost for that
+spell, because it succeeded but was nullified. Exception – a wizard casting
+the Death Spell at a protected figure loses only 1 ST. Cost of the Spell
+Shield: 3 ST, plus 1 per turn it is maintained.
+Summon Giant (C): Brings a giant (ST 30, DX 9, IQ 8, MA 8, no armor,
+club does 3d+3 damage) to follow the wizard’s orders. (See Summoned
+Creatures.) Costs 4 ST, plus 1 for each turn the giant stays.
+_________________________
+_______________________
+IQ 15 SPELLS
+7-Hex Image (C): Lets wizard create any image occupying up to 7 connected
+hexes. (See Images and Illusions.) Costs 4 ST.
+7-Hex Shadow (C): Like a Shadow spell, but affecting up to 7 connected
+hexes. Cost: 3 ST.
+•5•
+
+Giant Rope (C): A strong version of the Rope spell. Cast on a creature of ST
+20 or more, it has just the same effect that an ordinary Rope spell has on
+a human. Cast on a weaker creature, it has the effect of two simultaneous
+Rope spells, which must be removed one at a time. Cost: 5 ST.
+Iron Flesh (T): Similar to Stone Flesh, but better: lets subject’s body stop 6
+hits per attack. Costs 3 ST, plus 1 per turn maintained.
+Megahex Avert (T): Like an Avert spell, but cast on the occupants of a whole
+megahex at once – that is, any hex and all hexes adjacent to it. If the spell
+works, every figure in the MH is under an Avert spell, as above. Costs 3 ST
+to cast, plus 1 each turn the spell is held.
+Summon Small Dragon (C): Brings a small (4-hex) dragon (ST 30, DX 13,
+IQ 16, MA 6 on ground, 16 in air; breath does 2 dice damage, claw does 2d2) to follow the wizard’s orders. (See Dragons and Summoned Creatures.)
+Costs 5 ST, plus 1 each turn the small dragon stays.
+Teleport (S): Instantly “blinks” wizard to another hex. He may choose any
+facing he likes in the new hex. He does not have to be able to see the hex he
+is going to, but if he comes out in a hex with a solid object, he dies – and so
+does the object, if it was alive. Illusions count as solid; images disappear.
+Cost: 1 ST for each megahex distance transported.
+_________________________
+_______________________
+IQ 16 SPELLS
+7-Hex Fire (C): Like the Fire spell, but cast on any 7 connected hexes. Costs 4 ST.
+7-Hex Illusion (C): Creates an illusion of anything occupying no more than
+7 connected hexes (see Images and Illusions). Costs 5 ST.
+7-Hex Wall (C): Like the Wall spell, but affecting any 7 connected hexes.
+Note: Although you cannot entomb a figure by putting a wall in its own
+hex, this spell can let you put walls in every hex surrounding a figure, thus
+trapping it. Cost: 6 ST.
+Death Spell (T): When this spell is cast, compare the ST of the wizard with
+that of the victim. The weaker one immediately goes to ST -1 and dies, and
+the stronger one loses that much ST. Therefore, if a wizard uses this spell
+on a stronger opponent, it means his own death instead. Armor, Stone or
+Iron Flesh, etc., do not protect against this spell, although the Spell Shield
+stops it.
+Megahex Sleep (T): A Sleep spell which affects every figure with ST less
+than 20 (except the wizard himself) in a single megahex, or any single figure with ST of 50 or less. Otherwise, just like Sleep, above. Costs 8 ST.
+Summon Dragon (C): Brings a 7-hex dragon (ST 60, DX 14, IQ 20, MA 8
+on ground, 20 in air; breath does 3 dice damage, claw does 2 dice damage)
+to serve the wizard (see Dragons and Summoned Creatures). Costs 5 ST,
+plus two each turn the dragon stays.
+
+DX ADJUSTMENT TABLE
+
+All applicable DX adjustments are cumulative. The only exception involves adjustments when Invisibility is concerned; an invisible figure derives
+no extra advantage from being in or on the far side of Shadow or from being
+Blurred, for instance. See Invisibility.
+For the convenience of those playing with both Wizard and Melee rules,
+this table includes DX adjustments given in Melee.
+•6•
+
+DX ADJUSTMENTS FOR PHYSICAL ATTACKS
+Striking from enemy’s side
++2
+Striking from enemy’s rear
++4
+Crossbowman firing from prone position
++1
+Pole-weapon user standing still, against opponent
+who moved into him and/or charge-attacked
++2
+Wizard using any weapon except his staff or a dagger
+-4
+Fighter using a weapon in each hand and striking
+with both in the same turn
+-4 on both attacks
+You’re standing in a hex with a body
+-2
+DX ADJUSTMENTS DUE TO TYPE OF TARGET
+(FOR EITHER CASTING OF SPELLS OR PHYSICAL ATTACKS )
+Target is invisible
+-6
+Target is Blurred
+-4
+Target is in a Shadow hex
+-4
+Target is a one-hex figure in flight
+-4
+Target is a Giant Snake
+-3
+Target is a multi-hex figure in flight
+-1
+DX ADJUSTMENTS DUE TO
+YOUR PHYSICAL HANDICAPS
+You’re in total darkness or a Shadow hex, or firing a missile spell
+or missile/thrown weapon through Shadow
+-6
+You’re using a Flight spell and attempting a physical attack
+with a thrown or missile weapon
+-4
+You’ve been affected by a Dazzle spell
+-3
+You’re using a Flight spell and attacking
+with a physical weapon or attempting to cast any spell
+-2
+You’re standing in a fire
+-2
+You took 5 or more hits since your last turn, not counting
+ST drain from casting spells
+-2
+You’re in a Rope spell
+-2, minus 1 more for
+every turn the rope has been on you
+You’ve been hit by a Clumsiness spell
+-2 for every ST in the spell
+You were knocked down last turn
+DX 0 for most purposes.
+You can’t do anything this turn except (try to) stand up, or crawl
+Your ST is reduced to 3 or less
+-3
+DX ADJUSTMENTS FOR YOUR ARMOR & SHIELD (MELEE)
+Small shield
+0
+Large shield
+-1
+Cloth armor
+-1
+Leather armor
+-2
+Chainmail
+-3
+Half plate
+-4
+Plate armor
+-5
+Main-gauche
+0
+Wizard whose weapon or armor
+is iron or steel, instead of silver
+an extra -4 to Spellcasting only
+•7•
+
+DX ADJUSTMENTS FOR THROWN SPELL OR
+THROWN WEAPON RANGE
+-1 for every hex from figure throwing spell (or weapon) to the target’s hex.
+Note: A figure using a thrown weapon must “roll to miss” each intervening
+figure along the straight line drawn between the centers of the attacker’s and
+victim’s hexes. If the thrown weapon misses, the attacker must then roll either to miss or to hit (his choice) each further figure along the line-of-flight
+on the far side of the original target, re-adjusting DX for range to each new
+target. However, a figure using thrown spells does not have to “roll to miss.”
+The spell is a direct attempt at its target, and hits that target or nothing.
+DX ADJUSTMENTS FOR MISSILE SPELL OR
+MISSILE WEAPON RANGE
+If target is 0, 1, or 2 megahexes away
+no DX penalty
+If target is 3 or 4 MH away
+-1
+If target is 5 or 6 MH away
+-2
+Greater Distance
+. . . and so on as distance increases.
+
+Note: A figure using either missile weapons or missile spells must “roll
+to miss” each intervening figure along the straight line drawn between the
+centers of the attacker’s and victim’s hexes, as well as rolling either to hit or
+to miss (as he wishes) any figure farther along the line if the spell or missile
+misses its intended target. DX is re­adjusted for range to each new figure.
+
+MONSTER/BEAST TABLE
+
+The following table gives the characteristics for creatures used in this game and
+Melee. MA is movement allowance. The
+first number is ground movement, and
+the second number (if any) is movement
+in flight. (Any creature which cannot normally fly has an MA of 12 when using the
+Flight spell.) ST, DX, and IQ are the values for a summoned creature of that type
+(you may change these for wizard’s pets,
+etc.). Armor indicates the natural armor of the creature – that is, the number
+of hits from each attack that are negated by its natural physical protection.
+Damage indicates number of dice rolled, and amount added or subtracted
+from the total, to find the damage the creature does when it hits.
+
+Creature
+MA
+Myrmidon
+10
+Wolf
+12
+Giant snake 6
+Bear
+8
+Gargoyle
+8/16
+Giant
+10
+Small dragon 6/16
+Dragon
+8/20
+
+ST
+12
+10
+12
+30
+20
+30
+30
+60
+
+DX
+12
+14
+12
+11
+11
+9
+13
+14
+
+IQ
+8
+6
+4
+6
+8
+8
+16
+20
+
+Armor
+none
+1 hit
+none
+2 hits
+3 hits
+none
+3 hits
+5 hits
+
+Damage
+sword: 2d or hands: 1d-3
+bite: 1d+1
+bite: 1d+1
+claw: 2d+2
+fist: 2d
+club: 3d+3 or hands: 2d-1
+breath: 2d and claw: 2d-2
+breath: 3d and claw: 2d
+
+thefantasytrip.game
+•8•
+
+
