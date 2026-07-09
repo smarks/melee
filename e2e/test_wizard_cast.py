@@ -190,6 +190,53 @@ def test_field_a_wizard_from_the_setup_editor(live_server, page: Page) -> None:
     assert wizard["intelligence"] >= 8
 
 
+def test_wizard_spell_picker_drops_an_unchecked_spell(live_server, page: Page) -> None:
+    # Spells are picked like weapons: unchecking a spell in the editor's picker
+    # removes it from the wizard that starts the match. Here the preset knows Magic
+    # Fist + Stone Flesh; unchecking Stone Flesh leaves a Magic-Fist-only wizard.
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add AI player").click()
+    page.locator("#editCharBtn").click()
+
+    card = page.locator("#editorRoster .card").first
+    card.get_by_role("button", name=re.compile("Wizard")).click()
+    stone_flesh = card.locator('[data-spell="stone_flesh"]')
+    expect(stone_flesh).to_be_checked(timeout=15_000)      # preset knows it
+    stone_flesh.uncheck()
+    card.locator("[data-name]").fill("Radagast")
+
+    page.get_by_role("button", name="Start match").click()
+    page.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
+    gid = page.url.rstrip("/").rsplit("/", 1)[-1]
+
+    state = page.evaluate(
+        "async (g) => (await (await fetch(`/api/game/${g}`)).json()).state", gid)
+    wizard = next(f for f in state["figures"] if f["name"] == "Radagast")
+    assert wizard.get("spells_known") == ["magic_fist"]    # Stone Flesh dropped
+
+
+def test_wizard_spell_picker_gates_spells_above_iq(live_server, page: Page) -> None:
+    # The picker gates spells by IQ the way weapons gate by ST: a spell whose tier
+    # exceeds the wizard's IQ is disabled and drops out of the picked set. Stone Flesh
+    # is IQ 13, so lowering IQ to 8 greys it out; Magic Fist (IQ 8) stays available.
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add AI player").click()
+    page.locator("#editCharBtn").click()
+
+    card = page.locator("#editorRoster .card").first
+    card.get_by_role("button", name=re.compile("Wizard")).click()
+    iq_input = card.locator('[data-stat="intelligence"]')
+    expect(iq_input).to_be_visible(timeout=15_000)
+    iq_input.fill("8")
+    iq_input.dispatch_event("input")
+
+    stone_flesh = card.locator('[data-spell="stone_flesh"]')
+    magic_fist = card.locator('[data-spell="magic_fist"]')
+    expect(stone_flesh).to_be_disabled()                  # IQ 13 spell, IQ 8 wizard
+    expect(stone_flesh).not_to_be_checked()               # and dropped from the set
+    expect(magic_fist).to_be_enabled()                    # IQ 8 spell still legal
+
+
 def test_wizards_game_mode_seats_a_wizard_per_side(live_server, page: Page) -> None:
     # The "Wizards" Game Control mode (#wizard-milestone): selecting it and pressing
     # New Game seats one fighter + one wizard on each side, under Classic rules. Drives

@@ -2095,6 +2095,14 @@ function spellDisplayName(id) {
   return fromCat ? fromCat.name
     : String(id).replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
+// A spell's cost as the picker shows it: type letter + ST cost (a range when a
+// missile spell can be powered up, 1..max_st), the spell analogue of a weapon's
+// damage/str_req shown next to each weapon option.
+function spellCostText(spell) {
+  const cost = (spell.max_st && spell.max_st > spell.st_cost)
+    ? `${spell.st_cost}–${spell.max_st} ST` : `${spell.st_cost} ST`;
+  return `${spell.type}, ${cost}`;
+}
 
 function buildRoster(profile, teams, perTeam) {
   const tmpl = ARCHETYPES[profile] || ARCHETYPES["Classic Melee"];
@@ -2259,6 +2267,13 @@ function applySpecToCard(card, spec) {        // fill a card from a saved spec (
   card.querySelectorAll("[data-skillkey]").forEach(i => { if (spec[i.dataset.skillkey] != null) i.value = spec[i.dataset.skillkey]; });
   const shieldReady = card.querySelector("[data-shieldready]");
   if (shieldReady && spec.shield_ready != null) shieldReady.checked = spec.shield_ready;
+  // A saved wizard round-trips its spell picks into the checkbox list, the mirror
+  // of filling the weapon selects above.
+  if (Array.isArray(spec.spells)) {
+    const known = new Set(spec.spells);
+    card.querySelectorAll("[data-spell]").forEach(
+      box => box.checked = known.has(box.dataset.spell));
+  }
   refreshCard(card);
 }
 async function saveCharacter(card) {
@@ -2305,16 +2320,24 @@ function cardInner(f) {     // the editable fields shared by the editor and the 
     + `<span class="muted" data-shieldready-note></span></div>`
     + `<div class="hint" data-err></div>`;
 }
-// A wizard's editor card (Gate 2 minimal): ST/DX/IQ spread + armour, its spell
-// loadout carried on a data attribute (readCard round-trips it). No weapon/shield
-// picker — a wizard casts bare-handed (p.23); the full live-gated spell-picker is
-// Gate 3. The [data-spells] element is also the flag isWizardCard() keys on.
+// A wizard's editor card: ST/DX/IQ spread + armour + a spell picker. Spells are
+// picked exactly like a fighter's weapons — a catalog-driven control (one checkbox
+// per spell in CAT.spells) whose legality is gated by an attribute: weapons gate on
+// ST (disableByStrength), spells gate on IQ (disableSpellsByIq). No weapon/shield
+// picker — a wizard casts bare-handed (p.23). The [data-spells] container is also
+// the flag isWizardCard() keys on, and readCard reads the checked boxes from it.
 function wizardCardInner(f) {
   const iq = f.intelligence || 8;
-  const spellNames = f.spells.map(spellDisplayName).join(", ");
+  const known = new Set(f.spells || []);
   const stat = (field, label, value) =>
     `<label>${label} <input type="number" data-stat="${field}" value="${value}" `
     + `min="8" max="30" style="width:52px"></label>`;
+  const spellRows = (CAT.spells || []).map(spell =>
+    `<label class="spellpick" style="display:block">`
+    + `<input type="checkbox" data-spell="${spell.id}" `
+    + `${known.has(spell.id) ? "checked" : ""}> ${escapeHtml(spell.name)} `
+    + `<span class="muted">(IQ ${spell.iq_tier}, ${escapeHtml(spellCostText(spell))})</span>`
+    + `</label>`).join("");
   return `<div><span class="chip ${f.side}">${f.side}</span> `
     + `<input data-name value="${escapeHtml(f.name)}" style="width:130px"> `
     + `<span class="muted">— 🔮 Wizard</span></div>`
@@ -2323,8 +2346,9 @@ function wizardCardInner(f) {
     + `<span class="muted" data-budget></span></div>`
     + `<div style="margin-top:6px">Armour <select data-eq="armor">`
     + `${optionTags(CAT.armors, f.armor || "None")}</select></div>`
-    + `<div style="margin-top:6px" class="muted" data-spells='${JSON.stringify(f.spells)}'>`
-    + `Spells: ${escapeHtml(spellNames)} · casts bare-handed</div>`
+    + `<div style="margin-top:6px" data-spells>`
+    + `<div class="muted">Spells known <span data-spellcount></span> · casts bare-handed</div>`
+    + spellRows + `</div>`
     + `<div class="hint" data-err></div>`;
 }
 function fighterCard(f, side_i) {
@@ -2377,13 +2401,14 @@ function readCard(card) {
   }
   const shieldReady = card.querySelector("[data-shieldready]");
   if (shieldReady) f.shield_ready = shieldReady.checked;
-  // A wizard card carries its spell loadout on the [data-spells] element; round-trip
-  // it (chargen keys "is this a wizard?" on a non-empty spells list). A wizard casts
-  // bare-handed, so its weapon/shield fields are empty (chargen._validate_wizard).
+  // A wizard card picks its spells from the [data-spells] checkbox list, exactly as
+  // a fighter picks weapons from the [data-eq] selects (chargen keys "is this a
+  // wizard?" on a non-empty spells list). A wizard casts bare-handed, so its
+  // weapon/shield fields stay empty (chargen._validate_wizard).
   const spellsEl = card.querySelector("[data-spells]");
   if (spellsEl) {
-    try { f.spells = JSON.parse(spellsEl.dataset.spells || "[]"); }
-    catch (e) { f.spells = []; }
+    f.spells = Array.from(card.querySelectorAll("[data-spell]:checked"))
+                    .map(box => box.dataset.spell);
     f.weapon = "None"; f.weapon2 = "None"; f.shield = "None";
   }
   return f;
@@ -2393,6 +2418,17 @@ function disableByStrength(select, strength, offset) {
   CAT.weapons.forEach((w, idx) => {
     const opt = select.options[idx + offset];
     if (opt) opt.disabled = (w.str_req || 0) > strength;
+  });
+}
+// The spell analogue of disableByStrength: a spell whose IQ tier exceeds the
+// wizard's IQ can't be known, so grey out its checkbox and drop it if it was
+// somehow checked (an IQ that just dropped below a picked spell's tier).
+function disableSpellsByIq(card, intelligence) {
+  card.querySelectorAll("[data-spell]").forEach(box => {
+    const spell = (CAT.spells || []).find(s => s.id === box.dataset.spell);
+    const tooHigh = !!spell && (spell.iq_tier || 0) > intelligence;
+    box.disabled = tooHigh;
+    if (tooHigh) box.checked = false;
   });
 }
 
@@ -2439,8 +2475,22 @@ function refreshCard(card) {
   const f = readCard(card);
   let note = "", err = "";
   if (isWizardCard(card)) {
-    // A wizard spends ST + DX + IQ = 32, each >= 8 (the 3-attribute spread). No
-    // weapon/shield selects on a wizard card, so skip the fighter equip logic.
+    // A wizard spends ST + DX + IQ = 32, each >= 8 (the 3-attribute spread) and
+    // picks spells like weapons: gate the checkboxes by IQ (the spell analogue of
+    // gating weapons by ST), then read the surviving picks and enforce the same
+    // rules chargen._validate_wizard does — at most IQ spells, at least one.
+    const iq = f.intelligence || 0;
+    disableSpellsByIq(card, iq);
+    const spells = Array.from(card.querySelectorAll("[data-spell]:checked"))
+                        .map(box => box.dataset.spell);
+    for (const id of spells) {
+      const spell = (CAT.spells || []).find(s => s.id === id);
+      if (spell && (spell.iq_tier || 0) > iq) err = `${spell.name} needs IQ ${spell.iq_tier}`;
+    }
+    if (spells.length > iq) err = `a wizard may know at most IQ (${iq}) spells`;
+    if (spells.length === 0) err = err || "pick at least one spell";
+    const count = card.querySelector("[data-spellcount]");
+    if (count) count.textContent = `${spells.length}/${iq}`;
     const total = (f.strength || 0) + (f.dexterity || 0) + (f.intelligence || 0);
     note = `ST+DX+IQ ${total}/32` + (total !== 32 ? " — must equal 32" : "");
     card.querySelector("[data-budget]").textContent = note;
