@@ -19,7 +19,7 @@ stay local while the stat validation is portable.
 """
 from __future__ import annotations
 
-from .figure import RACE_SPREADS, Figure, Race, create_fighter
+from .figure import RACE_SPREADS, Figure, Race, create_fighter, create_wizard
 from .rules_data import (
     ARMORS,
     DAGGER,
@@ -28,12 +28,32 @@ from .rules_data import (
     SHIELDS,
     WEAPONS,
 )
+from .spells import SPELLS
 from .tarmar import create_tarmar_fighter
 
 # ---- Classic Melee stat rules ----------------------------------------------
 MELEE_STATS = ("strength", "dexterity")
 MELEE_TOTAL = HUMAN_START_TOTAL      # ST + DX
 MELEE_MIN = HUMAN_MIN_ATTRIBUTE      # each at least this
+
+# ---- Classic wizard stat rules (TFT: Wizard, p.3-4) ------------------------
+# A wizard spends its points across THREE attributes — ST, DX, and IQ — each at
+# least 8, summing to 32 (the human 8/8/8 base + 8 free). ST is both the injury
+# pool and the spell-power pool; IQ gates how many spells and which tiers.
+WIZARD_STATS = ("strength", "dexterity", "intelligence")
+WIZARD_TOTAL = 32
+WIZARD_MIN = HUMAN_MIN_ATTRIBUTE     # each attribute (incl. IQ) at least 8
+DEFAULT_INTELLIGENCE = HUMAN_MIN_ATTRIBUTE  # a fighter is IQ 8 (Wizard p.23)
+
+
+def _is_wizard(profile_name: str, spec: dict) -> bool:
+    """Whether ``spec`` describes a Classic wizard (a Classic figure with spells).
+
+    A wizard is the Classic Melee profile carrying a non-empty ``spells`` list;
+    an empty/absent list is an ordinary fighter, so back-compat holds (every
+    existing fighter spec is a non-wizard).
+    """
+    return profile_name == "Classic Melee" and bool(spec.get("spells"))
 
 # ---- Tarmar stat rules (portable to tarmar_rules / the studio) -------------
 TARMAR_STATS = ("strength", "dexterity", "intelligence",
@@ -111,6 +131,14 @@ def catalog() -> dict:
              "dx_penalty": shield.dx_penalty}
             for shield in SHIELDS.values()
         ],
+        # The castable spells (TFT: Wizard) for the wizard spell-picker, tagged
+        # with the IQ tier that gates them and the type/ST-cost the UI shows.
+        "spells": [
+            {"id": spell.id, "name": spell.name, "type": spell.type,
+             "iq_tier": spell.iq_tier, "st_cost": spell.st_cost,
+             "max_st": spell.max_st, "continuing": spell.continuing}
+            for spell in SPELLS.values()
+        ],
     }
 
 
@@ -124,6 +152,43 @@ def stat_rules(profile_name: str) -> dict:
             "min": MELEE_MIN, "total": MELEE_TOTAL}
 
 
+def _validate_wizard(spec: dict, errors: list[str]) -> None:
+    """Append any wizard-specific rule problems to ``errors`` (TFT: Wizard).
+
+    A wizard spends ST + DX + IQ = 32, each >= 8; knows at most IQ spells, every
+    one a real spell whose tier is within its IQ; and keeps its hands free for
+    casting (no shield, no non-staff weapon, p.23).
+    """
+    for stat in WIZARD_STATS:
+        value = spec.get(stat)
+        if not isinstance(value, int) or value < WIZARD_MIN:
+            errors.append(f"a wizard's {stat} must be at least {WIZARD_MIN}")
+    values = [spec.get(stat) for stat in WIZARD_STATS]
+    if all(isinstance(value, int) for value in values):
+        total = sum(values)
+        if total != WIZARD_TOTAL:
+            errors.append(
+                f"a wizard's ST + DX + IQ must total {WIZARD_TOTAL} (got {total})")
+    intelligence = spec.get("intelligence")
+    spells = spec.get("spells") or []
+    if isinstance(intelligence, int) and len(spells) > intelligence:
+        errors.append(
+            f"a wizard may know at most IQ ({intelligence}) spells "
+            f"(got {len(spells)})")
+    for spell_id in spells:
+        spell = SPELLS.get(spell_id)
+        if spell is None:
+            errors.append(f"unknown spell {spell_id!r}")
+        elif isinstance(intelligence, int) and spell.iq_tier > intelligence:
+            errors.append(
+                f"{spell.name} needs IQ {spell.iq_tier} (have {intelligence})")
+    if (spec.get("shield") or "None") != "None":
+        errors.append("a wizard cannot ready a shield while casting (p.23)")
+    if (spec.get("weapon") or "None") != "None":
+        errors.append(
+            "a wizard cannot ready a non-staff weapon while casting (p.23)")
+
+
 def validate(profile_name: str, spec: dict) -> list[str]:
     """Return a list of human-readable problems with ``spec`` (empty = legal)."""
     errors: list[str] = []
@@ -132,10 +197,14 @@ def validate(profile_name: str, spec: dict) -> list[str]:
     if not (spec.get("side") or "").strip():
         errors.append("side is required")
 
+    is_wizard = _is_wizard(profile_name, spec)
     weapon_name = spec.get("weapon")
     second_name = spec.get("weapon2")
     has_second = bool(second_name) and second_name != "None"
-    if weapon_name not in WEAPONS:
+    # A wizard casts bare-handed (a non-staff weapon is forbidden, p.23), so its
+    # "weapon" field is optional; a fighter must name a real weapon.
+    wizard_unarmed = is_wizard and weapon_name in (None, "", "None")
+    if not wizard_unarmed and weapon_name not in WEAPONS:
         errors.append(f"unknown weapon {weapon_name!r}")
     if has_second and second_name not in WEAPONS:
         errors.append(f"unknown weapon {second_name!r}")
@@ -169,6 +238,8 @@ def validate(profile_name: str, spec: dict) -> list[str]:
             value = spec.get(key, 0)
             if not isinstance(value, int) or not (0 <= value <= TARMAR_SKILL_MAX):
                 errors.append(f"{label} must be 0-{TARMAR_SKILL_MAX}")
+    elif is_wizard:
+        _validate_wizard(spec, errors)
     else:
         race, race_error = _race_from_spec(spec)
         if race_error is not None:
@@ -203,6 +274,9 @@ def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figur
         problems = validate(profile_name, spec)
         if problems:
             raise ValueError("; ".join(problems))
+
+    if _is_wizard(profile_name, spec):
+        return _build_wizard(spec)
 
     weapon = _from_catalog(WEAPONS, _required(spec, "weapon"), "weapon")
     second_name = spec.get("weapon2")
@@ -243,7 +317,33 @@ def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figur
             _required(spec, "name"), _required(spec, "strength"),
             _required(spec, "dexterity"), _required(spec, "side"),
             race=race or Race.HUMAN, validate=validate_spec, **gear)
+        # IQ is first-class in Classic now: a fighter is IQ 8 (the p.23 baseline)
+        # unless the spec raises it, so a plain fighter spec is unchanged.
+        figure.intelligence = int(spec.get("intelligence") or DEFAULT_INTELLIGENCE)
     # The archetype/class is a label, not part of the rules; carry it through
     # unchanged so an edited or custom fighter keeps its "— Knight" subtitle.
     figure.char_class = (spec.get("char_class") or "").strip()
+    return figure
+
+
+def _build_wizard(spec: dict) -> Figure:
+    """Assemble a Classic wizard from a (validated) spec (TFT: Wizard).
+
+    A wizard casts bare-handed: it carries a Dagger but readies no weapon and
+    slings any shield (p.23), so :func:`engine.state.cast_block_reason` clears it
+    to cast from the first turn. Armour is honoured (a wizard may wear it, p.23).
+    """
+    armor = _from_catalog(ARMORS, spec.get("armor") or "None", "armour")
+    figure = create_wizard(
+        _required(spec, "name"),
+        strength=_required(spec, "strength"),
+        dexterity=_required(spec, "dexterity"),
+        intelligence=_required(spec, "intelligence"),
+        side=_required(spec, "side"),
+        spells_known=list(spec.get("spells") or []),
+        has_staff=bool(spec.get("has_staff", False)),
+        armor=armor, shield=SHIELDS["None"], weapons=[DAGGER],
+        ready_weapon=None, shield_ready=False,
+    )
+    figure.char_class = (spec.get("char_class") or "Wizard").strip()
     return figure

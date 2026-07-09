@@ -42,6 +42,7 @@ class Option(str, Enum):
     CHANGE_WEAPONS = "change_weapons"  # (m) shift 1, swap to a non-missile weapon
     DISENGAGE = "disengage"          # (n) move away from engaging enemies
     HTH_ATTACK = "hth_attack"        # (b/o) enter an enemy's hex, grapple hand-to-hand
+    CAST = "cast"                    # a wizard casts a spell (TFT: Wizard, p.11)
     PICK_UP = "pick_up"              # (q) bend over, take a dropped weapon in reach
     GO_PRONE = "go_prone"            # (f) drop prone (a crossbow fires from prone at +1)
     KNEEL = "kneel"                  # (f) drop to one knee (a bow may fire from kneeling)
@@ -59,6 +60,7 @@ class OptionSpec:
     is_missile: bool      # the attack is a missile shot
     sets_dodge: bool      # DODGE this turn (forces 4 dice to hit it with a missile/thrown)
     sets_defend: bool = False  # SHIFT_DEFEND this turn (forces 4 dice to hit it in melee)
+    casts_spell: bool = False  # CAST a spell this turn (a wizard's action, not an attack)
 
 
 _SPECS: dict[Option, OptionSpec] = {
@@ -90,6 +92,13 @@ _SPECS: dict[Option, OptionSpec] = {
         Option.DISENGAGE, ENGAGED, "one", False, False, False),
     Option.HTH_ATTACK: OptionSpec(
         Option.HTH_ATTACK, ANY, "one", True, False, False),
+    # Casting is a stand-still action available whether engaged or disengaged
+    # (context ANY): a wizard stays put and casts. It is not an attack (no weapon
+    # blow), moves nothing, and dodges/defends nothing; ``casts_spell`` tags it so
+    # availability can gate it to wizards (and forbid a shield/non-staff weapon in
+    # hand, Wizard p.23).
+    Option.CAST: OptionSpec(
+        Option.CAST, ANY, "none", False, False, False, casts_spell=True),
     Option.PICK_UP: OptionSpec(
         Option.PICK_UP, ANY, "none", False, False, False),
     Option.GO_PRONE: OptionSpec(

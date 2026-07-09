@@ -368,6 +368,79 @@ def test_variety_soak_exercises_evasive_maneuvers() -> None:
         f"resolver and of assert_log_truthful went unaudited (dice_counts={dice_counts})")
 
 
+# ---- wizard-casting soak (Gate 2): a fraction of games field a caster ---------
+# The AI does not yet field wizards (Gate 3), so the casting engine is exercised
+# under the SAME invariant net by a deterministic, scripted wizard game here — a
+# wizard hurls Magic Fists and weaves Stone Flesh across several turns, every roll
+# injected (no random), with assert_state_invariants after every step and
+# assert_log_truthful over the SpellResults after every combat phase.
+
+def _wizard_vs_fighter() -> tuple[Arena, list[Figure]]:
+    """A durable wizard-vs-fighter board: the wizard is free-handed to cast."""
+    from engine.figure import create_wizard
+
+    arena = Arena(cols=14, rows=12)
+    wizard = create_wizard(
+        "Merlin", strength=18, dexterity=13, intelligence=13, side="red",
+        spells_known=["magic_fist", "stone_flesh"])
+    wizard.position = Hex(2, 5)
+    wizard.uid = "wiz"
+    foe = create_human("Brute", 14, 10, "blue",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe.position = Hex(6, 5)
+    foe.uid = "foe"
+    return arena, [wizard, foe]
+
+
+def test_wizard_casting_soak_holds_invariants() -> None:
+    """A scripted multi-turn wizard game keeps every invariant after each step.
+
+    Deterministic (injected dice only): each turn the wizard casts — Stone Flesh
+    on turn 1 (protection), then Magic Fists — while the invariant net audits the
+    state after selection, after each queue, and after resolution, and the
+    log-truthfulness check runs over the casts. A cast that would fizzle (a 17)
+    and one that hits are both scripted in, so both narration branches are
+    audited."""
+    arena, figures = _wizard_vs_fighter()
+    wizard, foe = figures
+    # Scripted stream, consumed per turn in cast draw-order (3-dice to-hit, then
+    # damage dice for a missile hit). Stone Flesh turn 1 (hit, no damage roll);
+    # Magic Fist turns 2-3 (a hit for damage, then a 17 fizzle).
+    dice = Dice(scripted=[
+        2, 2, 2,             # t1 Stone Flesh to-hit = 6 (hit)
+        2, 2, 2, 6, 6,       # t2 Magic Fist to-hit = 6, 2d damage 6+6
+        6, 6, 5,             # t3 Magic Fist to-hit = 17 (fizzle, full ST)
+    ])
+    from engine.spells import MAGIC_FIST, STONE_FLESH
+
+    state = GameState(arena, figures, dice=dice)
+    context = "wizard-cast-soak"
+
+    plan = [
+        (STONE_FLESH, wizard, 2),   # t1: self-protection
+        (MAGIC_FIST, foe, 2),       # t2: a hit for damage
+        (MAGIC_FIST, foe, 2),       # t3: a 17 fizzle (full ST lost)
+    ]
+    for turn, (spell, target, st_used) in enumerate(plan, start=1):
+        state.begin_selection()
+        assert_state_invariants(state, CLASSIC, context=f"{context} t{turn} select",
+                                phase="select")
+        wizard.current_option = Option.CAST
+        foe.current_option = Option.DO_NOTHING
+        state.queue_spell(wizard, spell, target, st_used=st_used)
+        assert_state_invariants(state, CLASSIC, context=f"{context} t{turn} queued",
+                                phase="combat")
+        state.resolve_combat()
+        assert_log_truthful(state.spell_results, context=f"{context} t{turn} resolve")
+        assert_state_invariants(state, CLASSIC, context=f"{context} t{turn} resolved",
+                                phase="combat")
+        state.end_turn()
+
+    # The wizard kept its protection and spent ST across the fight.
+    assert wizard.spell_protection == 4
+    assert wizard.damage_taken > 0
+
+
 # ---- targeted scenarios forcing the remaining zero-coverage paths (#266) -----
 # HTH piles, thrown-weapon discard, and the giant's multi-hex footprint don't
 # arise from AI-vs-AI play at all, so each is set up deliberately here and driven

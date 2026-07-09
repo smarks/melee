@@ -122,6 +122,14 @@ class Figure:
     # at creation and then survives as a secondary label; the fun ``name`` is the
     # identity. Empty for a figure with no archetype (e.g. a monster).
     char_class: str = ""
+    # ---- wizard identity (Classic magic; TFT: Wizard) ----
+    # A fighter is IQ 8 (the Melee baseline, p.23) with no spells; a wizard is the
+    # SAME Figure class with a raised IQ, a non-empty spell list, and optionally a
+    # staff. These are identity fields — chosen at chargen, carried over a rebuild
+    # and round-tripped by the editor (engine.figure.CARRY_OVER_STATE).
+    intelligence: int = 8       # IQ: gates how many spells and which tiers it knows
+    spells_known: list[str] = field(default_factory=list)  # spell ids (engine.spells)
+    has_staff: bool = False     # started with a wizard's staff (the Staff spell, p.19)
     # ---- nonhuman quirks (Section VIII) ----
     all_front: bool = False    # every facing is "front" (giant snake: no flank/rear)
     hard_to_hit: int = 0       # DX penalty it imposes on attackers (snake: 3)
@@ -164,6 +172,15 @@ class Figure:
     missile_cooldown: int = 0        # turns until a fired missile weapon reloads
     hth_opponents: list[str] = field(default_factory=list)  # uids grappled (HTH)
     hth_drew_dagger: bool = False    # readied a dagger mid-grapple (usable next turn)
+
+    # ---- wizard per-fight state (Classic magic) ----
+    # ``active_spells`` maps the id of each continuing spell in effect to the ST
+    # invested (so the Renew stage — Gate 3 — knows the upkeep). ``spell_protection``
+    # is the running hit-stopping from protection spells (Stone Flesh), read by
+    # ``Ruleset.absorbed``. Both persist for the fight (CARRY_OVER_STATE).
+    active_spells: dict[str, int] = field(default_factory=dict)
+    spell_protection: int = 0
+    cast_this_turn: bool = False     # cast a new spell this turn (one/turn, p.11)
 
     # ---- experience / advancement (Section IX) ----
     # XP earned across fights, and how many basic ST/DX points it has bought. The
@@ -322,6 +339,7 @@ PER_TURN_FLAGS: dict[str, int | bool] = {
     "defending": False,
     "dealt_st_damage_this_turn": False,
     "force_retreat_targets_this_turn": [],
+    "cast_this_turn": False,
 }
 
 
@@ -345,6 +363,16 @@ CARRY_OVER_STATE: tuple[str, ...] = (
     "experience",
     "added_st",
     "added_dx",
+    # Wizard identity + per-fight magic state (Classic magic). Identity
+    # (intelligence/spells_known/has_staff) is chosen at chargen and survives an
+    # edit; per-fight (active_spells/spell_protection) is the running magical
+    # state a wizard keeps for the whole fight — a mid-fight rebuild or a
+    # save/load must not silently drop a raised IQ or an active protection spell.
+    "intelligence",
+    "spells_known",
+    "has_staff",
+    "active_spells",
+    "spell_protection",
 )
 
 # Nonhuman creature traits (Section VIII), set by engine.monsters.create_monster
@@ -404,3 +432,39 @@ def create_human(
 ) -> Figure:
     """Create a human figure, enforcing the 24-point / min-8 spread (Section III)."""
     return create_fighter(name, strength, dexterity, side, race=Race.HUMAN, **gear)
+
+
+def create_wizard(
+    name: str,
+    *,
+    strength: int,
+    dexterity: int,
+    intelligence: int,
+    side: str,
+    spells_known: list[str] | None = None,
+    has_staff: bool = False,
+    **gear,
+) -> Figure:
+    """Create a Classic wizard: the SAME :class:`Figure` class, magically armed.
+
+    A wizard is a figure with a raised IQ (``intelligence``), a chosen spell list,
+    and optionally a staff. The 3-attribute wizard spread (ST + DX + IQ = 32, each
+    >= 8) and the spell-list legality (size and tiers gated by IQ) are validated in
+    :mod:`engine.chargen`; this constructor just assembles the figure, so a caller
+    that has already validated (or an admin building outside the rules) is not
+    re-checked here beyond the Figure's own ST/DX-positive guard.
+
+    Args:
+        strength: The injury AND spell-power pool (ST doubles as mana, p.3-4).
+        dexterity: The casting to-hit attribute.
+        intelligence: IQ -- gates which spells and how many the wizard may know.
+        spells_known: Spell ids (see :mod:`engine.spells`); empty means an
+            unarmed-of-magic figure, which then behaves exactly like a fighter.
+        has_staff: Whether the wizard began with a staff (the Staff spell, p.19).
+        **gear: Armour/shield/weapons, as for :func:`create_fighter`.
+    """
+    return Figure(
+        name=name, strength=strength, dexterity=dexterity, side=side,
+        race=Race.HUMAN, intelligence=intelligence,
+        spells_known=list(spells_known or []), has_staff=has_staff, **gear,
+    )

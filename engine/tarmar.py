@@ -398,6 +398,18 @@ class TarmarRuleset(Ruleset):
         if body_hit:
             target.body_taken += amount          # a crit reaches Body as well as Fatigue
 
+    def resolve_spell(self, dice, caster, spell, **kwargs):
+        """Tarmar has no magic system yet (the spec defines none — see #23 in the
+        design plan), and Tarmar figures carry no spells, so a cast can never be
+        queued and this is never reached. Raise loudly if it somehow is, rather
+        than silently returning a bogus result."""
+        raise NotImplementedError(
+            "Tarmar has no spell system — a TarmarFigure never casts")
+
+    def apply_spell_cost(self, caster, spell, st_used, *, fizzled):
+        raise NotImplementedError(
+            "Tarmar has no spell system — a TarmarFigure never casts")
+
     def status_after_hit(self, target):
         if target.current_body <= 0:
             return DEAD
