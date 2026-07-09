@@ -14,7 +14,7 @@ from hexarena.hex import Hex
 from engine import chargen
 from engine.arena import Arena
 from engine.facing import facing_toward as _facing_toward
-from engine.figure import Figure, create_human
+from engine.figure import Figure, create_human, create_wizard
 from engine.names import generate_distinct_names
 from engine.rules_data import (
     BROADSWORD,
@@ -86,6 +86,24 @@ def _tarmar_archetypes(side: str) -> dict[str, Figure]:
 
 
 ARCHETYPE_NAMES = ["Knight", "Swordsman", "Spearman", "Archer"]
+
+# The pick-up-game wizard preset. Same spread and spell list as the editor's
+# 🔮 Wizard fielding button (ST 9 / DX 10 / IQ 13 -> ST+DX+IQ = 32, each >= 8, the
+# chargen wizard rule), able to field both starter spells: Magic Fist (IQ 8) and
+# Stone Flesh (IQ 13). No weapon — a wizard must be bare-handed to cast (p.23).
+WIZARD_PRESET = {
+    "strength": 9,
+    "dexterity": 10,
+    "intelligence": 13,
+    "spells_known": ["magic_fist", "stone_flesh"],
+}
+
+
+def _wizard_archetype(side: str) -> Figure:
+    """A ready-made Classic wizard for ``side`` (the Wizards game mode roster)."""
+    figure = create_wizard("Wizard", side=side, **WIZARD_PRESET)
+    figure.char_class = "Wizard"
+    return figure
 
 
 def _is_default_named(figure: Figure) -> bool:
@@ -233,22 +251,37 @@ def _seat_around_edges(
 
 
 def build_game(
-    profile_name: str, team_count: int, per_team: int
+    profile_name: str, team_count: int, per_team: int, *, wizards: bool = False
 ) -> tuple[Arena, list[Figure]]:
     """A game of ``team_count`` teams x ``per_team`` combatants, placed around the
     edges of a square arena. Combatants are generated from the archetype roster
-    (player editing/picking is layered on later)."""
+    (player editing/picking is layered on later).
+
+    ``wizards`` selects the Wizards game mode: the LAST combatant on each side is a
+    ready-made wizard instead of an archetype fighter, so the common per_team=2
+    case seats one fighter plus one wizard per side. Magic is Classic-only, so this
+    mode always builds Classic figures regardless of ``profile_name``.
+    """
     team_count = max(2, min(team_count, MAX_TEAMS))
     per_team = max(1, min(per_team, MAX_PER_TEAM))
     arena = Arena(cols=13, rows=13)
     zones = _start_zones(arena, team_count, per_team)
-    make = _tarmar_archetypes if profile_name == "Tarmar" else _archetypes
+    make = _archetypes if wizards else (
+        _tarmar_archetypes if profile_name == "Tarmar" else _archetypes)
     teams: list[list[Figure]] = []
     for team_index, team_id in enumerate(TEAM_IDS[:team_count]):
         roster = make(team_id)
-        teams.append([
-            roster[ARCHETYPE_NAMES[combatant_index % len(ARCHETYPE_NAMES)]]
-            for combatant_index in range(len(zones[team_index]))])
+        seats = len(zones[team_index])
+        team: list[Figure] = []
+        for combatant_index in range(seats):
+            # Wizards mode: the last seat on each side is a wizard, the rest
+            # fighters -> per_team=2 gives the requested 1 fighter + 1 wizard.
+            if wizards and combatant_index == seats - 1:
+                team.append(_wizard_archetype(team_id))
+            else:
+                team.append(
+                    roster[ARCHETYPE_NAMES[combatant_index % len(ARCHETYPE_NAMES)]])
+        teams.append(team)
     figures = _seat_around_edges(teams, zones)
     _finalize_figures(figures)
     return arena, figures

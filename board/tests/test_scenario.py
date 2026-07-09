@@ -44,6 +44,36 @@ def test_build_game_gives_distinct_fun_names_and_keeps_the_class():
     assert all(f.name not in scenario.ARCHETYPE_NAMES for f in figures)
 
 
+def test_wizards_mode_seats_one_fighter_and_one_wizard_per_side():
+    _, figures = scenario.build_game("Classic Melee", 2, 2, wizards=True)
+    assert len(figures) == 4
+    for side in scenario.TEAM_IDS[:2]:
+        side_figures = [f for f in figures if f.side == side]
+        wizards = [f for f in side_figures if f.spells_known]
+        fighters = [f for f in side_figures if not f.spells_known]
+        assert len(wizards) == 1 and len(fighters) == 1, f"side {side} roster"
+        wizard = wizards[0]
+        assert wizard.char_class == "Wizard"
+        assert wizard.name != "Wizard"                    # got a creative name
+        assert wizard.intelligence == 13
+        assert set(wizard.spells_known) == {"magic_fist", "stone_flesh"}
+        assert not wizard.weapons                         # bare-handed, can cast
+
+
+def test_wizards_mode_pins_classic_even_if_asked_for_tarmar():
+    # Magic is Classic-only; the roster mode forces Classic-shaped figures.
+    _, figures = scenario.build_game("Tarmar", 2, 2, wizards=True)
+    wizard = next(f for f in figures if f.spells_known)
+    assert wizard.intelligence == 13
+    assert set(wizard.spells_known) == {"magic_fist", "stone_flesh"}
+
+
+def test_wizards_mode_single_seat_is_a_wizard():
+    _, figures = scenario.build_game("Classic Melee", 2, 1, wizards=True)
+    assert len(figures) == 2
+    assert all(f.spells_known for f in figures)
+
+
 def test_char_class_is_serialized_alongside_the_fun_name():
     from hexarena.dice import Dice
 

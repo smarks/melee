@@ -220,12 +220,18 @@ function computerSides() {
     .filter(Boolean).join(",");
 }
 async function startSetup() {
-  const p = encodeURIComponent($("profile").value);
+  // "Wizards" is a roster mode, not a rule set: it seats a wizard on each side and
+  // plays under Classic Melee rules (magic is Classic-only). Everything else maps
+  // straight to a rule-set profile.
+  const chosen = $("profile").value;
+  const wizards = chosen === "Wizards";
+  const p = encodeURIComponent(wizards ? "Classic Melee" : chosen);
   const practice = $("practiceMode") && $("practiceMode").checked ? 1 : 0;
   // teams = player count, per_team = characters per player (uniform), and the AI
   // players' sides drive the explicit `computer` list the endpoint now honours.
   const q = `profile=${p}&teams=${PLAYERS.length}&per_team=${$("perTeam").value}`
-    + `&computer=${encodeURIComponent(computerSides())}&practice=${practice}`;
+    + `&computer=${encodeURIComponent(computerSides())}&practice=${practice}`
+    + (wizards ? "&wizards=1" : "");
   await startGame(q);
 }
 // Add a player of the given type ("human" | "ai") to the roster, up to the cap.

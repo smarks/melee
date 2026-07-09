@@ -1102,12 +1102,19 @@ def _option(body: dict) -> Option:
 
 def api_new_game(request):
     profile = PROFILES.get(request.GET.get("profile", ""), PROFILES["Classic Melee"])
+    # Wizards mode is a roster choice (mix a wizard into each side), and magic is
+    # Classic-only, so it pins the profile to Classic Melee regardless of the
+    # ``profile`` param (#wizard-milestone).
+    wizards = _is_truthy(request.GET.get("wizards"))
+    if wizards:
+        profile = PROFILES["Classic Melee"]
     teams = _int_param(request, "teams")
     per_team = _int_param(request, "per_team")
     if teams >= 2 and per_team >= 1:
         teams = min(teams, scenario.MAX_TEAMS)
         per_team = min(per_team, scenario.MAX_PER_TEAM)
-        arena, figures = scenario.build_game(profile.name, teams, per_team)
+        arena, figures = scenario.build_game(
+            profile.name, teams, per_team, wizards=wizards)
         # An explicit ``computer=`` list names the AI sides directly — this is how
         # the mixed human/AI players roster (#192 follow-up) seats any subset of
         # sides as AI, and it overrides the ``mode`` shorthand. When ``computer``

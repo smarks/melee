@@ -190,6 +190,33 @@ def test_field_a_wizard_from_the_setup_editor(live_server, page: Page) -> None:
     assert wizard["intelligence"] >= 8
 
 
+def test_wizards_game_mode_seats_a_wizard_per_side(live_server, page: Page) -> None:
+    # The "Wizards" Game Control mode (#wizard-milestone): selecting it and pressing
+    # New Game seats one fighter + one wizard on each side, under Classic rules. Drives
+    # the real dropdown + New Game button, not the API, so the startSetup() wiring
+    # (profile -> Classic + wizards=1) is covered as a UI element.
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add AI player").click()   # a 2nd team so a game can start
+    page.locator("#profile").select_option("Wizards")
+
+    page.get_by_role("button", name="New Game").click()
+    page.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
+    gid = page.url.rstrip("/").rsplit("/", 1)[-1]
+
+    state = page.evaluate(
+        "async (g) => (await (await fetch(`/api/game/${g}`)).json()).state", gid)
+    figures = state["figures"]
+    sides = {f["side"] for f in figures}
+    assert len(sides) == 2
+    for side in sides:
+        side_figures = [f for f in figures if f["side"] == side]
+        wizards = [f for f in side_figures if f.get("is_wizard")]
+        fighters = [f for f in side_figures if not f.get("is_wizard")]
+        assert len(wizards) == 1, f"side {side} should have exactly one wizard"
+        assert len(fighters) == 1, f"side {side} should have exactly one fighter"
+        assert "magic_fist" in wizards[0].get("spells_known", [])
+
+
 @pytest.mark.django_db
 def test_wizard_sheet_shows_mana_gauge_and_spells(live_server, page: Page) -> None:
     # The character sheet frames a wizard's ST as a spell-power/mana gauge and lists
