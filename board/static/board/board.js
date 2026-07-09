@@ -850,6 +850,7 @@ function drawControls() {
       else if (others.length) setHint("🤖 Computer is playing… resolve when ready.");
       else setHint("Resolve combat to continue.");
       figureChecklist(c, actors);
+      drawCastSliders(c, actors);         // ST/mana sliders for queued missile casts
       // #212: a figure that committed to an attack option AND has a valid target
       // (server's must_attack) would silently waste its shot if combat resolved
       // without a queued attack for it. The classifier names the untargeted set;
@@ -933,6 +934,38 @@ function warnLine(c, text) {
   return w;
 }
 
+// The ST (mana) slider for each queued missile cast (Magic Fist): a wizard invests
+// 1..max_st ST for a missile spell (1 die/ST, p.12). State-driven — it renders from
+// PLAN on every pass, so it stays until the cast is cleared or resolved (no transient
+// UI). Dragging updates PLAN[uid].stUsed in place (no re-render, so the drag holds).
+function drawCastSliders(c, actors) {
+  const mine = new Set(actors.map(f => f.uid));
+  for (const plan of Object.values(PLAN)) {
+    if (plan.phase !== "combat" || !plan.cast || !plan.isMissile) continue;
+    if (!mine.has(plan.uid) || plan.stMax <= plan.stMin) continue;   // nothing to adjust
+    const figure = figByUid(plan.uid);
+    const wrap = document.createElement("div");
+    wrap.className = "cast-st"; wrap.style.marginTop = "8px";
+    const label = document.createElement("label");
+    label.innerHTML = `🔮 ${escapeHtml(figure ? figure.name : plan.uid)} — `
+      + `${escapeHtml(plan.spellName)} power (ST/mana): `;
+    const value = document.createElement("b");
+    value.className = "cast-st-val"; value.textContent = plan.stUsed;
+    const range = document.createElement("input");
+    range.type = "range"; range.className = "cast-st-range";
+    range.min = plan.stMin; range.max = plan.stMax; range.value = plan.stUsed;
+    range.addEventListener("input", () => {
+      plan.stUsed = parseInt(range.value, 10);
+      value.textContent = plan.stUsed;
+      plan.label = castLabel(plan.spellName, plan.castWho, true, plan.stUsed);
+    });
+    label.appendChild(value);
+    wrap.appendChild(label);
+    wrap.appendChild(range);
+    c.appendChild(wrap);
+  }
+}
+
 // A per-figure status list: which of the active side's figures are set, and
 // which still need you.
 function figureChecklist(c, figs) {
@@ -1012,6 +1045,18 @@ function openMenu(f) {
     // A readied bow/crossbow shoots; anything else strikes. Label the target rows
     // to match, so a missile attacker's combat step reads "🏹 Shoot <foe>" (#204).
     const shooting = !!(f.weapon && missileReady(f, optInfo));
+    // Wizard: a Cast row group parallel to the attack rows (TFT: Wizard, p.11). Pick
+    // a spell + target here; a missile spell's ST (mana) is then set with the slider
+    // in the combat controls before Resolve. The engine's spell_targets (#362) is the
+    // single source of legal targets, mirroring the attack targeting plumbing.
+    for (const spell of (optInfo.castable_spells || [])) {
+      for (const uid of ((optInfo.spell_targets || {})[spell.id] || [])) {
+        const e = figByUid(uid);
+        const who = spell.is_protection && uid === f.uid ? "self" : (e ? e.name : uid);
+        rows.push({label: `🔮 Cast ${escapeHtml(spell.name)} → ${escapeHtml(who)}`,
+                   act: () => setCast(f, spell, uid)});
+      }
+    }
     for (const uid of (optInfo._targets || [])) {
       const e = figByUid(uid);
       rows.push({label: `${shooting ? "🏹 Shoot" : "⚔ Attack"} ${escapeHtml(e ? e.name : uid)}`,
@@ -1173,6 +1218,28 @@ function setAttack(f, target, {mainGauche = false, secondTarget = null} = {}) {
                  label: `Attack ${e ? e.name : target}${jab}${split}`};
   render();
 }
+function castLabel(name, who, isMissile, st) {
+  return `🔮 Cast ${name} → ${who}` + (isMissile ? ` (ST ${st})` : "");
+}
+// Queue a wizard's cast (the magic mirror of setAttack). A missile spell invests
+// 1..max_st ST (mana) — default to the most it can afford for a strong shot, then
+// let the player trim it on the ST slider in the combat controls. A protection/other
+// spell is a flat cost, so no slider. A queued cast is NOT a must-attack (a wizard is
+// never forced to attack); it satisfies the resolve gate like any set action.
+function setCast(f, spell, target) {
+  const e = figByUid(target);
+  const who = spell.is_protection && target === f.uid ? "self" : (e ? e.name : target);
+  const stMin = spell.st_cost;
+  const stMax = spell.is_missile ? Math.min(spell.max_st, f.st) : spell.st_cost;
+  const stUsed = stMax;
+  dbg("INTERACT", `queue cast ${f.name}: ${spell.name} → ${who}`,
+      {caster: f.uid, spell: spell.id, target, stUsed});
+  PLAN[f.uid] = {uid: f.uid, phase: "combat", cast: true, spell: spell.id,
+                 spellName: spell.name, isMissile: !!spell.is_missile,
+                 target, castWho: who, stMin, stMax, stUsed,
+                 label: castLabel(spell.name, who, spell.is_missile, stUsed)};
+  render();
+}
 // ---- selection phase: immediate submission (#192) ---------------------------
 // In the select phase there is no batch: each choice POSTs right away and the
 // server lights up the next figure in initiative order.
@@ -1246,6 +1313,8 @@ async function executePlans(kind) {
     else if (p.disengageMove) await act({type: "disengage_move", uid: p.uid, dest: p.dest});
     else if (p.rush) await act({type: "shield_rush", uid: p.uid, target: p.target});
     else if (p.hth) await act({type: "queue_hth", uid: p.uid, target: p.target});
+    else if (p.cast) await act({type: "cast_spell", uid: p.uid, spell: p.spell,
+                                target: p.target, st: p.stUsed});
     else if (p.target) await act({type: "queue_attack", uid: p.uid, target: p.target,
                                   main_gauche: !!p.mainGauche,
                                   second_target: p.secondTarget || null});
@@ -1629,10 +1698,33 @@ function charSheetHtml(f) {
   return `<div class="charsheet">`
     + `<div class="sheet-vitals">${vitals}</div>`
     + attrs
+    + wizardSheetHtml(f)
     + `<div class="sheet-sub">Weapons</div>`
     + `<ul class="sheet-weapons">${weaponItems}</ul>`
     + `<div class="sheet-gear">Armor: <b>${armor}</b> · Shield: <b>${shieldState(f)}</b></div>`
     + `</div>`;
+}
+
+// The wizard block of the character sheet (Classic magic): ST framed as the
+// spell-power / mana gauge (ST doubles as mana, p.3-4), the spells known, and any
+// active continuing spell (Stone Flesh) with the hit-stopping it grants. Empty for a
+// non-wizard, so a fighter's sheet is unchanged.
+function wizardSheetHtml(f) {
+  if (!f.is_wizard) return "";
+  const known = (f.spells_known || []).map(spellDisplayName);
+  const active = Object.keys(f.active_spells || {});
+  const activeLine = active.length
+    ? `<div class="sheet-sub">Active spells</div><div class="muted">`
+      + active.map(id => escapeHtml(spellDisplayName(id))).join(", ")
+      + (f.spell_protection ? ` · stops ${f.spell_protection}/attack` : "")
+      + `</div>`
+    : "";
+  return `<div class="sheet-sub">🔮 Mana (ST)</div>`
+    + `<div class="mana-gauge">${f.mana}/${f.max_mana}`
+    + ` <span class="muted">· IQ ${f.intelligence}</span></div>`
+    + `<div class="sheet-sub">Spells known</div>`
+    + `<div class="muted">${known.length ? known.map(escapeHtml).join(", ") : "none"}</div>`
+    + activeLine;
 }
 
 // Catalog for the *running* game's profile (the editor may have loaded another).
@@ -1975,7 +2067,28 @@ const ARCHETYPES = {
     {name:"Spearman", strength:13, dexterity:11, intelligence:10, wisdom:10, constitution:10, charisma:10, weapon:"Longbow", weapon2:"Spear", armor:"Leather", shield:"None", skill:1, skill2:2},
   ],
 };
+
+// The minimal demo wizard (Gate 2). ST + DX + IQ = 32, each >= 8 (the 3-attribute
+// wizard spread, TFT: Wizard p.3-4). IQ 13 is chosen deliberately so the preset can
+// field BOTH gate-2 spells: Magic Fist is IQ 8 (a starter wizard could cast it) but
+// Stone Flesh is IQ 13. A default IQ-8 wizard could only field Magic Fist — this
+// spell-tier point is flagged for Spencer. Casts bare-handed (no ready weapon/shield,
+// p.23), so `cast_block_reason` clears it to cast from turn 1. The full live-gated
+// spell-picker is Gate 3; this is the one-button minimal path to field a wizard.
+const WIZARD_ARCHETYPE = {
+  name: "Wizard", char_class: "Wizard",
+  strength: 9, dexterity: 10, intelligence: 13,
+  armor: "None", spells: ["magic_fist", "stone_flesh"],
+};
 let CAT = null, RULES = null;
+const isWizardCard = card => !!card.querySelector("[data-spells]");
+// A spell's display name from the running game's catalog, with a prettified-id
+// fallback so a spectator without the catalog still sees a readable name.
+function spellDisplayName(id) {
+  const fromCat = CAT && CAT.spells && CAT.spells.find(s => s.id === id);
+  return fromCat ? fromCat.name
+    : String(id).replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
 
 function buildRoster(profile, teams, perTeam) {
   const tmpl = ARCHETYPES[profile] || ARCHETYPES["Classic Melee"];
@@ -1997,7 +2110,32 @@ async function setWeapons(card, strength, dexterity, skill) {
   if (data.missile) card.querySelector('[data-eq="weapon2"]').value = data.missile;
   refreshCard(card);
 }
+// Replace an editor card in place with a wizard preset (keeps its side + name), so
+// clicking "🔮 Wizard" turns any card into the demo wizard. Rebuilds the whole card
+// (not just fields) because the wizard layout differs from the fighter one.
+function makeWizardCard(card) {
+  const current = readCard(card);
+  const spec = Object.assign({}, WIZARD_ARCHETYPE,
+    {side: card.dataset.side, name: current.name || "Wizard"});
+  card.replaceWith(fighterCard(spec, 0));
+}
+function generateWizardInto(card) {   // randomize a wizard's ST/DX/IQ (sum 32, each >= 8)
+  const fields = ["strength", "dexterity", "intelligence"];
+  const vals = {strength: 8, dexterity: 8, intelligence: 8};
+  let points = 32 - 24;               // 8 free points over the 3x8 base
+  let guard = 0;
+  while (points > 0 && guard++ < 500) {
+    const field = fields[rint(0, 2)];
+    if (vals[field] < 20) { vals[field]++; points--; }
+  }
+  fields.forEach(field => {
+    const input = card.querySelector(`[data-stat="${field}"]`);
+    if (input) input.value = vals[field];
+  });
+  refreshCard(card);
+}
 function generateInto(card) {       // randomize this fighter within the rules
+  if (isWizardCard(card)) { generateWizardInto(card); return; }
   if (RULES.model === "tarmar") {
     let pts = RULES.budget - RULES.fields.length * RULES.min;
     const vals = {}; RULES.fields.forEach(f => vals[f] = RULES.min);
@@ -2143,6 +2281,7 @@ function skillInput(key, value) {
       + `min="0" max="${RULES.skill_max}" style="width:46px"></label>` : "";
 }
 function cardInner(f) {     // the editable fields shared by the editor and the live panel
+  if (Array.isArray(f.spells) && f.spells.length) return wizardCardInner(f);
   const stats = RULES.fields.map(field =>
     `<label>${field.slice(0,3).toUpperCase()} <input type="number" data-stat="${field}" value="${f[field]}" `
     + `min="${RULES.min || 1}" max="${RULES.max || 30}" style="width:52px"></label>`).join(" ");
@@ -2160,6 +2299,28 @@ function cardInner(f) {     // the editable fields shared by the editor and the 
     + `<span class="muted" data-shieldready-note></span></div>`
     + `<div class="hint" data-err></div>`;
 }
+// A wizard's editor card (Gate 2 minimal): ST/DX/IQ spread + armour, its spell
+// loadout carried on a data attribute (readCard round-trips it). No weapon/shield
+// picker — a wizard casts bare-handed (p.23); the full live-gated spell-picker is
+// Gate 3. The [data-spells] element is also the flag isWizardCard() keys on.
+function wizardCardInner(f) {
+  const iq = f.intelligence || 8;
+  const spellNames = f.spells.map(spellDisplayName).join(", ");
+  const stat = (field, label, value) =>
+    `<label>${label} <input type="number" data-stat="${field}" value="${value}" `
+    + `min="8" max="30" style="width:52px"></label>`;
+  return `<div><span class="chip ${f.side}">${f.side}</span> `
+    + `<input data-name value="${escapeHtml(f.name)}" style="width:130px"> `
+    + `<span class="muted">— 🔮 Wizard</span></div>`
+    + `<div style="margin-top:6px">${stat("strength", "ST", f.strength)} `
+    + `${stat("dexterity", "DX", f.dexterity)} ${stat("intelligence", "IQ", iq)} `
+    + `<span class="muted" data-budget></span></div>`
+    + `<div style="margin-top:6px">Armour <select data-eq="armor">`
+    + `${optionTags(CAT.armors, f.armor || "None")}</select></div>`
+    + `<div style="margin-top:6px" class="muted" data-spells='${JSON.stringify(f.spells)}'>`
+    + `Spells: ${escapeHtml(spellNames)} · casts bare-handed</div>`
+    + `<div class="hint" data-err></div>`;
+}
 function fighterCard(f, side_i) {
   const card = document.createElement("div"); card.className = "card";
   card.dataset.side = f.side;
@@ -2170,6 +2331,12 @@ function fighterCard(f, side_i) {
   gen.textContent = "🎲 Generate";
   gen.addEventListener("click", () => generateInto(card));
   card.appendChild(gen);
+  // One-button minimal wizard fielding (Gate 2): swap this card for a wizard preset
+  // so a wizard can be started from the setup editor and cast in the browser.
+  const wiz = document.createElement("button");
+  wiz.textContent = "🔮 Wizard";
+  wiz.addEventListener("click", () => makeWizardCard(card));
+  card.appendChild(wiz);
   if (LOGGED_IN) {
     const save = document.createElement("button");
     save.textContent = "💾 Save";
@@ -2204,6 +2371,15 @@ function readCard(card) {
   }
   const shieldReady = card.querySelector("[data-shieldready]");
   if (shieldReady) f.shield_ready = shieldReady.checked;
+  // A wizard card carries its spell loadout on the [data-spells] element; round-trip
+  // it (chargen keys "is this a wizard?" on a non-empty spells list). A wizard casts
+  // bare-handed, so its weapon/shield fields are empty (chargen._validate_wizard).
+  const spellsEl = card.querySelector("[data-spells]");
+  if (spellsEl) {
+    try { f.spells = JSON.parse(spellsEl.dataset.spells || "[]"); }
+    catch (e) { f.spells = []; }
+    f.weapon = "None"; f.weapon2 = "None"; f.shield = "None";
+  }
   return f;
 }
 
@@ -2256,6 +2432,15 @@ function refreshCard(card) {
   syncEquipControls(card);
   const f = readCard(card);
   let note = "", err = "";
+  if (isWizardCard(card)) {
+    // A wizard spends ST + DX + IQ = 32, each >= 8 (the 3-attribute spread). No
+    // weapon/shield selects on a wizard card, so skip the fighter equip logic.
+    const total = (f.strength || 0) + (f.dexterity || 0) + (f.intelligence || 0);
+    note = `ST+DX+IQ ${total}/32` + (total !== 32 ? " — must equal 32" : "");
+    card.querySelector("[data-budget]").textContent = note;
+    card.querySelector("[data-err]").textContent = err;
+    return;
+  }
   if (RULES.model === "tarmar") {
     const total = RULES.fields.reduce((s, k) => s + (f[k] || 0), 0);
     note = `points ${total}/${RULES.budget}` + (total > RULES.budget ? " — over budget" : "");

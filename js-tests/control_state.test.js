@@ -134,6 +134,43 @@ test("needsTarget is the must-attack ∧ no-plan invariant", () => {
   assert.equal(needsTarget({uid: "r3"}, mustAttack, {}), false);        // not must-attack
 });
 
+test("combat: a wizard with a queued cast is NOT flagged by the must-attack gate", () => {
+  // Gate 2 (TFT: Wizard): a cast is not an attack, so a casting wizard is never in
+  // the server's must_attack set — it is never forced to attack. With a queued cast
+  // in PLAN it satisfies the resolve gate like any set action: not untargeted, not
+  // idle, so Resolve is free. This is the control_state.js half of the #388 guard.
+  const state = {
+    phase: "combat",
+    combat_actionable: ["w1", "r2"],
+    must_attack: ["r2"],                 // only the fighter must attack; never the wizard
+    figures: [fig("w1", "red", {is_wizard: true}), fig("r2", "red")],
+  };
+  const out = classifyControlState(state,
+    ctxFor({mySides: ["red"], plan: {w1: {uid: "w1", cast: true}, r2: {uid: "r2"}}}));
+  assert.equal(out.kind, "combat_render");
+  // The wizard's queued cast is not treated as an un-set must-attack...
+  assert.equal(out.untargeted.length, 0);
+  // ...and a wizard that has queued its cast is not counted idle either.
+  assert.equal(out.idle, 0);
+  assert.ok(out.actors.some(f => f.uid === "w1"));
+});
+
+test("combat: a wizard with NO queued cast is idle, never a resolve-blocking must-attack", () => {
+  // Casting classification: a wizard that has set nothing is merely idle (a soft
+  // warning), never in must_attack — it does NOT gate Resolve (a wizard is not forced
+  // to act). The must-attack fighter r2 with no plan is the only untargeted one.
+  const state = {
+    phase: "combat",
+    combat_actionable: ["w1", "r2"],
+    must_attack: ["r2"],
+    figures: [fig("w1", "red", {is_wizard: true}), fig("r2", "red")],
+  };
+  const out = classifyControlState(state, ctxFor({mySides: ["red"], plan: {}}));
+  assert.equal(out.kind, "combat_render");
+  assert.deepEqual(out.untargeted.map(f => f.uid), ["r2"]);   // the fighter, not the wizard
+  assert.equal(out.idle, 1);                                   // the wizard, un-set
+});
+
 test("an unknown phase is the inert 'none' state", () => {
   assert.equal(classifyControlState({phase: "setup"}, ctxFor()).kind, "none");
 });

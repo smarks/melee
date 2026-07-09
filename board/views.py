@@ -40,7 +40,8 @@ from engine.options import Option, spec
 from engine.profile import PROFILES
 from engine.rules_data import WEAPONS, WeaponKind, max_missile_shots
 from engine.ruleset import has_offhand_main_gauche
-from engine.state import GameState, IllegalAction
+from engine.spells import SPELLS
+from engine.state import GameState, IllegalAction, cast_block_reason
 from engine.tarmar import WEAPON_CLASS, TarmarFigure
 
 from . import persistence, scenario
@@ -304,8 +305,10 @@ def _combat_actionable(state: GameState) -> list:
         if figure.current_option == Option.DO_NOTHING:
             continue
         targets = _attack_targets(state, figure)
+        castable, _ = _spell_options(state, figure)
         if (targets.melee or targets.ranged or targets.hth
                 or state.shield_rush_targets(figure)
+                or castable
                 or figure.current_option == Option.DISENGAGE):
             actionable.append(figure.uid)
     return actionable
@@ -397,6 +400,37 @@ def _attack_targets(state: GameState, figure) -> AttackTargets:
     return AttackTargets([enemy.uid for enemy in candidates.melee],
                          [enemy.uid for enemy in candidates.ranged],
                          [enemy.uid for enemy in candidates.hth])
+
+
+def _spell_options(state: GameState, figure) -> tuple[list, dict]:
+    """A wizard's currently-castable spells and their legal targets, as uids.
+
+    The serialization of the engine's cast legality for the UI (parallel to
+    :func:`_attack_targets`): a spell the wizard knows, can afford the minimum ST
+    for, and has at least one legal target for (``state.spell_targets`` — the #362
+    single source that also drives the AI). Empty for a non-wizard or a wizard whose
+    hands are not free to cast (:func:`engine.state.cast_block_reason`). Returns
+    ``(castable_spells, spell_targets)`` where ``castable_spells`` is the per-spell
+    display data and ``spell_targets`` maps each castable spell id to its target uids.
+    """
+    if not figure.spells_known or cast_block_reason(figure) is not None:
+        return [], {}
+    castable: list = []
+    targets_by_spell: dict = {}
+    for spell_id in figure.spells_known:
+        spell = SPELLS.get(spell_id)
+        if spell is None or spell.st_cost > figure.current_st:
+            continue                       # unknown, or can't afford even the minimum
+        targets = [target.uid for target in state.spell_targets(figure, spell)]
+        if not targets:
+            continue                       # no legal target -> nothing to offer
+        castable.append({
+            "id": spell.id, "name": spell.name,
+            "is_missile": spell.is_missile, "is_protection": spell.is_protection,
+            "st_cost": spell.st_cost, "max_st": spell.max_st,
+        })
+        targets_by_spell[spell.id] = targets
+    return castable, targets_by_spell
 
 
 def _auto_facing(state: GameState, figure, final_hex, path=None):
@@ -1376,6 +1410,9 @@ def _options_payload(request, game: dict, gid: str) -> JsonResponse:
         missile_shots = max_missile_shots(ready_weapon, figure.base_adj_dx)
     else:
         missile_shots = 1
+    # A wizard's castable spells + their legal targets (the #362 spell_targets
+    # source), for the Cast row group in the combat menu. Empty for a non-wizard.
+    castable_spells, spell_targets = _spell_options(state, figure)
     return JsonResponse({
         "uid": uid,
         "options": options,
@@ -1392,6 +1429,8 @@ def _options_payload(request, game: dict, gid: str) -> JsonResponse:
         "disengage_dests": [label_of(h.col, h.row)
                             for h in state.disengage_destinations(figure)],
         "pickups": [w.name for w in state.dropped_in_reach(figure)],
+        "castable_spells": castable_spells,
+        "spell_targets": spell_targets,
     })
 
 
@@ -1456,7 +1495,7 @@ def _ownership_fields(game: dict, pid: str | None) -> dict:
 # shield_rush / hth_disengage / disengage_move each take an acting figure by uid
 # and so belong here alongside the movement/selection verbs.
 _FIGURE_ACTIONS = {"move", "do_nothing", "pass", "queue_attack", "hold_fire",
-                   "force_retreat", "update_figure",
+                   "cast_spell", "force_retreat", "update_figure",
                    "queue_hth", "shield_rush", "hth_disengage",
                    "disengage_move"}
 
@@ -1767,6 +1806,32 @@ def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False, owner_s
     return None
 
 
+def _act_cast_spell(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
+    """Queue a wizard's spell cast (mirrors :func:`_act_queue_attack`).
+
+    A cast is the wizard's combat action, so — like ``_ensure_attack_option`` gives
+    an attacker its attack option — mark the CAST option before queueing so
+    ``state.queue_spell``'s guard (chose CAST) passes. ``queue_spell`` then validates
+    ST (a cast may reach 0 but not below), that the spell is known and not already
+    cast this turn, and that the target is legal for the spell's type — each a clean
+    ``IllegalAction`` (400). ``st`` is the ST invested (1..max_st for a missile
+    spell); it defaults to the spell's flat cost when the client omits it.
+    """
+    state: GameState = game["state"]
+    caster = _figure(state, body.get("uid", ""))
+    target = _figure(state, body.get("target", ""))
+    spell = SPELLS.get(body.get("spell", ""))
+    if spell is None:
+        raise IllegalAction(f"unknown spell {body.get('spell')!r}")
+    caster.current_option = Option.CAST
+    try:
+        st_used = int(body.get("st") or spell.st_cost)
+    except (TypeError, ValueError):
+        raise IllegalAction("the ST for a cast must be a whole number")
+    state.queue_spell(caster, spell, target, st_used)
+    return None
+
+
 def _act_queue_hth(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     attacker = _figure(state, body.get("uid", ""))
@@ -1883,6 +1948,7 @@ _ACTIONS = {
     "pass": ("select", _act_pass),
     "queue_attack": ("combat", _act_queue_attack),
     "hold_fire": ("combat", _act_hold_fire),
+    "cast_spell": ("combat", _act_cast_spell),
     "queue_hth": ("combat", _act_queue_hth),
     "shield_rush": ("combat", _act_shield_rush),
     "hth_disengage": ("combat", _act_hth_disengage),

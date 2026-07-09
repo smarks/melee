@@ -63,6 +63,19 @@ def _edit_spec(figure: Figure) -> dict:
         "armor": figure.armor.name, "shield": shield_name,
         "shield_ready": figure.shield_ready,
     }
+    if figure.spells_known:
+        # A wizard (Classic magic): its spec round-trips its IQ + chosen spells so
+        # chargen.build re-recognises it as a wizard (engine.chargen._is_wizard keys
+        # on a non-empty "spells" list). A wizard casts bare-handed (p.23), so the
+        # weapon/shield fields are forced empty — carrying a "Dagger"/shield here would
+        # trip chargen._validate_wizard on the edit round-trip. Added only for a
+        # wizard, so a plain fighter's spec is byte-identical.
+        spec.update(
+            intelligence=figure.intelligence,
+            spells=list(figure.spells_known),
+            has_staff=figure.has_staff,
+            weapon="None", weapon2="None", shield="None",
+        )
     if isinstance(figure, TarmarFigure):
         # The four extra Tarmar attributes come from the one source (TARMAR_EXTRA_STATS)
         # so their names live in engine.chargen, not re-typed here.
@@ -121,6 +134,18 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         "added_dx": figure.added_dx,
         "edit_spec": _edit_spec(figure),
     }
+    if figure.spells_known:
+        # A wizard (Classic magic; TFT: Wizard): ST is BOTH its injury pool and its
+        # spell-power (mana) pool (p.3-4), so surface it framed as mana alongside the
+        # spells it knows and any continuing protection in effect. These keys appear
+        # only for a wizard, so a plain fighter's wire output stays byte-identical.
+        data["is_wizard"] = True
+        data["intelligence"] = figure.intelligence
+        data["spells_known"] = list(figure.spells_known)
+        data["active_spells"] = dict(figure.active_spells)
+        data["spell_protection"] = figure.spell_protection
+        data["mana"] = figure.current_st          # ST doubles as the mana pool
+        data["max_mana"] = figure.strength
     if isinstance(figure, TarmarFigure):
         # Tarmar fighters track two pools instead of a single ST; surface both
         # so the front end can render a Tarmar sheet (Fatigue, then Body).
