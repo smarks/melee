@@ -237,16 +237,24 @@ def test_wizard_spell_picker_gates_spells_above_iq(live_server, page: Page) -> N
     expect(magic_fist).to_be_enabled()                    # IQ 8 spell still legal
 
 
-def test_wizards_game_mode_seats_a_wizard_per_side(live_server, page: Page) -> None:
-    # The "Wizards" Game Control mode (#wizard-milestone): selecting it and pressing
-    # New Game seats one fighter + one wizard on each side, under Classic rules. Drives
-    # the real dropdown + New Game button, not the API, so the startSetup() wiring
-    # (profile -> Classic + wizards=1) is covered as a UI element.
+def test_wizards_game_mode_opens_editor_seeded_with_a_wizard_per_side(
+        live_server, page: Page) -> None:
+    # The "Wizards" Game Control mode (#wizard-milestone): because wizards are
+    # editable, pressing New Game in Wizards mode opens the character editor
+    # pre-seeded with a fighter + a wizard on each side (not a preset game), so the
+    # player can pick each wizard's spells. Start match then launches the roster.
     page.goto(live_server.url)
     page.get_by_role("button", name="Add AI player").click()   # a 2nd team so a game can start
     page.locator("#profile").select_option("Wizards")
-
     page.get_by_role("button", name="New Game").click()
+
+    # New Game opened the editor (no game yet), seeded with wizard cards.
+    editor = page.locator("#editor")
+    expect(editor).to_be_visible(timeout=15_000)
+    wizard_cards = page.locator("#editorRoster .card [data-spells]")
+    expect(wizard_cards).to_have_count(2)                 # one wizard per side
+
+    page.get_by_role("button", name="Start match").click()
     page.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
     gid = page.url.rstrip("/").rsplit("/", 1)[-1]
 

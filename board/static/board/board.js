@@ -219,19 +219,23 @@ function computerSides() {
   return PLAYERS.map((pl, index) => pl.type === "ai" ? ED_TEAMS[index] : null)
     .filter(Boolean).join(",");
 }
+// "Wizards" in the rule-set dropdown is a roster MODE played under Classic rules,
+// not a rule set of its own. These two helpers resolve it everywhere the raw
+// dropdown value would otherwise leak out as a profile name.
+function wizardsMode() { return $("profile").value === "Wizards"; }
+function chosenProfile() { return wizardsMode() ? "Classic Melee" : $("profile").value; }
+
 async function startSetup() {
-  // "Wizards" is a roster mode, not a rule set: it seats a wizard on each side and
-  // plays under Classic Melee rules (magic is Classic-only). Everything else maps
-  // straight to a rule-set profile.
-  const chosen = $("profile").value;
-  const wizards = chosen === "Wizards";
-  const p = encodeURIComponent(wizards ? "Classic Melee" : chosen);
+  // The direct-start (preset) path: seat the roster and drop into the game. In
+  // Wizards mode this fields the preset wizard; the editable path (newGame ->
+  // openEditor) is the one a player normally takes to pick each wizard's spells.
+  const p = encodeURIComponent(chosenProfile());
   const practice = $("practiceMode") && $("practiceMode").checked ? 1 : 0;
   // teams = player count, per_team = characters per player (uniform), and the AI
   // players' sides drive the explicit `computer` list the endpoint now honours.
   const q = `profile=${p}&teams=${PLAYERS.length}&per_team=${$("perTeam").value}`
     + `&computer=${encodeURIComponent(computerSides())}&practice=${practice}`
-    + (wizards ? "&wizards=1" : "");
+    + (wizardsMode() ? "&wizards=1" : "");
   await startGame(q);
 }
 // Add a player of the given type ("human" | "ai") to the roster, up to the cap.
@@ -275,6 +279,11 @@ function renderPlayers() {
 async function newGame() {
   if (GAME_ACTIVE || PLAYERS.length < 2) return;
   dbg("INTERACT", "New Game pressed", {players: PLAYERS.map(p => p.type)});
+  // Wizards are personal — a wizard is defined by the spells it picks — so Wizards
+  // mode opens the character editor (pre-seeded with a fighter + a wizard per side)
+  // instead of dropping straight into a preset game. Start match launches from
+  // there. Plain Melee keeps its fast preset start.
+  if (wizardsMode()) { await openEditor(); return; }
   await startSetup();
 }
 // The editable pre-game state: no game tracked, Game Control unlocked with New
@@ -2106,10 +2115,19 @@ function spellCostText(spell) {
 
 function buildRoster(profile, teams, perTeam) {
   const tmpl = ARCHETYPES[profile] || ARCHETYPES["Classic Melee"];
+  const wizards = wizardsMode();
   const roster = [];
   for (let t = 0; t < teams; t++)
-    for (let i = 0; i < perTeam; i++)
-      roster.push(Object.assign({}, tmpl[i % tmpl.length], {side: ED_TEAMS[t]}));
+    for (let i = 0; i < perTeam; i++) {
+      // Wizards mode seeds the LAST seat on each side as a wizard (the rest
+      // fighters), matching the engine's build_game roster so the editable start
+      // and the preset start produce the same shape.
+      const spec = (wizards && i === perTeam - 1)
+        ? Object.assign({}, WIZARD_ARCHETYPE)
+        : Object.assign({}, tmpl[i % tmpl.length]);
+      spec.side = ED_TEAMS[t];
+      roster.push(spec);
+    }
   return roster;
 }
 
@@ -2117,7 +2135,7 @@ const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 // Ask the server for the most *effective* melee + missile weapon (expected damage
 // = hit-chance x damage, so a heavy/under-strength weapon is discounted in Tarmar).
 async function setWeapons(card, strength, dexterity, skill) {
-  const p = encodeURIComponent($("profile").value);
+  const p = encodeURIComponent(chosenProfile());
   const data = await api(`/api/best_weapons?profile=${p}&strength=${strength}`
     + `&dexterity=${dexterity}&skill=${skill}`);
   if (data.melee) card.querySelector('[data-eq="weapon"]').value = data.melee;
@@ -2172,7 +2190,7 @@ function generateInto(card) {       // randomize this fighter within the rules
 }
 
 async function openEditor() {
-  const profile = $("profile").value;
+  const profile = chosenProfile();
   CAT = await api(`/api/catalog?profile=${encodeURIComponent(profile)}`);
   RULES = CAT.stat_rules;
   if (LOGGED_IN) {
@@ -2281,7 +2299,7 @@ async function saveCharacter(card) {
   // An admin building a character for a player (#140) saves to that user's
   // collection; otherwise it's the signed-in player's own save.
   const url = EDIT_FOR_USER ? `/api/admin/users/${EDIT_FOR_USER.id}/characters` : "/api/characters";
-  const data = await postJSON(url, {name: spec.name, profile: $("profile").value, spec});
+  const data = await postJSON(url, {name: spec.name, profile: chosenProfile(), spec});
   if (data.error) { $("editorErr").textContent = "Save failed: " + data.error; return; }
   if (EDIT_FOR_USER) {
     $("editorErr").textContent = `Saved “${data.name}” to ${escapeHtml(EDIT_FOR_USER.username)}.`;
@@ -2521,7 +2539,7 @@ async function startCustom() {
   const fighters = Array.from($("editorRoster").children).map(readCard);
   const computer = computerSides();   // the AI players' sides, from the roster (#192)
   const practice = $("practiceMode") && $("practiceMode").checked;
-  const body = {profile: $("profile").value, computer, fighters, practice};
+  const body = {profile: chosenProfile(), computer, fighters, practice};
   const data = await api("/api/game/new_custom", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)});
