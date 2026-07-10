@@ -866,6 +866,15 @@ function drawControls() {
         line.classList.add("clickable");
         line.title = `Click to target ${f.name}`;
         line.addEventListener("click", () => onFigureClick(f));
+        // #397/#398 escape hatch: a committed attacker the player can't or won't
+        // target must not be able to hang the turn. A "Hold fire" button stands it
+        // down (server: hold_fire), dropping it from the gate so Resolve can clear.
+        const hold = document.createElement("button");
+        hold.className = "holdfire";
+        hold.textContent = `Hold fire — ${f.name} won't attack`;
+        hold.title = `${f.name} stands down and does not attack this turn`;
+        hold.addEventListener("click", () => holdFire(f));
+        line.appendChild(hold);
       }
       const resolveBtn = bigPrimary(c, actors.length ? "Resolve attacks" : "Resolve combat", () => {
         dbg("INTERACT", "Resolve pressed", {queued: Object.keys(PLAN).length, actors: actors.length});
@@ -1065,7 +1074,12 @@ function openMenu(f) {
       rows.push({label: "💨 Break free (roll)", act: () => setDisengage(f)});
     else
       rows.push({label: "💨 Break free", reason: "not in hand-to-hand", disabled: true});
-    rows.push({label: "Do nothing", act: () => setDoNothing(f)});
+    // Combat "do nothing" is a real server-side stand-down (hold_fire), not just a
+    // local plan entry: only a persisted DO_NOTHING drops the figure from the
+    // server's must-attack gate and multi-human resolve-sync, so a remote game can
+    // actually resolve (#397/#398). A local-only plan would clear this browser's
+    // gate while the server kept waiting on the side.
+    rows.push({label: "Hold fire — don't attack", act: () => holdFire(f)});
   } else return;
   const menu = $("tokenMenu");
   const plan = PLAN[f.uid];
@@ -1159,10 +1173,6 @@ function setAttack(f, target, {mainGauche = false, secondTarget = null} = {}) {
                  label: `Attack ${e ? e.name : target}${jab}${split}`};
   render();
 }
-function setDoNothing(f) {
-  PLAN[f.uid] = {uid: f.uid, phase: "combat", none: true, label: "Do nothing"};
-  render();
-}
 // ---- selection phase: immediate submission (#192) ---------------------------
 // In the select phase there is no batch: each choice POSTs right away and the
 // server lights up the next figure in initiative order.
@@ -1192,6 +1202,14 @@ function selectDoNothing(f) {
   dbg("INTERACT", `do-nothing ${f.name}`, {uid: f.uid});
   closeMenu();
   act({type: "do_nothing", uid: f.uid}).then(after);
+}
+// #397/#398: stand a committed attacker down in combat (it holds its fire), so a
+// figure the player can't or won't target can never leave Resolve disabled forever.
+function holdFire(f) {
+  dbg("INTERACT", `hold fire ${f.name}`, {uid: f.uid});
+  closeMenu();
+  delete PLAN[f.uid];                 // drop any local plan for it too
+  act({type: "hold_fire", uid: f.uid}).then(after);
 }
 function selectPass(f) {
   dbg("INTERACT", `pass ${f.name}`, {uid: f.uid});

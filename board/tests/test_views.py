@@ -350,6 +350,55 @@ def test_sole_target_attacker_is_flagged_with_exactly_one_target(client: Client)
         del GAMES["duel-test"]
 
 
+def test_hold_fire_stands_a_committed_attacker_down_so_resolve_can_clear(
+        client: Client) -> None:
+    # #397/#398: a figure committed to an attack sits in must_attack and gates
+    # Resolve. If the player can't or won't target it, hold_fire stands it down —
+    # dropping it from the gate and cancelling any queued attack — so the turn can
+    # resolve instead of hanging forever.
+    import json
+
+    from board.views import GAMES, _combat_actionable, _must_attack
+    from engine.options import Option
+
+    red, blue = _combat_duel()
+    try:
+        red.current_option = Option.ATTACK             # committed -> in the gate
+        state = GAMES["duel-test"]["state"]
+        assert red.uid in _must_attack(state)
+        assert red.uid in _combat_actionable(state)
+
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "hold_fire", "uid": red.uid}),
+                          content_type="application/json")
+        assert out.status_code == 200 and "error" not in out.json()
+
+        assert red.current_option == Option.DO_NOTHING  # persisted stand-down
+        assert red.uid not in _must_attack(state)       # no longer gates Resolve
+        assert red.uid not in _combat_actionable(state)
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_hold_fire_is_rejected_outside_the_combat_phase(client: Client) -> None:
+    # hold_fire is a combat-phase action; the declarative phase gate rejects it in
+    # the select phase with a clean 400 (not a 500).
+    import json
+
+    from board.views import GAMES
+
+    red, _blue = _combat_duel()
+    try:
+        GAMES["duel-test"]["phase"] = "select"
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "hold_fire", "uid": red.uid}),
+                          content_type="application/json")
+        assert out.status_code == 400
+        assert "error" in out.json()
+    finally:
+        del GAMES["duel-test"]
+
+
 def test_auto_facing_follows_direction_of_travel() -> None:
     from board.views import _auto_facing
     from engine.arena import Arena
