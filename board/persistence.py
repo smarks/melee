@@ -102,8 +102,18 @@ def _arena_from_json(data: dict) -> Arena:
 # Each monster field round-trips only when present, so pre-monster snapshots load
 # unchanged at the dataclass defaults. The carry-over defaults come straight off
 # the dataclass so a snapshot missing a field reloads at that field's default.
+def _field_default(figure_field: "dataclasses.Field") -> object:
+    """A dataclass field's default value, resolving a ``default_factory`` (a fresh
+    list/dict for the wizard ``spells_known``/``active_spells`` carry-over)."""
+    if figure_field.default is not dataclasses.MISSING:
+        return figure_field.default
+    if figure_field.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
+        return figure_field.default_factory()
+    return None
+
+
 _CARRY_OVER_DEFAULTS: dict[str, object] = {
-    figure_field.name: figure_field.default
+    figure_field.name: _field_default(figure_field)
     for figure_field in dataclasses.fields(Figure)
     if figure_field.name in CARRY_OVER_STATE
 }
@@ -311,7 +321,15 @@ def _figure_from_json(data: dict) -> Figure:
     # pre-#257 save with no dropped_out, or a pre-#10 one with no experience)
     # falls back to that field's dataclass default, so older saves still load.
     for name in CARRY_OVER_STATE:
-        setattr(figure, name, data.get(name, _CARRY_OVER_DEFAULTS[name]))
+        stored = data.get(name, _CARRY_OVER_DEFAULTS[name])
+        # Copy mutable carry-over values (the wizard spells_known list /
+        # active_spells dict) so a reloaded figure owns them outright — never a
+        # shared alias of a decoded structure or of the one default object.
+        if isinstance(stored, list):
+            stored = list(stored)
+        elif isinstance(stored, dict):
+            stored = dict(stored)
+        setattr(figure, name, stored)
     option = data["current_option"]
     figure.current_option = Option(option) if option is not None else None
     figure.hth_opponents = list(data["hth_opponents"])

@@ -19,10 +19,11 @@ recorded non-behaviourally in :meth:`GameState._apply`).
 """
 from __future__ import annotations
 
-from .combat import AttackResult, classify_roll
+from .combat import AttackResult, SpellResult, classify_roll
 from .figure import Figure
 from .profile import RulesProfile
 from .rules_data import THREE_DICE, WeaponKind
+from .spells import SPELLS
 
 # Narration fragments that assert a hit vs. a miss, keyed to
 # :func:`engine.narrative.narrate_attack`'s output. A hit with damage stopped by
@@ -30,6 +31,12 @@ from .rules_data import THREE_DICE, WeaponKind
 # "unavoidable"; a crit reads "crushing"; an ordinary hit "connects".
 _HIT_WORDS = ("connects", "crushing", "unavoidable", "turns it aside")
 _MISS_WORDS = ("misses", "dodges clear", "fumbles")
+
+# The same, for :func:`engine.narrative.narrate_spell`'s output: a landed spell
+# "connects"/"crushing"/"takes hold" (or the bolt "turns it aside"); a failed one
+# "goes wide" (a plain miss) or "fizzles" (a 17/18).
+_SPELL_HIT_WORDS = ("connects", "crushing", "takes hold", "turns it aside")
+_SPELL_MISS_WORDS = ("goes wide", "fizzles")
 
 # Phases the driving turn cycle may report (the board's phase machine, #192).
 VALID_PHASES = frozenset({"select", "combat"})
@@ -336,6 +343,37 @@ def _check_no_damage_to_downed_target(state, context: str) -> None:
             body_taken.get(event.target_uid, 0) + event.body_damage)
 
 
+def _check_spell_bounds(state, context: str) -> None:
+    """Every wizard's magical state stays legal (TFT: Wizard).
+
+    * ``spell_protection`` is never negative (a protection spell only ever adds
+      hit-stopping; it cannot make a figure easier to hurt).
+    * a figure knows no more spells than its IQ allows (``len(spells_known) <=
+      intelligence``), and every known spell's tier is within its IQ — the
+      chargen legality that must survive every edit/round-trip.
+
+    ST overspend by a cast is prevented at the source (``queue_spell`` rejects a
+    cast that would drop ST below 0), not re-checked here — a weapon overkill can
+    legitimately drive ST far below -1, so ST magnitude is not a state invariant.
+    """
+    for figure in state.figures:
+        if figure.spell_protection < 0:
+            _fail("negative-spell-protection",
+                  f"{figure.name}({figure.side}) spell_protection="
+                  f"{figure.spell_protection}", context)
+        if len(figure.spells_known) > figure.intelligence:
+            _fail("too-many-spells",
+                  f"{figure.name}({figure.side}) knows {len(figure.spells_known)} "
+                  f"spells but IQ is {figure.intelligence}", context)
+        for spell_id in figure.spells_known:
+            spell = SPELLS.get(spell_id)
+            if spell is not None and spell.iq_tier > figure.intelligence:
+                _fail("spell-over-iq",
+                      f"{figure.name}({figure.side}) knows {spell.name} "
+                      f"(IQ {spell.iq_tier}) but its IQ is {figure.intelligence}",
+                      context)
+
+
 def assert_state_invariants(
     state,
     profile: RulesProfile,
@@ -373,6 +411,7 @@ def assert_state_invariants(
     _check_weapon_kit(state, context)
     _check_no_posthumous_damage(state, context)
     _check_no_damage_to_downed_target(state, context)
+    _check_spell_bounds(state, context)
 
 
 # ---- combat-log truthfulness -----------------------------------------------
@@ -388,6 +427,30 @@ def _narration_of(result: AttackResult) -> str:
     from .narrative import narrate_attack  # local import: narrative imports figure
 
     return narrate_attack(_NARRATE_ATTACKER, _NARRATE_TARGET, result)
+
+
+def _spell_narration_of(result: SpellResult) -> str:
+    from .narrative import narrate_spell  # local import: narrative imports figure
+
+    return narrate_spell(_NARRATE_ATTACKER, _NARRATE_TARGET, result)
+
+
+def _assert_spell_truthful(result: SpellResult, where: str) -> None:
+    """A cast's narration tells the truth: a hit-word iff ``result.hit``, a
+    miss-word otherwise, and a fizzle (17/18) is always a miss (Wizard p.11)."""
+    line = _spell_narration_of(result)
+    has_hit_word = any(word in line for word in _SPELL_HIT_WORDS)
+    has_miss_word = any(word in line for word in _SPELL_MISS_WORDS)
+    if result.hit and not has_hit_word:
+        _fail("spell-hit-not-narrated", f"cast hit but no hit-word: {line!r}", where)
+    if not result.hit and not has_miss_word:
+        _fail("spell-miss-not-narrated", f"cast miss but no miss-word: {line!r}", where)
+    if result.hit and has_miss_word:
+        _fail("spell-hit-narrated-as-miss", f"cast hit narrated as a miss: {line!r}", where)
+    if not result.hit and has_hit_word:
+        _fail("spell-miss-narrated-as-hit", f"cast miss narrated as a hit: {line!r}", where)
+    if result.fizzled and result.hit:
+        _fail("fizzle-is-a-hit", f"a fizzle claims a hit: {line!r}", where)
 
 
 def assert_log_truthful(results: list[AttackResult], *, context: str = "") -> None:
@@ -417,6 +480,11 @@ def assert_log_truthful(results: list[AttackResult], *, context: str = "") -> No
     """
     for index, result in enumerate(results):
         where = f"{context} result#{index}" if context else f"result#{index}"
+        # A cast (SpellResult) narrates through narrate_spell with its own hit/miss
+        # vocab; route it there and move on (#Wizard log-truthfulness).
+        if isinstance(result, SpellResult):
+            _assert_spell_truthful(result, where)
+            continue
         line = _narration_of(result)
         has_hit_word = any(word in line for word in _HIT_WORDS)
         has_miss_word = any(word in line for word in _MISS_WORDS)

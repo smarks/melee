@@ -123,6 +123,68 @@ class AttackResult:
     #                              Read by narration and apply_attack_side_effects.
 
 
+# Special three-dice totals for a SPELL cast (Wizard p.11). Distinct from a
+# weapon's 17-drop/18-break: a spell's 17 fizzles losing the FULL ST cost, and an
+# 18 fizzles + knocks the caster down. Each entry is
+# ``(hit, damage_multiplier, fizzle, knockdown)``.
+SPELL_THREE_DICE_SPECIALS = {
+    3: (True, 3, False, False),    # triple effect
+    4: (True, 2, False, False),    # double effect
+    5: (True, 1, False, False),    # automatic hit
+    16: (False, 0, False, False),  # automatic miss (loses 1 ST, per the miss rule)
+    17: (False, 0, True, False),   # fizzle: lose the full ST cost
+    18: (False, 0, True, True),    # fizzle + the shock knocks the caster down
+}
+
+
+@dataclass
+class SpellResult:
+    """Outcome of one cast, before its effect (damage/protection) is applied.
+
+    Parallel to :class:`AttackResult` but keyed to a spell: it carries the ST
+    actually spent, whether the cast fizzled (a 17/18, which drains the full ST
+    cost) and whether an 18 knocked the caster down, plus a missile spell's rolled
+    damage. A protection spell (Stone Flesh) lands its hit-stopping via
+    ``spell_protection`` rather than ``damage``.
+    """
+
+    hit: bool
+    rolled: int
+    needed: int              # the adjDX the caster had to roll at or under
+    dice_count: int
+    multiplier: int          # 1 normal, 2 double, 3 triple (a 4/3 auto-crit)
+    st_spent: int            # ST drained by this cast (see apply_spell_cost)
+    damage: int              # hits coming off the target's ST (missile spells)
+    raw_damage: int = 0      # pre-armour damage rolled (missile spells)
+    fizzled: bool = False    # a 17/18: the spell failed and lost its full ST cost
+    knockdown: bool = False  # an 18: the shock knocked the CASTER down
+    spell_id: str = ""
+    target_uid: str = ""
+    stops_granted: int = 0   # protection added to the target (Stone Flesh)
+    save_made: bool = False  # a control spell's victim saved (unused this gate)
+    to_hit_breakdown: str = ""
+    note: str = ""
+    auto_hit: bool = False   # the hit was forced (a test/scripted resolution),
+    #                          so `rolled`/`needed` are not a hit/miss test
+
+
+def classify_spell_roll(
+    rolled: int, needed: int
+) -> tuple[bool, int, bool, bool]:
+    """Map a 3-dice cast total to ``(hit, multiplier, fizzle, knockdown)`` (Wizard p.11).
+
+    A cast is always three dice (a spell target does not force four -- dodging
+    helps against the missile itself, handled in resolution, p.11). The specials:
+    3/4/5 are automatic hits (triple/double/plain); 16 an automatic miss; 17 a
+    fizzle that loses the full ST cost; 18 a fizzle that also knocks the caster
+    down (rules line 594-610). Any other total falls back to rolling at or under
+    ``needed``.
+    """
+    if rolled in SPELL_THREE_DICE_SPECIALS:
+        return SPELL_THREE_DICE_SPECIALS[rolled]
+    return (rolled <= needed, 1, False, False)
+
+
 def classify_roll(
     rolled: int, dice_count: int, needed: int
 ) -> tuple[bool, int, bool, bool]:

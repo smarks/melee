@@ -14,12 +14,13 @@ more``) — keyed off ``result.roll_under``.
 """
 from __future__ import annotations
 
-from .combat import AttackResult
+from .combat import AttackResult, SpellResult
 from .facing import REAR, SIDE
 from .figure import Figure
 from .options import Option
 from .rules_data import WeaponKind
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS
+from .spells import SPELLS
 
 
 def _name(figure: Figure) -> str:
@@ -151,6 +152,43 @@ def narrate_status(target: Figure, status: str | None) -> str | None:
     if status == KNOCKDOWN:
         return _cap(f"{_name(target)} is knocked sprawling.")
     return None
+
+
+def narrate_spell(caster: Figure, target: Figure, result: SpellResult) -> str:
+    """One truthful line for a cast's outcome (TFT: Wizard).
+
+    Reports what actually happened — a landed missile blow for its rolled damage,
+    an armour-turned bolt, a protection spell taking hold, a plain miss, or a
+    fizzle (a 17/18 that lost the full ST, an 18 also knocking the caster down) —
+    with NO fabricated numbers (the #229/#270 class). ``result.hit`` decides
+    whether a hit-word or a miss-word appears, keeping the log auditable.
+    """
+    spell = SPELLS.get(result.spell_id)
+    spell_name = spell.name if spell is not None else result.spell_id
+    caster_name = _name(caster)
+    target_name = _name(target)
+    if result.fizzled:
+        line = f"{caster_name} invokes {spell_name}, but the spell fizzles"
+        if result.knockdown:
+            line += f" — the backlash knocks {caster_name} sprawling"
+        return _cap(line + f" (loses {result.st_spent} ST).")
+    if not result.hit:
+        return _cap(
+            f"{caster_name} casts {spell_name} at {target_name}, but it goes wide "
+            f"(needed {result.needed} or less, rolled {result.rolled}).")
+    if spell is not None and spell.is_protection:
+        return _cap(
+            f"{caster_name} weaves {spell_name} — the spell takes hold, "
+            f"stopping {result.stops_granted} hits per attack.")
+    # A missile spell that hit.
+    if result.damage == 0:
+        return _cap(
+            f"{caster_name} hurls {spell_name} at {target_name} — "
+            f"but the armour turns it aside.")
+    crushing = "a crushing " if result.multiplier >= 2 else ""
+    return _cap(
+        f"{caster_name} hurls {spell_name} at {target_name} — {crushing}"
+        f"telekinetic blow connects for {result.damage}!")
 
 
 # ---- non-combat operations -------------------------------------------------

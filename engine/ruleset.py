@@ -30,11 +30,19 @@ from __future__ import annotations
 
 from hexarena.dice import Dice
 
-from .combat import AttackResult, classify_roll, roll_damage, roll_weapon_damage
+from .combat import (
+    AttackResult,
+    SpellResult,
+    classify_roll,
+    classify_spell_roll,
+    roll_damage,
+    roll_weapon_damage,
+)
 from .facing import FRONT, REAR, facing_bonus, format_situational_parts
 from .figure import Figure
 from .movement import movement_budget as _movement_budget
 from .rules_data import THREE_DICE, Weapon, WeaponKind
+from .spells import Spell
 
 # Status outcomes returned by :meth:`Ruleset.status_after_hit`.
 DEAD = "dead"
@@ -149,9 +157,19 @@ class Ruleset:
         return raw_damage // 2 if blunted else raw_damage
 
     def absorbed(self, target: Figure, *, zone: str | None) -> int:
-        """Hits stopped by armor (and a frontal shield). Override for new armor."""
+        """Hits stopped by armor (and a frontal shield), plus any active magical
+        protection. Override for new armor.
+
+        A protection spell (Stone Flesh stops 4/attack, Iron Flesh 6; Wizard
+        p.19-20) folds in here as extra hit-stopping "cumulative with any other
+        natural or magical hit-stopping ability (armor, fur, etc.)" — so it
+        composes with worn armour and a shield through the one absorption seam,
+        needing no separate resolution path. ``spell_protection`` is 0 on any
+        figure without an active protection spell, so non-wizard play is unchanged.
+        """
         return target.hits_stopped(
-            from_front=(zone == FRONT), from_rear=(zone == REAR))
+            from_front=(zone == FRONT), from_rear=(zone == REAR)
+        ) + target.spell_protection
 
     def resolve_attack(
         self,
@@ -287,3 +305,144 @@ class Ruleset:
         if megahex_distance <= 2:
             return 0
         return -((megahex_distance - 1) // 2)
+
+    # ---- spells (Classic magic; TFT: Wizard) --------------------------------
+    def spell_to_hit_number(
+        self, caster: Figure, *, range_penalty: int = 0, situational: int = 0
+    ) -> int:
+        """adjDX a caster must roll at or under to land a spell (Wizard p.11).
+
+        Reuses :meth:`to_hit_number` with ``ignore_facing=True``: a spell gets no
+        facing bonus against its target (p.16), but the caster's own armour and
+        wound penalties still drag its aim (they ride ``base_adj_dx`` /
+        :meth:`wound_penalty`). ``range_penalty`` is the caller-computed missile MH
+        penalty (:meth:`missile_range_penalty`) or a thrown spell's -1/hex.
+        """
+        return self.to_hit_number(
+            caster, zone=None, ignore_facing=True,
+            range_penalty=range_penalty, situational=situational,
+        )
+
+    def spell_to_hit_breakdown(
+        self, caster: Figure, *, range_penalty: int = 0, situational_note: str = ""
+    ) -> str:
+        """How :meth:`spell_to_hit_number` was reached, for the narration/log."""
+        return self.to_hit_breakdown(
+            caster, zone=None, ignore_facing=True,
+            range_penalty=range_penalty, situational_note=situational_note,
+        )
+
+    def resolve_spell(
+        self,
+        dice: Dice,
+        caster: Figure,
+        spell: Spell,
+        *,
+        target: Figure,
+        st_used: int,
+        range_penalty: int = 0,
+        situational: int = 0,
+        force_hit: bool = False,
+    ) -> SpellResult:
+        """Roll one cast and return its :class:`SpellResult` (no state mutated).
+
+        The composition method for casting, parallel to :meth:`resolve_attack` and
+        written in terms of the smaller hooks (:meth:`spell_to_hit_number`,
+        :func:`classify_spell_roll`, :meth:`absorbed`) so a subclass can change one
+        step without reimplementing the sequence.
+
+        **Dice-stream draw order** (deterministic — the injected ``Dice`` is read in
+        exactly this order, so a seeded/scripted stream is reproducible):
+
+        1. **The to-hit roll** — one ``dice.total(3)`` (three d6), always drawn
+           (even a ``force_hit`` cast still draws it, so the stream position does
+           not shift between a forced and an unforced cast).
+        2. **The damage roll** — for a *missile* spell that HIT, one
+           ``dice.total(st_used)`` (one d6 per ST invested). Not drawn for a miss,
+           a fizzle, or a non-missile spell.
+
+        A protection spell (Stone Flesh) grants its hit-stopping via
+        ``stops_granted`` instead of damage and draws no damage dice.
+
+        Args:
+            st_used: ST invested in the cast (1..``spell.max_st`` for a missile
+                spell; the flat cost otherwise). The caller validates it is
+                affordable before queueing.
+            force_hit: Skip the hit/miss decision (the hit is already decided, e.g.
+                a scripted test); the to-hit die is still drawn.
+
+        Returns:
+            A :class:`SpellResult`; the ST it drains is in ``st_spent`` and is
+            applied by :meth:`apply_spell_cost`, the damage by ``apply_damage``.
+        """
+        needed = self.spell_to_hit_number(
+            caster, range_penalty=range_penalty, situational=situational)
+        rolled = dice.total(THREE_DICE)                 # draw 1: the 3-dice to-hit
+        if force_hit:
+            hit, multiplier, fizzled, knockdown = True, 1, False, False
+        else:
+            hit, multiplier, fizzled, knockdown = classify_spell_roll(rolled, needed)
+
+        raw_damage = 0
+        damage = 0
+        stops_granted = 0
+        if hit and spell.is_missile:
+            # 1d + damage_per_st PER ST, floored at the ST invested ("never less
+            # damage than the ST used", spell-ref line 16), then the crit multiplier.
+            base = dice.total(st_used) + spell.damage_per_st * st_used  # draw 2
+            base = max(st_used, base)
+            raw_damage = base * multiplier
+            damage = max(0, raw_damage - self.absorbed(target, zone=None))
+        elif hit and spell.is_protection:
+            # Stone Flesh/Iron Flesh grant flat hit-stopping (p.19); the triple/
+            # double crit is not applied to protection (kept simple and defensible).
+            stops_granted = spell.stops
+
+        # ST charged: a hit or a fizzle (17/18) loses the FULL invested ST; a plain
+        # miss loses 1 ST (Wizard p.11, rules line 682). apply_spell_cost drains it.
+        st_spent = st_used if (hit or fizzled) else 1
+
+        return SpellResult(
+            hit=hit,
+            rolled=rolled,
+            needed=needed,
+            dice_count=THREE_DICE,
+            multiplier=multiplier,
+            st_spent=st_spent,
+            damage=damage,
+            raw_damage=raw_damage,
+            fizzled=fizzled,
+            knockdown=knockdown,
+            spell_id=spell.id,
+            target_uid=target.uid,
+            stops_granted=stops_granted,
+            to_hit_breakdown=self.spell_to_hit_breakdown(
+                caster, range_penalty=range_penalty),
+            auto_hit=force_hit,
+        )
+
+    def apply_spell_cost(
+        self, caster: Figure, spell: Spell, st_used: int, *, fizzled: bool
+    ) -> None:
+        """Drain a cast's ST from the caster (ST is the spell-power pool, p.3-4).
+
+        ``st_used`` is the already-decided charge (``SpellResult.st_spent`` — full
+        invested ST on a hit or fizzle, 1 on a plain miss); this hook applies it to
+        the caster's ST pool, the mutation seam parallel to :meth:`apply_damage`.
+        ``fizzled`` is passed for a subclass that wants to treat a fizzle specially;
+        the classic pool model drains the same way either way.
+        """
+        caster.damage_taken += st_used
+
+    def apply_spell_protection(self, target: Figure, result: SpellResult) -> None:
+        """Fold a landed protection spell's hit-stopping onto ``target`` (p.19).
+
+        Called after a successful protection cast: it raises ``spell_protection``
+        (read by :meth:`absorbed`) and records the spell as active so the Renew
+        stage (Gate 3) can re-energize it. Applying it as a mutation hook keeps
+        :meth:`resolve_spell` pure over the figures.
+        """
+        if result.stops_granted <= 0:
+            return
+        target.spell_protection += result.stops_granted
+        target.active_spells[result.spell_id] = result.st_spent

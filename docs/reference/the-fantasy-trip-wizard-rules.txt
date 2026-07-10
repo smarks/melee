@@ -1,0 +1,1198 @@
+The Fantasy Trip
+
+TM
+
+Third Edition
+Game Design by Steve Jackson
+
+Cover by Brandon Moore • Illustrations by Rick Hershey • Counters by Liz Danforth
+Logo and Production by Ben Williams • Prepress Checks by Miranda Horner
+
+The Fantasy Trip: Wizard, Warehouse 23, the pyramid logo, and the names of all products published by Steve Jackson Games Incorporated are trademarks or registered trademarks of Steve
+Jackson Games Incorporated, or used under license. The Fantasy Trip: Wizard is copyright
+© 1977, 1979, 2018 by Steve Jackson Games Incorporated. All rights reserved.
+The scanning, uploading, and distribution of this material via the Internet or via any other
+means without the permission of the publisher is illegal, and punishable by law. Please purchase
+only authorized electronic editions, and do not participate in or encourage the electronic piracy
+of copyrighted materials. Your support of the author’s rights is appreciated.
+
+CONTENTS
+
+I. INTRODUCTION....................... 2
+II. COMPONENTS. ....................... 3
+III. CREATING A FIGURE. .......... 3
+Strength...................................... 3
+Dexterity. ................................... 4
+Intelligence................................. 4
+Choosing Spells. ........................ 4
+IV. TURN SEQUENCING
+AND OPTIONS ........................ 5
+List of Options. .......................... 6
+V. MOVEMENT............................. 7
+Movement of
+Multi-Hex Figures.................... 7
+Shifting....................................... 7
+Moving Onto Other Figures......... 8
+Flight.......................................... 8
+Crawling, Kneeling,
+and Lying Prone....................... 8
+Hidden Movement. .................... 9
+VI. FACING. .................................. 9
+Engaged and Disengaged.......... 10
+VII. SAVING ROLLS.................... 11
+VIII. CASTING SPELLS.............. 11
+Rolling to Hit. ........................... 11
+Types of Spells.......................... 12
+Missile Spells............................ 12
+
+Thrown Spells............................13
+Creation Spells..........................15
+Special Spells............................18
+IX. PHYSICAL ATTACKS...........18
+The Wizard’s Staff.....................19
+Dropped or Broken
+Weapons; Bare Hands
+Attacks. .................................. 19
+Protection From Hits.................20
+Disengaging...............................20
+Defending and Dodging............20
+Forcing Retreat..........................21
+Reactions to Injury....................21
+X. NONHUMAN FIGURES.........21
+Monsters and Beasts..................21
+Fantasy Fighters........................21
+Dragons.....................................21
+XI. EXPERIENCE. .......................22
+XII. OPTIONAL RULES..............23
+Experienced Figures..................23
+Pets............................................23
+Magic Items...............................23
+The Courtesy Rule. ...................23
+XIII. COMBINING WIZARD
+WITH MELEE..........................23
+XIV. COMBAT EXAMPLE..........24
+
+thefantasytrip.game
+
+I. INTRODUCTION
+
+Yzor wondered, for at least the fortieth time that morning, how he had
+gotten into this. Only last night, he had had nothing more pressing to worry
+about than the weather – and here he was, in a duel to the death.
+Of course, his mentor Aronnen had explained it all. “It’s an attack on me.
+None of the masters of the T’reo School care to face me in the arena – but
+it was easy enough for them to bribe a proctor when you were called out.
+They won’t do it again, but you have no choice if you wish to stay here. You
+must fight. Do you even know this Krait who claims you insulted him?”
+Yzor did, vaguely. His opponent was a boastful little man of his own age,
+hot-tempered, of no great learning, but as quick as the snake whose name
+he bore. Like Yzor, he was an advanced student in martial magic – but once
+already Krait had killed in the arena.
+Then the gong rang, and Yzor exhaled and stepped into the arena. At the
+other end, he saw Krait. Abruptly, the gong rang again.
+Yzor took a slow step forward, framing in his mind the spell that would
+dazzle Krait and spoil his deadly accuracy. His hands moved, and a flash
+came – but not before Yzor saw a wolf appear at Krait’s end of the hall.
+At least, he thought, it’ll dazzle the wolf too. He had no doubt it was real;
+Krait was too unsubtle to throw an image, and not learned enough to use an
+illusion. But he . . . Suiting actions to thoughts, Yzor pictured a wolf. The
+knot of force appeared – an illusion. Well, at least my spells are working.
+Krait was standing still, with a look of concentration – casting a protective
+spell on himself, no doubt – and Krait’s wolf was rushing for Yzor.
+Then it was on him – but his illusion was on its tail. The Dazzle had
+slowed its reactions just enough to let Yzor jump back, leaving the two
+wolves to fight. A glance at Krait showed him glaring at the wolves. He
+knows it’s an illusion, thought Yzor. Can he master himself and disbelieve?
+Evidently not. Yzor’s wolf remained, but Krait’s disappeared. He gave
+up on it! exulted Yzor. Knew it wouldn’t reach me! And he’s slowed . . . but
+then, across the arena, Krait’s fist moved, and Yzor felt ribs crack. Barely
+strong enough to stand, he stood and watched as his own illusion raced
+across the sand. Krait had to be weakening too . . .
+The little man looked from Yzor to the “wolf.” He started his punching
+gesture. Yzor waited. He felt the blow – saw Krait stagger – saw through
+his illusion’s eyes as it bit . . . and knew it was over.
+
+Wizard is a game of combat between two or more wizards and the creatures they conjure up. Two, three, or more players can participate.
+Players create wizard figures and send them into battle in arenas or underground tunnels. Selections of spells, attributes chosen for the wizards,
+and the players’ skill will determine who survives and gains experience
+and higher attributes – and who dies.
+Wizard can be played by itself or as a tactical aid to a fantasy role­playing
+campaign. Players will find that its system meshes well with most sets of
+rules, allowing tactical combat to be worked out in a logical fashion. Game
+masters can now regularize movement and attacks on a small scale.
+•2•
+
+This game can be combined with Melee by players who want both
+swords and sorcery; references in this game to missile weapons, giant
+snakes, and other elements not found in Wizard have been included for the
+convenience of Melee players.
+
+II. COMPONENTS
+
+• This Wizard game contains the following components:
+• This rule booklet.
+• An 8-page mini-booklet of Reference Pages.
+• One map, divided into hexagons (“hexes”) and larger heavy-bordered
+“megahexes.”
+• Over 50 counters, for figures, walls, fire, etc.
+• Three six-sided dice.
+You will also need pencils, scratch
+paper, and a straightedge. Miniature figures are not necessary for play, but add
+interest.
+
+III. CREATING A FIGURE
+
+Wizard is a game of magical combat,
+in which the most important factor is the
+ability of the individual magicians. Each
+counter in Wizard represents a character
+or “figure” with its own abilities, chosen before play begins. A wizard’s basic
+“attributes” are Strength (ST), Dexterity
+(DX), and Intelligence (IQ).
+When a figure is first created, the
+player determines its attributes as follows: A human wizard starts with 8 ST, 8 DX, 8 IQ, and 8 extra points to
+be allotted between the attributes as the player chooses. Thus, each figure
+begins with a total of 32 points – for instance, 9 ST, 12 DX, and 11 IQ. No
+attribute may begin at less than 8 for a human figure. Animals and monsters
+go by other rules: see Nonhuman Figures.
+STRENGTH (ST) governs:
+(1) How many hits a figure can take. “Hits” represent injury. The hits a
+figure takes in combat are subtracted from its ST; each hit reduces ST by 1.
+When ST reaches 0 a figure falls unconscious; at ST -1 it dies.
+(2) How many spells a wizard can cast. Each spell (listed in the Spell Table on the Reference Pages) has a ST cost. This is the number of ST points
+a wizard expends casting the spell. This is an energy drain to the wizard,
+rather than injury – but it is treated just as though the wizard had taken hits,
+and marked against his ST. A wizard who throws the Trip spell loses 2 ST,
+just as though he had taken 2 hits. Some spells are “continuing” spells, and
+cost ST each turn after being cast until the wizard turns them off. Note: A
+wizard cannot cast a spell which would reduce his ST below 0. He can cast
+a spell which reduces his ST to 0.
+•3•
+
+DEXTERITY (DX) governs:
+(1) The order in which figures act each turn after movement.
+(2) How likely a figure is to successfully cast a spell, hit an enemy with
+a physical attack, etc.
+(3) How likely a figure is to avoid falling and similar mishaps. Dexterity
+is adjusted for several factors, such as the range at which a spell is cast, the
+effects of spells or wounds on the figure, etc. Whenever these rules refer
+to DX, the adjusted DX is meant. A figure with a high basic DX may have
+a very small chance of hitting if its adjDX is low – and a clumsy figure
+can improve its chances with a positive DX adjustment. A table of all DX
+adjustments is given on the Reference Pages.
+INTELLIGENCE (IQ) governs:
+(1) How many spells a wizard can know, and which spells he may choose
+these from. The number of spells a wizard knows is equal to his IQ.
+(2) Resistance to illusions and Control spells. The higher a figure’s IQ,
+the easier it will be for him to disbelieve an illusion, and the harder it will
+be to control him/her/it with a Control Person or Control Animal spell.
+Once a figure’s 32 beginning points are divided among ST, DX, and IQ,
+they cannot be changed around. However, a figure that gains experience
+by surviving combat may increase its attributes – see Experience, p. 22.
+CHOOSING SPELLS
+Once a wizard’s ST, DX, and IQ have been set, the player should decide
+what spells the wizard is to know. This is done by working from the Spell
+Table, on the Reference Pages, as follows:
+The number of spells a wizard knows is equal to his IQ. A wizard of IQ
+10 knows up to 10 spells; these are the only ones he can use.
+The spells a wizard may choose from are also determined by his IQ. The
+spells in the Spell Table are organized by IQ. A wizard of IQ 8 may know
+only IQ 8 spells. A wizard of IQ 9 may choose from both IQ 8 and IQ 9
+spells. A wizard of IQ 16 could choose from among all the spells listed –
+though he could only take a total of 16 of them.
+A record sheet or card should be made up for each figure, as in the example below:
+
+Mark off ST lost as spells are cast and hits taken, experience points as
+they are earned, etc. On a separate sheet, record each “continuing” spell
+cast so you can properly deduct ST each turn . . . in fact, you may want to
+keep a record of what spell is cast each turn. If the wizard survives, his hits
+are erased before the next game.
+Once each player’s figures are ready, you may begin the combat.
+•4•
+
+IV. TURN SEQUENCING AND OPTIONS
+
+Wizard is played in turns. During each turn, each figure may execute one
+“option’’ from the list below. Each option consists of a movement, attack,
+defense, or other action or combination of actions.
+The options available to a figure will depend on whether it is “engaged” or
+“disengaged.” An engaged figure is one that is adjacent to an (armed) enemy
+figure, and in one of that figure’s front hexes. See below for diagrams and
+more details. A multi-hex figure is not considered engaged unless it is engaged
+by two one-hex figures (three for a large dragon) or another multi-hex figure.
+Nothing in Wizard happens simultaneously. Each movement or attack
+may affect the next one, and a spell takes effect instantaneously when it
+succeeds. Each turn goes through these stages:
+(1) Roll for Initiative. Each player rolls a die. The winner may choose
+either to move his figure(s) first that turn, or to have the other player(s)
+move their figure(s) first.
+(2) Renew Spells. Each wizard who wants to renew one or more continuing-type spells subtracts from his ST to power the spell(s). All spells
+that are renewed last until the turn ends (or the wizard dies or goes unconscious). All continuing spells that are not renewed end immediately, before
+movement. Note: Some spells are not renewable, but last a stated number
+of turns after casting. The turn such a spell is cast is always counted as the
+first turn.
+(3) Movement. The first player to move chooses one option for each of
+his figures, and executes the movement part (if any) of that option for each
+figure. How far each figure may move depends on its movement allowance
+(MA) and the option chosen.
+The second player then chooses options and moves all his own figures
+the same way. If there are more than two players, the third, fourth, and so
+on then pick options and move.
+(4) Actions. All attacks, spell-castings, attempts to disbelieve, etc., are
+carried out. Figures act in the order of their adjDX, highest first; ties are
+resolved by die roll. Note: Many times a figure’s DX will change during the
+course of a turn, due to spells or wounds. After the figure with the highest
+DX acts, the figure which goes next is the one (of those which have not
+acted that turn) with the highest adjDX at that moment. If a figure’s DX
+is magically increased to a number higher than that of a figure who has
+already acted that turn, that figure does not miss its turn – it is the next to
+act. Always roll a die when two figures have the same adjDX.
+If any figure is killed or knocked down before its turn to act comes, it
+does not get to act that turn.
+(5) Force Retreats. Any figure which inflicted hits on an enemy with a
+physical attack (staff, wolf bites, etc.) and took no hits itself that turn (from
+any source) may retreat that enemy one hex (see p. 21) and either advance
+to the hex vacated by the enemy or stand still (thus possibly becoming
+disengaged). Magical attacks, missile and thrown weapons, etc., do not
+allow you to force a retreat.
+If both sides still have figures able to fight, begin the next turn.
+•5•
+
+OPTIONS
+An option is a set of actions. A figure may execute one option each turn,
+and may not mix actions from different options. The options available to
+a figure depend on whether it is engaged or disengaged at the moment its
+turn to move comes. During a turn, a player may change his mind about a
+figure’s option, as long as that figure has not yet acted, and that figure did
+not move too far to allow it to take the new option.
+OPTIONS FOR DISENGAGED FIGURES
+A figure which is not engaged with an enemy when its turn comes to
+move may perform any one of the following options:
+(a) MOVE up to its full MA.
+(b) CHARGE ATTACK. Move up to half its MA and attack with any
+weapon except a missile weapon, or HTH. (A figure can never attack if it
+moved more than half its MA.)
+(c) DODGE. Move up to half its MA while dodging (see p. 17).
+(d) DROP. Move up to half its MA and drop to prone or kneeling.
+* (e) READY NEW WEAPON. Move up to 2 hexes, re-sling (not drop)
+ready weapon and/or shield, and ready a new weapon and/or shield, or
+pick up and ready a dropped weapon and/or shield where movement ends
+or an adjacent hex.
+* (f) MISSILE WEAPON ATTACK. Move up to l hex and/or drop to
+prone/kneeling position and/or fire a missile weapon.
+(g) STAND UP. Rise from prone, kneeling, or knocked-down position
+at the end of the combat phase, or crawl 2 hexes; take no other action. A
+figure must take a turn to stand up before attacking, running, etc.
+(h) CAST SPELL. Move one hex or stand still, and attempt any spell.
+(i) DISBELIEVE. Move one hex or stand still, taking no other action,
+and attempt to disbelieve one figure.
+OPTIONS FOR ENGAGED FIGURES
+A figure which is engaged with an enemy (see definition, p. 10) when its
+turn comes to move may perform any one of the following options:
+(j) SHIFT AND ATTACK. Shift one hex (or stand still) and attack with
+any non-missile weapon.
+(k) SHIFT AND DEFEND. Shift one hex (or stand still) and defend.
+* (l) ONE-LAST-SHOT MISSILE ATTACK. If the figure had a missile
+weapon ready before it was engaged, it may get off one last shot. (You can
+almost always release an arrow at a charging enemy.)
+* (m) CHANGE WEAPONS. Shift one hex (or stand still) and drop
+ready weapon (if any), and ready a new non-missile weapon. (An engaged
+figure cannot ready or reload a missile weapon.)
+(n) DISENGAGE. See p. 20 for an explanation of disengaging.
+* (o) ATTEMPT HAND-TO-HAND ATTACK. During the movement
+phase, the figure stands still or shifts; when its turn to attack comes, it
+moves onto the hex of any adjacent enemy, and attempts to hit with bare
+hands or (if it was ready) its dagger.
+(p) STAND UP. Same as (g) above.
+•6•
+
+(q) PICK UP DROPPED WEAPON. “Bend over” (not moving), drop
+your ready weapon and/or shield (if any), and pick up and ready a dropped
+weapon in your hex or an adjacent one.
+(r) CAST SPELL. Shift one hex or stand still, and attempt any spell.
+(s) DISBELIEVE. Same as (i) above.
+OPTIONS FOR FIGURES IN HAND-TO-HAND COMBAT
+* (t) HTH ATTACK. Attempt to hit an opponent in the same hex with
+bare hands or, if dagger is ready, with the dagger.
+* (u) ATTEMPT TO DRAW DAGGER. See page 18.
+* (v) ATTEMPT TO DISENGAGE. Disengaging while in HTH combat
+is not automatic; it requires a die roll. See page 20.
+
+* This option involves weapons combat and is only relevant if Melee is being used.
+
+V. MOVEMENT
+
+Figures begin the game in any of the four entrance hexes (starred) at opposite ends of the map. The map may be played as an arena (use all hexes)
+or as a tunnel in a labyrinth (use only the unshaded hexes – or only some
+of the unshaded hexes, if you wish).
+Each figure has a movement allowance (MA) of a certain number of
+hexes. All normal human figures have an MA of 10; MAs for other figures
+are given in the Monster/Beast Table on the Reference Pages. MA may be
+increased or reduced by magic. When MA is doubled, movement allowed
+in all options is doubled – e.g., a wizard could move two hexes and throw a
+spell. However, when movement is halved, the wizard could still move one
+hex and cast a spell – he would not be limited to “half a hex.”
+A figure must stop its movement when it becomes “engaged” – see below
+under Section VI, Facing.
+MOVEMENT OF MULTI-HEX FIGURES
+The MA for a multi-hex figure is the maximum number of hexes any
+part of the figure may move in one turn. For instance, if a dragon moves in
+a straight line, all parts of it will move the same number of hexes – but if
+its tail stays in the same hex and its head moves 4 hexes, or vice versa, the
+dragon is considered to have moved 4 hexes.
+Since a multi-hex figure must be in a front hex of two small figures to
+be engaged (three if it’s a 7-hex dragon), it does not stop movement if it
+enters a front hex of a single one-hex figure. It does have to stop as soon as
+it occupies two at once, thus becoming engaged. Even then, it is allowed to
+move one more hex to push the small figures back – see below.
+SHIFTING
+Only disengaged figures have options which let them move more than
+one hex. An engaged figure may move only one hex during the movement
+phase, and must stay adjacent to all figures to which it is engaged; this is
+called a shift in the list of options.
+A multi-hex figure also moves only one hex when it shifts. However,
+the shift may carry it onto one or more one-hex figures (see below) and/or
+away from one-hex figures with which it was engaged.
+•7•
+
+MOVING ONTO OTHER FIGURES
+Normally, only one figure occupies a hex. You may not move through a
+standing or kneeling figure, friend or foe.
+Fallen bodies (the skull side of each counter) are obstacles. To leap over
+one, spend 3 MA and move into the hex beyond it.
+To move into the hex with a body, either spend 3 MA to move cautiously, or take a move-one-hex option, or follow a retreat, or, if you insist on
+moving quickly onto the body, spend only one MA but make a 3/DX roll to
+stay afoot. If you fail, you fall in that hex.
+A multi-hex figure (a giant or dragon) may end its movement, or take
+its “shift,” by “pushing back” any number of one-hex figures, as long as
+the combined ST (at the moment) of the figures being pushed back is less
+than that of the figure doing the pushing. The large figure moves one hex
+and stops; no figure can be pushed back more than one hex per turn. The
+small figure(s) that it moved onto must immediately make a saving roll: 3
+dice against DX. If they succeed, they step to any adjacent hex and may
+act normally that turn. If they fail, they fall in any adjacent hex and may do
+nothing else that turn. If a small figure has no adjacent empty hex to step
+to, a large figure may not move onto it to push it back.
+A multi-hex figure may push back small figures either at the end of its
+regular move (even if that move engaged it with them) or by shifting onto
+them while engaged.
+FLIGHT
+Some creatures can fly naturally; any creature can fly with a Flight spell
+cast on it. Flight is effective only in an arena; in a tunnel, a flying creature
+loses all advantages except its speed, but keeps all disadvantages. A dragon
+cannot fly in a tunnel at all.
+Fliers have a higher MA. A grounded creature which wishes to fly “takes
+off’’ at the beginning of its movement turn. On its first turn in the air, it has
+only half its flying MA. Thereafter, it has its normal flying MA. A flier may
+land at any time, but may not move on the ground on the turn it lands. A
+creature using the Flight spell automatically lands (not a crash landing) at
+the instant the Flight spell ceases to be powered.
+Flying creatures are not engaged by ground creatures unless they wish to
+be; this assumes there is room in the arena to fly over them. A flyer may freely go over another figure, a fire, a wall, etc. Fliers do engage one another unless both wish not to be engaged; then they may cross at “different heights.”
+There are a number of DX adjustments used for combat involving fliers;
+see the Flight spell in the Spell Table or the table of DX adjustments.
+CRAWLING, KNEELING, AND LYING PRONE
+A figure may use the Drop option to assume any of these positions. A
+figure which falls assumes the prone position involuntarily and may do
+nothing next turn except (either) stand up or crawl.
+A crawling figure has a MA of 2. A figure may crawl without first standing up. A crawling figure is assumed to have all rear hexes for all purposes,
+and may not attack. It is possible to crawl out of a Slippery Floor area
+without making a saving roll.
+•8•
+
+A figure may kneel or lie prone in a hex directly behind a fallen body.
+An attack with a Missile-type spell then has a chance of hitting that body
+instead. If the attacker makes his DX roll to hit, he must then roll one die to
+see if he hits the shelter instead. If the target figure is prone, he hits it on a
+1, 2, or 3; if it was kneeling, or crawling, he needs a 1, 2, 3, or 4.
+A wizard may cast spells while prone or kneeling at no DX adjustment.
+HIDDEN MOVEMENT
+When a figure is invisible and the opposition does not use Mage Sight, or
+when a figure is in one of several connected shadow hexes and the opposition does not know which one, hidden movement is allowed.
+An invisible (or shadowed) figure is taken from the board. Thereafter, its
+location is not revealed unless it:
+(a) uses a missile spell or makes any physical attack;
+(b) becomes adjacent at any time to an enemy figure (including images
+and illusions),
+(c) is wounded, falls down, or goes through a (non-shadowed) fire hex.
+When one of these events occurs, the location of the hidden figure at that moment is revealed. It stays revealed only as long as the hidden figure stays adjacent to an enemy or in a fire. Other events reveal its location only for an instant.
+The player with a hidden figure makes a note, each turn, of where it moves.
+When Mage Sight is used, or invisibility turned off, the counter is replaced.
+When an invisible/shadowed figure is attacked (even by a figure who
+knows where it is), the attack is at -6 DX because you can’t see it. An
+attack into a hex where you hope an invisible/shadowed figure is has the
+same -6 DX. The same goes for casting of spells and attempts to miss an
+invisible figure.
+When a figure is created “on top of” an invisible figure, the location of
+the invisible figure is revealed and the creation appears in an adjacent hex.
+Exception: Fire, Shadow, and Rope, which can occupy a hex with a figure,
+appear on the invisible figure.
+Note: This system is slow . . . and it becomes even slower if both figures
+are invisible and guessing at each others’ location. Ideally, a third person
+is needed to referee such a situation. In The Fantasy Trip, from which this
+game is drawn, the Game Master fills this function. Rather than take Invisibility out of Wizard, we offer this system . . . knowing it’s not perfect, but
+hoping you’ll have fun with it.
+
+VI. FACING
+
+Each one-hex figure “faces” one side
+of its hex, as shown by the direction the
+counter is turned. A player may change
+the facing of a figure whenever it moves,
+and may always change its facing at the
+end of its movement turn, even if it stayed
+in the same hex. Facing determines which
+figures can be attacked by which; it is unwise to let an enemy behind you.
+•9•
+
+A figure on the ground, crawling, or bending over to pick up a weapon
+is considered to face “rear” in all six directions; it has no front, except
+for purposes of determining where it may cast spells. For casting spells, a
+prone or kneeling wizard has normal front hexes. Example: In the diagram,
+Yzor is facing the hex directly “above” him. The three hexes marked “f’’
+are his front hexes; the “s” hexes are his side hexes; the “r” hex is his rear
+hex. He may make a physical attack only into a front hex.
+A multi-hex figure – a giant or dragon – also has front, side, and rear
+hexes, as shown below. A giant’s facing may be changed by rotating the
+triangular counter in the same three hexes. A dragon’s facing may only
+be changed by moving the dragon; he is the wrong shape to spin in place.
+Facing also determines which figures may be attacked. A physical attack
+may be made only against a figure engaged with you – that is, in one of
+your figure’s three front hexes. A spell may be cast only on a figure which
+is (a) in your own hex or any adjacent hex, or (b) generally “in front” of
+you (see diagram). A figure can cast a spell on itself.
+s
+
+7-Hex Dragon
+
+s
+
+f
+
+s
+
+r
+r
+r
+
+s
+r
+
+f
+f
+
+s
+
+f
+s
+
+f f
+f
+
+Human
+
+f
+f
+
+s
+
+s
+Giant
+
+s
+r
+
+r
+
+r
+
+f
+r
+
+f
+
+s
+
+s
+
+r
+r
+r
+
+f
+
+f
+
+f
+
+f
+r
+
+s
+
+4-Hex Dragon
+
+ENGAGED AND DISENGAGED
+Facing determines which figures are engaged. A one-hex figure is engaged if it is in one of the front hexes of an armed enemy. (The only “unarmed” enemy in this game is a wizard who has no staff.) If a figure is
+directly behind a foe, the front figure is engaged, but the rear one is not.
+A multi-hex figure, being bigger, is harder to engage. A giant or small dragon is engaged only if it is in the front hexes of two or more armed one-hex
+figures (or one multi-hex figure). A 7-hex dragon is not engaged unless it is
+in the front hexes of three or more one-hex figures (or one multi-hex figure).
+
+In this diagram, Tark is not engaged. Bjorn is engaged (he is in Rolf’s
+front hex), but Rolf is not engaged (he is in Bjorn’s rear hex). Karl and
+Astaroth are both engaged; each is in one of the other’s front hexes. Jon
+and Grath are not engaged; they are not enemies.
+The unshaded hexes are “in front of” Tark. He can cast spells only at
+figures in these hexes, or in his own or adjacent hexes.
+• 10 •
+
+A physical attack made from an enemy’s side hex adds +2 to the attacker’s DX. A physical attack made from an enemy’s rear hex adds +4. An
+enemy’s facing does not affect adjusted DX of spells cast against him.
+
+VII. SAVING ROLLS
+
+A “saving roll” is a die roll made by a figure to escape a bad occurrence.
+Different bad occurrences require saving rolls using different numbers of
+dice, made against different attributes.
+For example, a saving roll is required to avoid falling down in a Slippery Floor hex. This saving roll is made on 3 dice (relatively easy) against
+adjDX (because you use dexterity to avoid falling). The figure must roll its
+adjDX or less on 3 dice (the same as a “to hit” roll).
+The 3-dice-on-DX saving roll is the most common, but others are used.
+Avoiding a Control Person spell, or disbelieving an illusion, requires a
+3-die saving roll against IQ. If a Control Person spell is successfully cast
+on a figure, that figure then tries to roll its IQ or less on 3 dice. If the roll
+fails, the spell works; if the roll succeeds, the spell does not take effect (and
+only costs the wizard casting it the 1 ST for a missed spell).
+When a saving roll is mentioned in these rules, the general rule is: roll
+the given number of dice, trying to get a number less than or equal to your
+ST, adjDX, or IQ, as the case may be. Failure to make the saving roll indicates failure to avoid the hazard involved.
+
+VIII. CASTING SPELLS
+
+A wizard may cast one spell per turn, as long as he knows the spell, has
+enough ST to “pay the cost,” and selects an option allowing a spell to be
+cast. If he cast continuing-type spells during any previous turn, he must
+energize them before the movement phase, or they will cease to operate. A
+wizard may energize any number of spells at once, provided he has enough
+ST, but may cast only one new one per turn. If he fails to energize any
+continuing-type spell, it turns off. If he wants to use it again, he must cast
+it all over again on some later turn.
+ROLLING TO HIT
+The “to hit” roll is the basic roll in Wizard. It is a roll made on three dice,
+to determine whether a figure “hit” – that is, whether its spell worked, its
+staff or sword struck, etc.
+In order to hit, a figure must roll its adjusted DX or less on 3 dice. All DX
+adjustments are cumulative. Starting with a DX of 11, for example, a figure
+might have -2 for range to the target, -2 for having been severely wounded
+last turn, and +3 because another wizard had cast a 3-point Aid spell on it
+. . . thus, its adjusted DX that turn would be 10, and it would need to roll
+10 or less on the 3 dice.
+After making a “to hit” roll, the figure rolls again for damage if it hit with
+a weapon or with a missile spell. Other kinds of spell have various effects
+when they hit – see below.
+Some rolls have special significance. When you roll to hit, a 3, 4, or 5 is
+an automatic hit, and 16, 17, or 18 is an automatic miss, regardless of DX.
+Furthermore:
+• 11 •
+
+A roll of 3 means triple effect. Missile spells and physical attacks do triple damage. Creation spells produce three of whatever you wanted. Other
+spells have triple effect in any one way the player chooses: three times as
+long, or three times as powerful, or any other tripling. (You cannot have a
+spell affect the original target figure and two others, though.) There is no
+extra ST cost then or later for the triple effect.
+A roll of 4 means double effect – as above, but only doubled.
+A roll of 5 is an automatic hit, whatever your DX.
+A roll of 16 is an automatic miss, whatever your DX.
+A roll of 17 is an automatic miss, and the wizard loses the full ST cost
+of the spell. The spell fizzles immediately, even if it was a missile spell.
+A roll of 18 is an automatic miss/fizzle, as above, and the wizard still
+loses the full ST cost of the spell. In addition, the shock knocks him down.
+For weapons and staffs: a roll of 17 is a dropped weapon/staff. A roll of
+18 is a broken weapon/staff.
+TYPES OF SPELLS
+There are four different types of spells: Missile Spells, Thrown Spells,
+Creation Spells, and Special Spells. Each type has different properties.
+MISSILE SPELLS
+There are three missile spells: Magic Fist, Fireball, and Lightning. A
+missile spell can be cast on any hex in front of the wizard – see Facing.
+To cast one of these spells, the wizard announces (1) its target, and (2) the
+amount of ST (maximum 3) he is using for the spell. He then makes his “to
+hit” roll. Dexterity on a missile spell is adjusted as follows: For a target in
+the wizard’s megahex, or one or two MH away, no subtraction. For a target
+3 or 4 MH away, DX-1. For a target 5 or 6 MH away, DX-2, and so on.
+If the wizard makes his “to hit” roll, the spell strikes. If not, it missed. It
+continues along the straight line drawn between the center of the wizard’s
+hex and the center of the target hex. If it enters a hex occupied by another figure, make another “to hit” roll (re-figuring DX for the new range).
+Continue in this way until the spell (a) hits a figure or wall, (b) misses all
+targets, or (c) travels a number of MH equal to the basic ST of the wizard
+who cast it. Spells do not bounce. The full ST is expended, no matter what
+(if anything) is hit.
+Since missile spells travel in a straight line, they are blocked by walls.
+However, a Lightning spell can blast through a created wall hex. When the
+course of the spell passes through such a wall, roll for damage. If it puts
+more than 5 hits on the wall, that wall hex vanishes and the rest of the force
+goes through and can hit a target.
+If the straight line between the center of the wizard’s hex and the center
+of the target hex passes through a hex containing a figure the wizard does
+not wish to hit, or if a spell misses and its course passes through a hex with
+a friendly figure, the wizard may “roll to miss” – that is, roll to see whether
+he successfully got the missile spell past that figure. Make your normal
+DX roll, adjusting for range to the figure you want to miss. If you roll your
+adjDX or less, you successfully missed and your spell continues. Note: On
+a roll to miss, a 14 is an automatic hit, 15 and 16 are double-damage hits,
+and 17 and 18 are triple-damage hits.
+• 12 •
+
+When rolling to miss an enemy figure, a “miss” on the miss is not a hit;
+that would encourage players to say they are trying to miss when they want
+to hit. Instead, a missed “roll to miss” an enemy just fizzles in that hex.
+When a missile spell strikes, it does damage as follows: Roll one die
+for each ST the wizard put into the spell. From the total rolled, subtract 2
+for each die if the spell was a Magic Fist, 1 for each die if the spell was a
+Fireball, and nothing if the spell was Lightning. Thus, if you put 3 ST into
+a Magic Fist, roll 3 dice and subtract 6 from the total. If you rolled 12 on
+the 3 dice, your Magic Fist put 6 hits on the target. The same roll with a
+Fireball would do 9 hits damage; a lightning bolt would do 12 hits. The
+spell always does at least as much damage as was put into it.
+The “Reverse Missiles” spell will cause missile spells to turn and fly at
+their sender instead. The sender makes his normal roll as though the target
+were being attacked, but the spell flies to his target and then straight back
+to him. If he misses himself, the spell continues on behind him.
+
+THROWN SPELLS
+Thrown spells are those which act directly on a figure or object, but
+do not directly put hits on anything. Examples of thrown spells are Blur,
+Freeze, Slippery Floor, Invisibility, and Stone Flesh.
+A thrown spell may be cast at another figure, at the wizard himself, or
+at some object, depending upon the spell and the desired effect. A thrown
+spell can be cast on the wizard’s own hex, on any adjacent hex, or on any
+hex in front of the wizard at the time he casts it – see Facing.
+To figure the DX adjustment on a thrown spell, subtract 1 from DX for
+every hex from the wizard to his target. A wizard casting a thrown spell on
+himself (Blur, for instance) has no DX penalty for distance. If he is casting
+a thrown spell (Drop Weapon, for instance) on a figure in an adjacent hex,
+his DX is -1. Thus, thrown spells are unlikely to work at a great distance.
+Some thrown spells (Slippery Floor, Megahex Sleep, and Megahex
+Avert) affect not one hex, but a whole megahex. To calculate DX adjustment for these, take the number of hexes from the wizard to the center of
+the megahex he wants to affect. Any 7-hex circle may be affected, regardless of the megahex markings on the map.
+To try a thrown spell, the wizard makes his “to hit” roll against his adjDX.
+If he rolls his adjDX or less, the spell takes effect immediately, and the
+wizard loses ST equal to the spell’s ST cost. If the wizard fails to make
+his “to hit” roll, the spell has no effect; the wizard loses one point of ST.
+Only one Blur, one Stone Flesh, one Shock Shield, etc., can be cast on
+any given figure at a time. These spells are not cumulative.
+Thrown spells never miss their target and hit another, and never suffer a
+DX penalty for intervening figures. They take full effect or none.
+Secret Protection
+Some thrown spells (Spell Shield, Iron and Stone Flesh, Slippery Floor,
+Shock Shield, and Reverse Missiles) can act as “secret protection.” When
+a wizard attempts one of these spells, he does not have to say what he is
+trying – he just says “secret protection” and tries his “to hit” roll. If the roll
+is successful, he notes the magic protection (and which figure or area it’s
+•13 •
+
+on) on his record sheet. He shows it to the opponent only when (a) it affects
+the opponent, or (b) the opponent successfully casts Reveal Magic.
+A player is permitted to use the “secret protection” method to mislead
+his opponent. He may say “secret protection” and either (a) roll the dice
+but cast no spell at all, conserving his strength, or (b) do another spell that
+produces no visible result, such as a Creation spell to produce something
+inside a shadow hex where the enemy can’t see it.
+It is a good idea to keep a turn-by-turn record of what spells are cast,
+especially if the players are using a lot of secret spells.
+Control Spells
+These are a subclass of Thrown Spells ­– they
+can take over the mind of a living creature and
+make it do your bidding. There are two Control
+spells in this game: one for animals (works only
+on wolves, bears, snakes, and other “natural”
+animals) and one for men (works only on men,
+elves, giants, gargoyles, and other humanoids).
+There is no control spell to affect a dragon; all
+other creatures in this game can be controlled.
+Because a Control spell involves taking over its mind, the victim gets a
+saving roll: 3 dice against IQ. The procedure is this: the wizard announces
+that he is trying the control spell, and indicates the victim. If the “to hit”
+roll is successful (thrown-spell range), the victim must make his saving
+roll. If the roll is successful, the wizard loses 1 ST and the victim is unaffected. If the roll fails, the wizard loses the spell’s full ST cost and the
+victim is under his control.
+A controlled figure will obey the mental orders of its controller as long
+as the spell is on, and the controller can see through its eyes. When the
+spell ends, it will not know who controlled it. A controlled figure will do
+anything that will not clearly lead to its own death. If ordered to kill itself,
+or to attack another figure of more than twice its basic ST, it gets another
+saving roll of 3 dice vs. IQ. A successful saving roll breaks the spell, and
+the victim remembers who controlled it. An unsuccessful saving roll means
+the order is followed.
+Only a real being (summoned or otherwise) may be controlled by these
+spells. If a wizard takes control of a summoned being, the energy that he puts
+into the control spell goes to keep the being on this plane. The wizard who
+originally summoned that being no longer has to pay the ST cost each turn,
+and cannot get rid of the being by willing it away. When the being’s new
+master stops energizing the Control spell, the summoned being vanishes.
+A Control spell can be used on a being under the influence of another
+Control spell; control of a being may change hands many times.
+Images and illusions cannot be Controlled. If a control spell is attempted
+against an image or illusion, and the wizard makes his “to hit” roll, the image or illusion vanishes. This does not mean that a Control spell can dispel
+an illusionary fire, wall, etc. A Control spell will dispel only an image or
+illusion of a thing it could control if that thing were real.
+•14 •
+
+CREATION SPELLS
+These are spells used to bring something into being – either to bring help
+from elsewhere (Summoning spells), or to create fire, shadow, or walls, or
+to create an image or illusion of any of these things. Magic Rope is also a
+Creation spell.
+To attempt a creation spell, the wizard announces that he is trying a creation, but does not say specifically what. He then attempts the “to hit”
+roll. If he makes it, succeeding with (for instance) a wolf, he places a wolf
+counter on the map . . . but the opposing player does not know whether it
+is a real (that is, summoned) wolf, an illusion of a wolf, or just an image.
+Creation spells have a limited range. A created being or object can appear
+anywhere in the space defined by the wizard’s megahex and all megahexes
+adjacent to it. It can appear anywhere in this space, as long as it appears in
+an empty hex(es). Fire and Shadow can appear in occupied hexes, and the
+Magic Rope is no use except in an occupied hex.
+On the next turn, a created being can move away – or the wizard can
+move away from his creation. It does not have to stay within the original
+mega-megahex range.
+A created being must appear in a hex the wizard can see into. You may
+not stand on one side of a wall, for instance, and attempt to create a being
+on the other side. However, you may attempt to create a being, fire, etc. in
+a shadow hex. (If you succeed, don’t put a counter down. Your opponent
+will not know about a being or fire in shadow until he is adjacent to it with
+one of his figures.)
+There is no DX adjustment for range on creation spells, since they must
+appear within a limited area anyway. If the wizard makes his adjDX roll,
+the created being or object instantly appears wherever (within the megamegahex) the wizard wishes. If the wizard misses his adjDX roll, nothing
+appears, and the wizard loses one ST point.
+A created being cannot move or fight on the turn it appears. At the beginning of the next turn, it can pick an option and behave like any other figure.
+A wizard can see through the eyes of the summoned beings, images, or
+illusions brought by his Creation spells. If he has Mage Sight, his creations
+have it too.
+Optional Rule – Time Limits
+Certain spells have a long, but limited, duration. These include images,
+illusions, fire, walls, and shadow. These spells last 12 turns and then vanish
+– unless the original caster has repeated the spell before the end of that time
+to give them a further 12 turns.
+Since most games of Wizard do not last 12 turns, you may wish to save
+yourself record-keeping by treating these spells as permanent.
+Summoned Creatures
+These are the “real” beings summoned temporarily from another plane
+to do the wizard’s bidding. They are completely under the control of the
+wizard who summons them, and vanish only (a) when they are killed, (b)
+before movement in a turn when the wizard who summoned them fails to
+re-energize the Summoning spell, (c) at any time their master wants them
+•15 •
+
+to vanish, or (d) at the end of the turn the controlling wizard dies or becomes unconscious. (Thus, your summoned creature has a turn, or part of
+a turn, to avenge you if you are killed.)
+Since a summoned creature is real, it behaves in all ways like any other
+figure, except that (a) it cannot move, fight, defend itself, or do anything
+else on the turn it is created, and (b) it cannot try to disbelieve an illusion,
+since it has no will of its own.
+When a wizard summons a being, the player must make a record sheet for
+the summoned being, since it takes hits and dies like any other figure. The
+only way to get rid of a summoned being (unless you take it over with a Control spell) is to kill it, kill its master, or knock its master out. Note: If an Aid
+spell revives an unconscious wizard before the end of the turn, his summoned
+being(s) will still be there and can be re-energized – unlike images and illusions, below, which vanish the instant their master loses consciousness.
+A Control spell can be used to take over a summoned being. If it succeeds, and the summoned being misses its saving roll, treat it thereafter as
+though it had been summoned by the wizard who now controls it. The ST
+put into the Control spell is the power keeping the being on this plane. No
+wizard can re-energize this spell except the one who cast it. (This is true of
+all continuing spells. Only the caster can re-energize them.)
+Images and Illusions
+A wizard can create two types of “unreal” things: images and illusions. A
+wizard can create an image or illusion of anything real, as long as he knows
+the Image (or Illusion) spell.
+Images are simple. An image has the full appearance (sight, sound,
+smell, etc.) of whatever it simulates. Different spells create images of different sizes. An image may be of a living creature, fire, wall, shadow, etc.
+– but it must be of one thing, not (for instance) seven men.
+An image follows the mental commands of its creator. However, it has
+no reality and can never do damage. If it hits or touches something, or
+something hits or touches it, the image disappears. (An illusion which hits
+an image destroys the image. If one image hits another, both vanish.)
+An image can also be destroyed simply by moving through it. However,
+if a figure tries to move through an “image” which turns out not to be an
+image, its movement stops in the hex from which it tried to enter the other
+figure’s hex. The other figure must make a 3-die saving roll on DX to avoid
+falling; the figure which ran into it thinking it was an image must make a
+­four-die roll on DX or fall down. However, dragons or giants wouldn’t
+need to make a saving roll unless hit by another multi-hex figure.
+When a missile spell (or thrown/missile weapon) hits an image, the image vanishes and the missile goes on in a straight line, unaffected.
+Illusions are much more dangerous. They are like images in that they
+come in different sizes and may simulate anything real. An illusion also
+moves, speaks, and fights just as its creator commands. However, an illusion can hurt or kill others as long as they believe in it.
+An illusion is treated just like an ordinary figure. Its creator should make
+a record sheet for it if it represents a living being. An illusion has the exact
+•16 •
+
+characteristics of the thing it represents; an illusionary wolf has ST 10 and
+DX 14 just like a real one. It can be killed just like a real wolf, too: if it
+takes 10 hits, it’s unconscious, and an 11th hit kills it. It then vanishes. You
+can combat an illusion on the physical level and triumph.
+However, it is better to combat an illusion on the mental level, by “disbelieving” it. If anyone disbelieves an illusion, the knot of forces making it
+up will unravel and the illusion will vanish. Any damage that it did, though,
+is real, and remains.
+To disbelieve an illusion, a figure must be a human, humanoid, or dragon
+(animals, summoned creatures, images, and illusions cannot disbelieve)
+and choose the Disbelieve option. This lets a figure move one hex or stand
+still, and attempt his saving roll on 3 dice against IQ.
+However, the other player – the one who owns the figure to be disbelieved – makes the roll. The player attempting disbelief indicates the figure
+he wants to disbelieve and the IQ of the figure trying to dis­believe it. His
+opponent then secretly rolls 3 dice. A result less than or equal to the IQ of
+the disbeliever dispels the illusion – if illusion it was. If the roll was too
+high – or the figure was NOT an illusion – it remains, and the disbelieving
+player is left in doubt as to what happened.
+
+Illusions can also be destroyed by the Destroy Creation and Dispel Illusion spells, as well as by appropriate Control spells.
+Both Illusions and Images have the following things in common:
+• Like other created beings, they do nothing on the turn they appear.
+• They vanish the instant their creator dies, goes unconscious, or wills
+them away.
+Illusions or images of walls, fire, or shadow can be created. Illusions
+work just like the real thing until disbelieved or destroyed by a spell. Images look real, but vanish when hit, touched, or walked through.
+An illusion of a Rope spell can be created as above. An image Rope
+could be created, but would vanish as soon as it touched its “victim.”
+All spells affect illusions/images as though they were real, except Invisibility and the Death spell. An Invisibility spell destroys an image or illusion;
+the Death spell destroys an image at a cost of 1 ST to the caster, but affects
+an illusion as though it were alive. Other spells (flight, slow, etc.) affects an
+image/illusion normally. Note: An image or illusion cannot be commanded
+to do anything that a “normal” figure of the same type could not do. For
+instance, an illusion of a Gargoyle could fly, but an image of a human could
+not (unless a Flight spell were thrown on it). The illusion depends on the
+belief of those who observe it. Therefore, it has to act “real” at all times.
+A wizard may create an Image or Illusion duplicate of any figure in play,
+including himself. Such a “double” may even be created in the hex occupied by the original. Either the original or the duplicate then immediately
+moves one hex in any direction, confusing the opposition.
+An image/illusion double cannot throw spells of any kind. It can make
+only physical attacks (and cannot use a thrown or missile weapon – that
+would require the image/illusion to divide in two). However, a double can
+pretend to cast a spell . . .
+• 17 •
+
+A double has the same DX as the original, and the same ST if it is an
+illusion. If the original was blurred, the double will be, too. Other protective spells do not carry over onto a double, since their effect is not visual.
+Fire, Walls, and Shadow
+Three types of magical barrier are possible: Fire, Wall, and Shadow. A
+solid Wall (stone-pattern counters) is just that – a hex of magically created
+wall, about 10 feet high. It cannot be placed in a hex occupied by a figure.
+It can be placed on a fire, to put the fire out.
+Shadow (dark counters) is insubstantial darkness, and can be walked
+through. It extends about 10 feet high. A figure inside a shadow can see
+nothing, unless he has Mage Sight. He has -6 DX. A figure attacking or
+casting a spell through a shadow is also at -6 DX; an attack or spell cast
+into a shadow is at -4 DX. Shadow can be cast over a figure, fire, or wall.
+It totally conceals its contents. A thing can be created inside an existing
+shadow, as well.
+Fire (red counters) puts 2 hits on anything passing through or any figure
+in the hex when the fire appears. It puts 4 hits on anything ending its move
+in the hex. See Fire in the Spell Table for examples. Fire can be cast into
+any hex not occupied by a Wall.
+SPECIAL SPELLS
+These are the spells that do not fit into any of the other categories. Each
+one is fully described in the Spell Table.
+If a special method of DX adjustment for the spell is described, use it.
+Otherwise, treat range as for Thrown spells.
+If a wizard attempts a special spell, he tries his “to hit” roll. If the roll
+succeeds, the spell works immediately and the wizard loses the appropriate
+ST cost from the Spell Table. If the roll fails, nothing happens and the
+wizard loses one ST point.
+
+IX. PHYSICAL ATTACKS
+
+A physical attack is an attempt to damage an enemy with teeth, claws,
+fists, or weapons. The only way a wizard can make a physical attack in
+Wizard is by striking with his staff. Created beings can attack by biting,
+clawing, breathing fire, striking with a sword or club, punching, and so on.
+In order to make a physical attack, a figure must choose either the Charge
+Attack or Shift and Attack option. The figure attacked must be in one of the
+attacker’s three front hexes.
+A physical attack must either be with natural weapons (teeth, fists, etc.) or a
+“ready weapon.” In Wizard, assume that a wizard, Myrmidon, or giant has his
+weapon ready at all times unless it has been dropped or broken (see below).
+When a physical attack is made, first roll to see if it hit. This is a 3-die
+roll made against the attacker’s adjDX, just as though the attacker were
+trying to hit with a spell – see Rolling to Hit, p. 11. If the attacker rolls his
+adjDX or less on 3 dice, he hit.
+After an attack hits, the dice are rolled a second time to determine how
+much damage is done. The damage a figure, spell, or weapon can do is expressed in terms of the number of dice rolled to determine it. A Myrmidon’s
+•18 •
+
+broadsword does “2 dice damage.” When it hits, two dice are rolled; the
+number rolled is the number of “hits” taken by the figure attacked. Each
+hit taken (after the protection from spells, armor, etc. is subtracted) reduces
+the victim’s ST by 1 and is checked off their record sheet.
+Damage done by figures, weapons, and spells is expressed with pluses
+and minuses. For example, a wolf does “1 die plus 1” (or simply “1d+1”)
+damage. One die is rolled and 1 is added to the result. Thus, a die roll of 4
+means the victim takes 5 hits. A bear’s “2d+2” means that when a bear hits,
+2 dice are rolled and 2 added to the result.
+This same method is used to determine physical damage done other
+ways. For instance, the Magic Fist spell does 1d-2 damage for each ST
+point expended by the wizard. If a wizard puts 3 ST into a Magic Fist, it
+does 3 times (1d-2) damage . . . that is, 3d-6 damage. Three dice are rolled,
+and 6 subtracted from the total. But the total cannot go below the ST put
+into the spell.
+THE WIZARD’S STAFF
+The only physical weapon a wizard carries in this game is his staff. Although a staff is magical, the damage it does is physical.
+A wizard does not have to have a staff. If he wants one, he must know
+the Staff spell. The wizard does not create the staff during the game (except
+perhaps to replace a broken one). If he knows the Staff spell, he starts the
+game with a staff, without expending any ST to create it.
+Regardless of what the staff looks like (rod, wand, quarterstaff, etc.), it
+does one die of damage when the wizard hits with it. Striking with the staff
+is treated just as though the wizard were a fighter using a one-die weapon.
+It costs no ST to strike with a staff.
+A wizard who has a staff may keep it in hand at all times, even when he
+is casting spells; it gives him no advantage or disadvantage. A staff can be
+affected by a Drop Weapon or Break Weapon spell.
+If anyone other than the owner of a staff picks it up against his will, it
+explodes, doing the fool who touched it 3 dice damage. A dead wizard’s
+staff eventually becomes safer to touch. You don’t know when.
+See In the Labyrinth for more Staff spells.
+DROPPED OR BROKEN WEAPONS; BARE HANDS ATTACKS
+A figure whose weapon is dropped may recover it by using the Pick Up
+Dropped Weapon option; the weapon will be ready for use next turn.
+A broken staff does not work. A wizard whose staff is broken may either
+do without or create a new one from the piece in his hand.
+A Myrmidon or Giant whose weapon is broken can use it thereafter, but
+it does only half damage (roll dice normally for the number of hits and then
+divide in half, rounding down). If it breaks again, it is useless.
+A Myrmidon or Giant with a dropped or broken weapon may also attack with its bare hands. This is treated like any other attack, but it does
+less damage. A Myrmidon attacking with bare hands does 1d-3 damage. A
+Giant attacking with bare hands does 2d-1 damage.
+•19 •
+
+PROTECTION FROM HITS
+In Melee, armor protects a figure by stopping a certain number of hits.
+In Wizard, spells protect the same way. The Stone Flesh spell stops 4 hits
+per attack; the Iron Flesh spell stops 6 hits per attack. This is a subtraction
+from each attack against the protected figure. If a figure with Stone Flesh
+is hit by two attacks during the same turn, one doing 5 hits damage and the
+second doing 3, he takes only 1 hit from the first attack and none at all from
+the second. The Stone Flesh stops the other hits.
+The fur, scales, and other natural protection of animals and monsters act
+the same way. For example, a wolf’s fur stops 1 hit per attack. This means
+that if a wolf is hit by a broadsword (2 dice) and an 8 is rolled, the wolf
+only takes 7 hits. If the wolf was protected by Stone Flesh, 4 more hits
+would be stopped – and it would take only 3 hits damage.
+DISENGAGING
+Disengaging is the action of moving away from a figure(s) by which you
+are engaged. A multi-hex figure may disengage by use of the “disengage”
+option (below) or simply by picking an option allowing a shift and then
+shifting away from the figure(s) attacking it. A one-hex figure, however,
+uses the “disengage” option.
+A figure which selects the “disengage” option stands still or shifts during
+its movement phase. When its turn to act comes, instead of taking any other action, it moves one hex in any direction except onto an enemy figure.
+Note that an enemy with a DX higher than yours will be able to make a
+physical attack on you before you disengage, since he acts before you. An
+enemy with a lower DX will not have a chance to attack if you disengage
+away from him.
+A one-hex figure engaged with more than one foe may disengage from
+some while remaining engaged with others, but may never attack or take
+any other action on the turn he disengages.
+A kneeling, prone, or crawling figure can’t disengage; it must first stand.
+DEFENDING AND DODGING
+The “dodge” option (for disengaged figures) and the “defend” option (for
+engaged figures) have similar effects. To hit a figure who is dodging or
+defending, a figure must make its “to hit” roll against adjDX on four dice
+instead of three. 4 and 5 are automatic hits with triple and double damage;
+20 and above are automatic misses; 21 and 22 are dropped weapons, and 23
+and 24 are broken weapons.
+Dodging is effective only against missile spells (and thrown and missile
+weapons). It is no good against other spells or attacks.
+Defending is effective only against non-missile spells and attacks. A figure can defend only if it has a staff, sword, club, etc., ready to parry the
+attack with. In other words, dodging makes a missile miss; defending stops
+a physical attack from an adjacent hex.
+A figure must have a physical weapon (staff, sword, or club) in hand to
+defend – the weapon is used for parrying.
+Neither of these options permits the casting of a spell or any sort of attack. They are purely defensive.
+• 20 •
+
+FORCING RETREAT
+A figure which hit an enemy figure (missile or thrown weapon hits, or
+hits taken by the enemy’s armor, don’t count) and is not hit itself, may
+force the enemy to retreat one hex at the end of the turn. The victorious
+player moves the enemy figure one hex farther from the attacker, into any
+hex which is vacant or contains only a fallen figure. The victor may then
+choose either to stay still or to move into the hex from which the enemy
+retreated. If there is no vacant or fallen-figure hex adjacent to the foe, you
+cannot force a retreat.
+REACTIONS TO INJURY
+A figure which takes 5 or more hits in one turn has its DX adjusted -2 for
+its next action phase (only).
+A figure which takes 8 or more hits in one turn immediately falls down.
+Place a PRONE marker on it. If it has not yet acted that turn, it may take
+no action. On the next turn it may use option (g) to stand or crawl. If it is in
+hand-to-hand combat it may do nothing next turn.
+Any figure whose ST is reduced to 3 or less has an extra -3 DX for the
+rest of the game. Any figure whose ST is reduced to 0 falls unconscious,
+and any figure whose ST is reduced to below 0 dies. Flip the counter over
+to show the skull; it is now an obstacle.
+
+X. NONHUMAN FIGURES
+
+MONSTERS AND BEASTS
+The characteristics of the various monsters and beasts that can appear
+in this game ­– as well as the summoned Myrmidons ­– are shown in the
+Monster/Beast Table on the Reference Pages.
+FANTASY FIGHTERS
+An ELF is like a man, except his MA with cloth or no armor is 12. In
+leather, he moves 10. His movement in other armor is the same as a man’s.
+Min ST 6; min DX 10; min IQ 8; total 32.
+A DWARF is also like a man, except min DX 6, min ST 10; min IQ 8;
+total 32.
+A HALFLING has min ST 4, min DX 12, min IQ 8, with only 6 points
+added; total 30. A Halfling gets a +2 DX bonus whenever he throws something. He may also throw any weapon on the same turn he readies it.
+An ORC is just like a human figure – but most are evil.
+A GOBLIN has min ST 6, min DX 8, min IQ 10; total 32.
+A HOBGOBLIN has min ST 7, min DX 6, min IQ 7; total 28.
+DRAGONS
+Dragons (real and summoned) can
+fight three ways. They can make two
+physical attacks each turn, against
+the same or different targets, when
+they pick an attack option. First, they
+can strike with a claw, doing 2 dice
+damage (2d-2 for small dragons).
+• 21 •
+
+The claw strike is made at the dragon’s adjDX, against any figure
+in one of the dragon’s front hexes. And second, a dragon can also
+breathe fire. This does 3 dice damage (2 for a small dragon). Dragon
+breath has the same DX penalty for range as a thrown spell . . .
+-1 DX for each hex from the dragon’s head to the target hex. It costs a
+dragon 5 ST each time it breathes (3 ST for a small dragon). A dragon can
+breathe fire at any hex, because its neck is flexible.
+A dragon can also lash with its tail. It can do this every turn that it is on
+the ground, no matter what option it picks. When the dragon’s turn to act
+comes, it gets one roll (at its adjDX) to hit each one-hex figure in one of its
+rear hexes. Any figure it hits must make a saving roll (3 dice against DX)
+to avoid being knocked down. The tail does no damage – it just knocks you
+down if it hits you right.
+Dragons are armored. A regular dragon’s scales stop 5 hits per attack; a
+small dragon’s scales stop 3 hits per attack.
+A dragon, because of its size, can move onto and knock over small figures. It can also disengage from one-hex figures during its movement turn.
+See Moving Onto Other Figures and Disengaging.
+
+XI. EXPERIENCE
+
+Figures which survive combat gain experience, which can increase their ST,
+DX, or IQ. The experience a wizard gains depends on the type of combat, and
+whether the enemy was superior or inferior in total combined attribute points.
+Combat to the Death. Continues until all on one side are slain. 50 experience points (XP) to each survivor, or 100 if the enemy averaged more
+than 3 superior in attributes (ST + DX + IQ). May be against other wizards,
+fighters, dragons, beasts, or any combination.
+Arena Combat. Continues until all on one side have fallen or escaped
+from the “door” from which they entered. Unconscious figures may not
+be slain. Winners get 30 XP; defeated survivors get 20 XP (unless they ran
+away unhurt, in which case they lose 10 XP). If one side averaged 3 or more
+weaker in total attributes, all survivors on that side get 20 extra XP each.
+Practice Combat. No spells are used that can put hits on a foe except
+Magic Fist and Fire spells. Nothing may be summoned; no illusions or
+images except of the wizard himself are allowed. Striking with the staff
+is permitted. The object is to incapacitate the enemy, rather than to kill. A
+figure drops out when its ST goes to 3 or less. It is possible to get killed in
+practice combat – but it’s difficult. Those still on their feet when one side
+is eliminated get 10 XP each.
+When a figure gets 100 XP, he/she may “trade them in” for one additional point added to either basic ST, basic IQ, or basic DX. Up to 8 attribute
+points may be added. After that . . . see In The Labyrinth.
+Note: This system allows a wizard to add one attribute point (on the
+average) for every two duels. As long as you are only playing Wizard (and/
+or Melee) as a game of duels, this will work quite fairly. However, if you
+are using TFT: In The Labyrinth, and playing a campaign game, use the
+experience point system given there, which allows characters to gain experience for things besides fighting, rather than the above system.
+• 22 •
+
+XII. OPTIONAL RULES
+EXPERIENCED FIGURES
+A “beginning” figure has only 8 optional attribute points, or a total of 32
+points. However, you can create wizards with any number of points if you
+don’t want to “work them up” from the beginning. A battle between two
+40-point wizards, each with two 32-point apprentices, is interesting.
+PETS
+Wizards can start the game with pets, such as tame wolves or bears. Such
+animals are “real” in every sense, and require no ST to maintain them.
+Furthermore, they may be stronger than ordinary animals, and will certainly be smarter – and therefore less vulnerable to Control Animal spells. A
+wizard’s pet wolf might have ST 14, DX 14, IQ 10.
+MAGIC ITEMS
+Various artifacts and amulets can be invented and included in a game – for instance, you can draw up a list
+of ten or twenty and let each wizard on a side choose
+one. These items should make use of the existing types
+of magic. For instance, a ring might Blur its wearer, or
+give him Stone Flesh. An amulet might protect its owner against Sleep and Freeze spells. A crystal lens might
+give its wearer Mage Sight. And so on . . .
+When you use magic items in a game, you should
+work from a list of items which you feel are equivalent. The items actually chosen should be a secret
+until used.
+THE COURTESY RULE
+Duelists may agree that the “courtesy rule” will be used. This rule forbids either wizard from casting a missile spell as his first action. Obviously,
+if this rule is not used, a duel could be short and pointless. However, if each
+wizard’s first spell is a creation or defensive spell, the battle can become
+quite involved.
+
+XIII. COMBINING WIZARD WITH MELEE
+
+If you have Melee, you can involve fighters in your magical duels . . .
+or send a party of warriors down the tunnel with a wizard along as Special
+Weapons Section.
+When the two games are combined, make the following specific adaptations:
+Hand-to-Hand Combat: HTH combat is permitted, exactly as in Melee.
+A wizard involved in HTH must drop his staff. He may cast spells, but only
+on himself or his foe in HTH, and is at a -4 DX for that. He may draw and
+use a dagger like any Melee fighter, but at -4 DX. Note: The Shock Shield
+spell is intended for HTH combat; it has no use if Wizard is played without
+the Melee rules.
+Striking Without Weapons: The Wizard rules for bare-handed attacks
+from an adjacent hex may also be used in Melee.
+Fantasy Fighters: Follow the Wizard stats, which include IQ.
+• 23 •
+
+IQ of Fighters: If wizards are around, the IQ of fighters becomes important. Assume that ordinary Melee fighters have IQ 8. This makes their
+beginning point total 32 – the same as for wizards. You may increase a
+fighter’s IQ, at the expense of ST or DX, to give him a better chance of
+disbelieving illusions and avoiding Control Person spells.
+Myrmidons: If you have the Melee rules, disregard the rule that a Myrmidon has ST 12, DX 12, and a broadsword. A Myrmidon may have any ST,
+DX, and IQ totaling to 32, and may be equipped with any weapons, armor,
+and shield, just like a beginning figure in Melee.
+Weapons: A wizard may carry two weapons plus a dagger (his staff counts
+as a weapon). However, his DX is -4 with any weapon except his staff. A
+wizard cannot cast a spell if he has any weapon (except his staff) ready; the
+weapon must be dropped or re-slung. Fighters cannot carry magical staffs.
+Broken Weapons: When the Break Weapons spell is used with Melee, any
+weapon which breaks is totally useless except a sword or club. A broken
+sword (any type) or club may be used, doing half damage; a twice-broken
+sword or club is useless. In Melee, a Myrmidon or Giant whose weapon
+breaks will have a chance to ready another weapon or enter HTH combat –
+elements omitted from Wizard.
+Armor and Shields: Wizards may wear armor and use shields, just like
+fighters. A wizard cannot cast a spell if he has a shield ready. Physical
+armor and shields from Melee protect against all kinds of hits – including
+fire and magical hits – but do nothing to protect against spells that do not
+directly put hits on their wearer.
+
+XIV. COMBAT EXAMPLE
+
+The combat in the Introduction came from an actual game. Yzor has ST
+9, DX 12, IQ 11; Krait has ST 8, DX 15, IQ 9. Both carry staffs.
+Turn 1: Each takes one step. Krait goes first, summoning a (real) wolf;
+Yzor throws a Dazzle. Both spells succeed. Both wizards now have ST = 6.
+Turn 2. Krait gets initiative. Yzor moves one hex. Krait stands still; his
+wolf moves 12 hexes. The two wizards now have the same DX; Yzor wins
+the roll, and creates a wolf illusion. Krait fakes a protective spell on himself. Krait’s ST = 5 (keeping the wolf cost 1). Yzor’s ST = 4.
+Turn 3. Krait wins initiative again. His wolf engages Yzor. Yzor’s illusion engages Krait’s wolf from behind. Yzor acts first, and disengages. His
+illusion bites and misses. Krait tries to disbelieve Yzor’s wolf, but the Yzor
+player rolls an 11; the wolf remains. Krait’s wolf cannot act, since Yzor is
+out of its front hexes. Krait’s ST = 4, Yzor’s ST = 4.
+Turn 4. Krait does not re-energize his wolf, thinking it useless. Yzor wins
+initiative and sends his illusion toward Krait. Krait wins the roll to see who
+acts first and throws a 2-die Magic Fist at Yzor. It strikes; he rolls a 6 for 2
+hits damage. (First blood!) Both wizards’ ST now = 2.
+Turn 5. Both wizards stand still; the illusion engages Krait. Krait tries a
+1-die Magic Fist at Yzor, now that his DX is back to 15. The loss of the ST
+point reduces him to 1. He hits, but rolls 2 . . . only 1 damage. The illusion
+bites and hits for 3 damage, killing him and ending the duel.
+• 24 •
+
+

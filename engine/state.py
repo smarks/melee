@@ -24,7 +24,7 @@ from hexarena.hex import Hex
 from hexarena.pathfinding import Reach
 
 from .arena import BODY_COST, CLEAR_COST, Arena
-from .combat import AttackResult, DamageEvent
+from .combat import AttackResult, DamageEvent, SpellResult
 from .facing import (
     FRONT,
     REAR,
@@ -51,6 +51,7 @@ from .narrative import (
     narrate_ready,
     narrate_retreat,
     narrate_shield_rush,
+    narrate_spell,
     narrate_status,
     narrate_turn,
     narrate_victory,
@@ -115,6 +116,53 @@ class PendingAttack:
     weapon: object | None = None  # Weapon override (off-hand main-gauche jab); else ready
     second_target: Figure | None = None  # a two-shot bow's 2nd arrow may aim elsewhere (p.5, p.10)
     shield_rush: bool = False  # this "attack" is a shield-rush, resolved in adjDX order (p.13, #151)
+
+
+@dataclass
+class PendingCast:
+    """One queued spell cast, resolved later in the combat phase (TFT: Wizard).
+
+    Parallel to :class:`PendingAttack`: a wizard declares a cast in the select
+    phase and it resolves in :meth:`GameState.resolve_combat`, DX-ordered with the
+    attacks. ``st_used`` is the ST the caster commits (1..spell.max_st for a
+    missile spell; the flat cost otherwise); ``target`` is the figure the spell
+    acts on (the caster itself, for self-protection).
+    """
+
+    caster: Figure
+    spell: object          # engine.spells.Spell
+    target: Figure
+    st_used: int
+    zone: str | None = None
+    range_penalty: int = 0
+    situational: int = 0
+    situational_note: str = ""
+
+
+# A wizard's staff is the ONLY weapon it may hold and still cast (Wizard p.19,
+# p.23). The Staff spell / staff weapon arrives in Gate 3; until then a wizard
+# casts bare-handed, so any ready weapon blocks a cast.
+STAFF_WEAPON_NAME = "Staff"
+
+
+def cast_block_reason(figure: Figure) -> str | None:
+    """Why ``figure`` may not cast a spell right now, or ``None`` if it may (p.23).
+
+    The single gate shared by :meth:`GameState.option_availability` (to grey the
+    CAST option) and :meth:`GameState.queue_spell` (to reject an illegal cast), so
+    the menu and the queue can never disagree. A fighter (no ``spells_known``) is
+    not a wizard; a wizard may not cast with a shield up or a non-staff weapon
+    ready (Wizard p.23 — a non-staff weapon is a -4 DX so heavy it is treated as
+    unusable for casting here).
+    """
+    if not figure.spells_known:
+        return "not a wizard"
+    if figure.shield_ready and figure.shield.name != "None":
+        return "cannot cast with a shield ready"
+    ready = figure.ready_weapon
+    if ready is not None and ready.name != STAFF_WEAPON_NAME:
+        return "cannot cast with a weapon ready"
+    return None
 
 
 class _RosterMixin:
@@ -303,6 +351,8 @@ class _TurnMixin:
                     self.log.append(narrate_ready(figure, dagger))
                 figure.hth_drew_dagger = False
         self._pending.clear()
+        self._pending_casts.clear()
+        self.spell_results.clear()
         self.applied_results.clear()
         self.turn_number += 1
         self.log.append(narrate_turn(self.turn_number))
@@ -414,6 +464,10 @@ class _MovementMixin:
                     self._can_initiate_hth(figure, enemy)
                     for enemy in self.enemies_of(figure)):
                 reason = "no foe in reach to grapple"
+            elif option == Option.CAST:
+                # A wizard casts only with its hands free of a shield and any
+                # non-staff weapon (Wizard p.23); a fighter (no spells) never casts.
+                reason = cast_block_reason(figure)
             result.append((option, reason))
         # DO NOTHING is always a legal, deliberate no-op — so "action is set"
         # means current_option is not None, telling "held" apart from "not yet
@@ -1653,6 +1707,82 @@ class _CombatMixin:
             return False
         return zone_of_direction(attacker.facing, direction) == FRONT
 
+    def spell_targets(self, caster: Figure, spell) -> list[Figure]:
+        """Which figures ``caster`` may cast ``spell`` at (TFT: Wizard).
+
+        The single authority for legal spell targets, the magic mirror of
+        :meth:`attack_candidates`. A **missile** spell (Magic Fist) reuses the
+        exact #362 ranged-target computation — every foe with a position, the front
+        arc satisfied by turning to aim (:meth:`aim`), missiles taking no facing
+        bonus (p.16). A **protection** spell (Stone Flesh) is cast on the caster
+        itself this gate (allies deferred to Gate 3). Other spell types return no
+        targets until their gate.
+        """
+        if not caster.can_act() or caster.position is None:
+            return []
+        if spell.is_missile:
+            return [enemy for enemy in self.enemies_of(caster)
+                    if enemy.position is not None]
+        if spell.is_protection:
+            return [caster]
+        return []
+
+    def queue_spell(self, caster: Figure, spell, target: Figure,
+                    st_used: int) -> None:
+        """Declare ``caster``'s cast of ``spell`` at ``target`` (resolved later).
+
+        Guards mirror :meth:`_validate_attack`: the caster must have chosen CAST,
+        be able to act with its hands free (no shield / non-staff weapon, p.23),
+        know the spell, afford the ST (a cast may bring ST to 0 but not below), not
+        have already cast this turn, and ``target`` must be legal for the spell's
+        type. A missile cast turns to face its target (:meth:`aim`) and takes the
+        megahex range penalty; a self-protection cast has neither.
+        """
+        self._validate_cast(caster, spell, target, st_used)
+        if spell.is_missile:
+            self.aim(caster, target)               # free turn-to-face (p.16)
+            zone = attack_zone(self.arena.layout, caster, target)
+            megahexes = megahex_distance(
+                self.arena.layout, caster.position, target.position)
+            range_penalty = self.rules.missile_range_penalty(megahexes)
+        else:
+            zone, range_penalty = None, 0
+        self._pending_casts.append(PendingCast(
+            caster=caster, spell=spell, target=target, st_used=st_used,
+            zone=zone, range_penalty=range_penalty))
+
+    def _validate_cast(self, caster: Figure, spell, target: Figure,
+                       st_used: int) -> None:
+        """Shared guards for declaring a cast; raises ``IllegalAction`` if illegal."""
+        if caster.current_option != Option.CAST:
+            raise IllegalAction(f"{caster.name} did not choose to cast this turn")
+        if not caster.can_act():
+            raise IllegalAction(f"{caster.name} cannot cast")
+        block = cast_block_reason(caster)
+        if block is not None:
+            raise IllegalAction(f"{caster.name} cannot cast: {block}")
+        if spell.id not in caster.spells_known:
+            raise IllegalAction(f"{caster.name} does not know {spell.name}")
+        if caster.cast_this_turn or any(
+            pending.caster is caster for pending in self._pending_casts
+        ):
+            raise IllegalAction(f"{caster.name} has already cast this turn")
+        # ST bounds: a missile spell may invest 1..max_st; any other spell costs
+        # its flat st_cost exactly. A cast may reduce ST to exactly 0 but never
+        # below (p.3-4) — casting below 0 ST is rejected here.
+        floor = spell.st_cost
+        ceiling = spell.max_st if spell.is_missile else spell.st_cost
+        if not (floor <= st_used <= ceiling):
+            raise IllegalAction(
+                f"{spell.name} takes {floor}..{ceiling} ST (got {st_used})")
+        if st_used > caster.current_st:
+            raise IllegalAction(
+                f"{caster.name} lacks the ST to cast {spell.name} "
+                f"(needs {st_used}, has {caster.current_st})")
+        if target not in self.spell_targets(caster, spell):
+            raise IllegalAction(
+                f"{target.name} is not a legal target for {spell.name}")
+
     def queue_attack(self, attacker: Figure, target: Figure,
                      *, with_main_gauche: bool = False,
                      second_target: Figure | None = None) -> None:
@@ -1884,7 +2014,19 @@ class _CombatMixin:
             for pending in ordered:
                 if shot_index < self._shot_count(pending):
                     self._resolve_attack_shot(pending, shot_index, results)
+        # Casts resolve after the weapon rounds, in caster-adjDX order (highest
+        # first) — the same ordering key attacks use. This pass draws ZERO dice
+        # when no cast is queued, so a non-wizard game (and the gold-standard
+        # combat example) keeps a byte-identical dice stream. See resolve_spell
+        # for the per-cast draw order.
+        for pending_cast in sorted(
+            self._pending_casts,
+            key=lambda cast: -self.rules.order_dx(
+                cast.caster, zone=cast.zone, ignore_facing=True),
+        ):
+            self._resolve_cast(pending_cast)
         self._pending.clear()
+        self._pending_casts.clear()
         self._drop_bows_after_last_shot()
         self._announce_victory()
         return results
@@ -1959,6 +2101,69 @@ class _CombatMixin:
             self._resolve_flight(pending, results, target=target)
         else:
             self._resolve_one_melee(pending, weapon, results)
+
+    def _resolve_cast(self, pending: PendingCast) -> None:
+        """Resolve one queued cast (TFT: Wizard) — the magic mirror of :meth:`_apply`.
+
+        Rolls the cast (:meth:`Ruleset.resolve_spell`), drains its ST
+        (:meth:`Ruleset.apply_spell_cost`), then lands its effect: a missile
+        spell's damage on the target (``apply_damage`` + status), a protection
+        spell's hit-stopping on the target (``apply_spell_protection``). An 18
+        fizzle knocks the CASTER down (p.11); casting to exactly 0 ST leaves the
+        caster unconscious. The narration and :class:`SpellResult` are recorded so
+        the log-truthfulness audit reaches casts.
+        """
+        caster = pending.caster
+        spell = pending.spell
+        target = pending.target
+        if not caster.can_act():
+            return                              # felled before its turn to cast
+        # A missile spell needs a live target: a foe already felled this phase is
+        # not struck (the #310 rule). A self-protection cast always has its caster.
+        if spell.is_missile and target.out_of_play:
+            return
+        result = self.rules.resolve_spell(
+            self.dice, caster, spell, target=target, st_used=pending.st_used,
+            range_penalty=pending.range_penalty, situational=pending.situational)
+        self.rules.apply_spell_cost(
+            caster, spell, result.st_spent, fizzled=result.fizzled)
+        caster.cast_this_turn = True
+        caster.attacked_this_turn = True        # a cast is the figure's action
+        self.log.append(narrate_spell(caster, target, result))
+        self.spell_results.append(result)
+        # An 18 fizzle: the shock knocks the caster down (p.11).
+        if result.knockdown:
+            caster.posture = Posture.PRONE
+            caster.knocked_down_this_turn = True
+        if result.hit and spell.is_missile:
+            self.rules.apply_damage(target, result.damage)
+            if result.damage > 0:
+                # Audit the hit with both sides (a missile spell only ever targets
+                # an enemy — queue_spell forbids a same-side missile target).
+                self.damage_events.append(DamageEvent(
+                    attacker_side=caster.side, target_side=target.side,
+                    attacker_uid=caster.uid, target_uid=target.uid,
+                    damage=result.damage))
+            self._apply_cast_status(target, self.rules.status_after_hit(target))
+        elif result.hit and spell.is_protection:
+            self.rules.apply_spell_protection(target, result)
+        # Paying the ST cost may have dropped the caster to 0 (unconscious) — a
+        # legal cast that spends its last ST (p.3-4). It can never go below 0
+        # (queue_spell rejects that), so it is never a self-kill.
+        self._apply_cast_status(caster, self.rules.status_after_hit(caster))
+
+    def _apply_cast_status(self, figure: Figure, status: str | None) -> None:
+        """Apply a post-cast status (DEAD/UNCONSCIOUS/KNOCKDOWN) and narrate it."""
+        if status == DEAD:
+            figure.dead = True
+        elif status == UNCONSCIOUS:
+            figure.unconscious = True
+        elif status == KNOCKDOWN:
+            figure.posture = Posture.PRONE
+            figure.knocked_down_this_turn = True
+        aftermath = narrate_status(figure, status)
+        if aftermath:
+            self.log.append(aftermath)
 
     def _can_strike_now(self, attacker: Figure, shot_index: int) -> bool:
         """Whether ``attacker`` may still land this shot/blow — the prone /
@@ -2358,6 +2563,13 @@ class GameState(
         self.turn_number = 1
         self.log: list[str] = []
         self._pending: list[PendingAttack] = []
+        # Queued spell casts, resolved in resolve_combat alongside attacks (DX
+        # ordered). Empty in any non-wizard game, so the attack dice stream and
+        # the gold-standard combat example stay byte-identical.
+        self._pending_casts: list[PendingCast] = []
+        # Every SpellResult a combat phase resolved (parallel to applied_results),
+        # for the log-truthfulness audit. Cleared each end_turn.
+        self.spell_results: list[SpellResult] = []
         # Damage-attribution audit trail (#231). Every damaging hit appends a
         # DamageEvent here so a test can prove no figure was ever harmed by its
         # own side. Purely observational — reading/writing it changes no rules.
