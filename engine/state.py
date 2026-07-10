@@ -248,6 +248,23 @@ class _TurnMixin:
         """Set ``figure``'s action to a deliberate no-op (a real, set action)."""
         self.move(figure, Option.DO_NOTHING)
 
+    def stand_down(self, figure: Figure) -> None:
+        """Hold ``figure``'s fire this combat step so the turn can still resolve.
+
+        The combat-phase counterpart to :meth:`set_do_nothing`. A figure that
+        committed to an attack option in the select pass but is left with no shot
+        the player wants (or is able) to take would otherwise sit in the must-attack
+        gate forever, blocking Resolve (#397/#398). Standing it down flips its option
+        to a deliberate no-op — which drops it from ``_must_attack`` (DO_NOTHING is
+        not an attack) and the combat-actionable set — and cancels any attack it had
+        already queued this step. Unlike :meth:`set_do_nothing` it does NOT re-run
+        movement (the figure already moved in the select pass); it only clears the
+        attack commitment.
+        """
+        figure.current_option = Option.DO_NOTHING
+        self._pending = [
+            pending for pending in self._pending if pending.attacker is not figure]
+
     # ---- end of turn ----
     def end_turn(self) -> None:
         """Settle injury flags and reset per-turn state, then advance the turn."""

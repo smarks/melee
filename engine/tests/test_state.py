@@ -48,6 +48,30 @@ def test_drop_prone_to_fire_a_crossbow_at_plus_one() -> None:
     assert "+1 prone" in state.resolve_combat()[0].to_hit_breakdown
 
 
+def test_stand_down_clears_the_attack_option_and_cancels_a_queued_shot() -> None:
+    # #397/#398: stand_down is the combat-phase "hold fire" — a committed attacker
+    # flips to DO_NOTHING (so it leaves the must-attack gate) and any shot it already
+    # queued this step is cancelled, without re-running movement.
+    from engine.rules_data import LIGHT_CROSSBOW
+    arena = Arena(cols=9, rows=15)
+    shooter = create_human("Bow", 12, 12, "a",
+                           weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    foe = create_human("Foe", 12, 12, "b", weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    shooter.position = Hex(5, 5)
+    foe.position = Hex(5, 9)
+    _aim(shooter, foe)
+    state = GameState(arena, [shooter, foe])
+    shooter.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(shooter, foe)
+    assert any(pending.attacker is shooter for pending in state._pending)
+
+    state.stand_down(shooter)
+    assert shooter.current_option == Option.DO_NOTHING
+    assert not any(pending.attacker is shooter for pending in state._pending)
+    # A stood-down figure holds its position — no movement was re-run.
+    assert shooter.position == Hex(5, 5)
+
+
 def test_a_missile_only_figure_cannot_defend() -> None:
     # p.20: "A figure may only defend with a non-missile weapon ready, to parry." (#149)
     from engine.rules_data import SMALL_BOW

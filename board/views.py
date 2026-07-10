@@ -1455,7 +1455,7 @@ def _ownership_fields(game: dict, pid: str | None) -> dict:
 # owner could drive an opponent's figure (#244): the combat actions queue_hth /
 # shield_rush / hth_disengage / disengage_move each take an acting figure by uid
 # and so belong here alongside the movement/selection verbs.
-_FIGURE_ACTIONS = {"move", "do_nothing", "pass", "queue_attack",
+_FIGURE_ACTIONS = {"move", "do_nothing", "pass", "queue_attack", "hold_fire",
                    "force_retreat", "update_figure",
                    "queue_hth", "shield_rush", "hth_disengage",
                    "disengage_move"}
@@ -1728,6 +1728,21 @@ def _act_pass(game: dict, body: dict, *, is_admin: bool = False, owner_sides: se
     return None
 
 
+def _act_hold_fire(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
+    """Stand a committed attacker down in combat so the turn can resolve (#397/#398).
+
+    A figure that chose an attack in the select pass but is left with no shot the
+    player wants (or can) take would otherwise sit in the must-attack gate forever,
+    keeping Resolve disabled and hanging the turn. Holding its fire drops it from
+    the gate. No ``_require_active``: combat has no single active figure, and seat
+    ownership is already enforced by :func:`_authorize_action` (hold_fire is a
+    figure-scoped action)."""
+    state: GameState = game["state"]
+    figure = _figure(state, body.get("uid", ""))
+    state.stand_down(figure)
+    return None
+
+
 def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     state: GameState = game["state"]
     attacker = _figure(state, body.get("uid", ""))
@@ -1867,6 +1882,7 @@ _ACTIONS = {
     "do_nothing": ("select", _act_do_nothing),
     "pass": ("select", _act_pass),
     "queue_attack": ("combat", _act_queue_attack),
+    "hold_fire": ("combat", _act_hold_fire),
     "queue_hth": ("combat", _act_queue_hth),
     "shield_rush": ("combat", _act_shield_rush),
     "hth_disengage": ("combat", _act_hth_disengage),

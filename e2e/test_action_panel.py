@@ -426,29 +426,37 @@ def test_select_do_nothing_commits_and_advances_the_turn(
         GAMES.pop(gid, None)
 
 
-# ---- combat phase: Do nothing (setDoNothing) --------------------------------
+# ---- combat phase: Hold fire (server-side stand-down, #397/#398) ------------
 
 
 @pytest.mark.django_db
-def test_combat_do_nothing_registers_and_does_not_block_resolve(
+def test_combat_hold_fire_stands_a_figure_down_and_does_not_block_resolve(
         live_server, page: Page) -> None:
-    # #388: the combat-phase "Do nothing" control (setDoNothing) sets PLAN none for
-    # the figure. It must register in the per-figure checklist AND, being a real set
-    # action rather than an un-set must-attack, must NOT gate Resolve. Redcap is
-    # combat-actionable (an adjacent foe) but committed to no attack option, so it is
-    # not in must_attack -- the exact "set a no-op, still resolve" case.
-    gid = "action-combat-do-nothing"
+    # #388/#397/#398: the combat-phase "Hold fire — don't attack" control stands a
+    # figure down as a real, server-side DO_NOTHING (not just a local plan), so it
+    # persists and works in networked play. Redcap is combat-actionable (an adjacent
+    # foe) but committed to no attack option; holding its fire drops it from the
+    # actionable set and never gates Resolve.
+    gid = "action-combat-hold-fire"
     red, _blue = _seed_combat_duel(gid)
     try:
         page.goto(f"{live_server.url}/game/{gid}")
         expect(page.locator("#phaseBanner")).to_contain_text(
             "Combat", timeout=POLL_SAFE_TIMEOUT_MS)
+        # Redcap starts out actionable (its checklist row is present).
+        expect(page.locator("#controls .checklist .row", has_text="Redcap")).to_be_visible(
+            timeout=POLL_SAFE_TIMEOUT_MS)
 
-        _open_combat_menu_row(page, red.uid, "Do nothing")
+        _open_combat_menu_row(page, red.uid, "Hold fire")
 
-        # The no-op is registered as this figure's committed plan in the checklist...
-        expect(page.locator("#controls .checklist .done")).to_contain_text(
-            "Do nothing", timeout=POLL_SAFE_TIMEOUT_MS)
+        # The stand-down persisted server-side (a real DO_NOTHING), so Redcap drops
+        # out of the actionable checklist...
+        expect(page.locator("#controls .checklist .row", has_text="Redcap")).to_have_count(
+            0, timeout=POLL_SAFE_TIMEOUT_MS)
+        red_option = page.evaluate(
+            "async (g) => { const s = (await (await fetch(`/api/game/${g}`)).json()).state;"
+            " return s.figures.find(f => f.name === 'Redcap').option; }", gid)
+        assert red_option == "do_nothing"
         # ...and it does not hold the Resolve gate.
         expect(page.get_by_role("button", name=re.compile("Resolve"))).to_be_enabled(
             timeout=POLL_SAFE_TIMEOUT_MS)
