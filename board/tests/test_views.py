@@ -2496,3 +2496,40 @@ def test_lobby_survives_a_registry_wipe_with_host_intact(client: Client) -> None
 
     started = _post(client, gid, {"type": "begin_game"})
     assert started["state"]["phase"] == "select"
+
+
+def test_lobby_wizard_edit_changes_its_spell_picks(client: Client) -> None:
+    # The point of a Wizards lobby (#399): the spell list is an editor field, so
+    # an update_figure whose spec carries new picks must APPLY them. (The
+    # CARRY_OVER_STATE identity fields — intelligence / spells_known — exist so a
+    # spec-silent rebuild keeps them; they must not revert an explicit edit.)
+    fighters = [
+        {"name": "F1", "side": "red", "strength": 12, "dexterity": 12,
+         "weapon": "Broadsword", "armor": "Leather", "shield": "None"},
+        {"name": "W2", "side": "blue", "strength": 9, "dexterity": 10,
+         "intelligence": 13, "armor": "None",
+         "spells": ["magic_fist", "stone_flesh"]},
+    ]
+    created = client.post(
+        "/api/game/new_custom",
+        data=json.dumps({"profile": "Classic Melee", "open": "blue",
+                         "fighters": fighters}),
+        content_type="application/json").json()
+    gid = created["gid"]
+    assert created["state"]["phase"] == "setup"
+    wizard = next(f for f in created["state"]["figures"] if f["name"] == "W2")
+    assert set(wizard["spells_known"]) == {"magic_fist", "stone_flesh"}
+
+    joiner = Client()
+    _claim_seat(joiner, gid, "blue")
+    edited = _edit_figure(joiner, gid, wizard, spells=["magic_fist"])
+    assert edited.status_code == 200
+    after = next(f for f in edited.json()["state"]["figures"]
+                 if f["uid"] == wizard["uid"])
+    assert after["spells_known"] == ["magic_fist"]
+
+    # ...and the pick survives the start of the game.
+    started = _post(client, gid, {"type": "begin_game"})
+    live = next(f for f in started["state"]["figures"]
+                if f["uid"] == wizard["uid"])
+    assert live["spells_known"] == ["magic_fist"]

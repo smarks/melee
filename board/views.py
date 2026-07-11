@@ -566,6 +566,11 @@ def _payload(game: dict, *, include_layout: bool = True) -> dict:
     every tick (#256).
     """
     payload = {"state": dump_game(game["state"], meta=_meta(game))}
+    # The rule profile rides on every payload so a deep-link joiner learns it
+    # too: the inline character editor needs it to load the right catalog, and
+    # before #399 only the creation responses carried it, which left a joiner's
+    # lobby edit card unable to mount.
+    payload["profile"] = game.get("profile")
     if include_layout:
         payload["layout"] = game["layout"]
     return payload
@@ -2096,8 +2101,22 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
     # wounds/consciousness/death and an unspent missile reload, restores
     # dropped_out (a fighter that bowed out of a practice bout stays out, not
     # resurrected), and carries banked XP + the bought ST/DX points.
+    #
+    # Exception: wizard identity. CARRY_OVER_STATE lists intelligence and
+    # spells_known so a rebuild whose spec is silent keeps them — but both are
+    # ALSO editor fields, and carrying the old values verbatim silently reverted
+    # any edit (found by the #399 lobby: a remote wizard could never change its
+    # spell picks). Where the spec explicitly sets them, the freshly-built values
+    # win; per-fight magic state (active_spells / spell_protection) carries
+    # regardless.
+    edited_identity = {name: getattr(rebuilt, name)
+                       for name, spec_key in (("intelligence", "intelligence"),
+                                              ("spells_known", "spells"))
+                       if spec_key in spec}
     for name in CARRY_OVER_STATE:
         setattr(rebuilt, name, getattr(figure, name))
+    for name, value in edited_identity.items():
+        setattr(rebuilt, name, value)
     # Nonhuman creature traits chargen.build never sets from a spec, so without
     # this a rebuilt monster collapses to single-hex human defaults: a giant to
     # size 1, a grounded gargoyle, a snake stripped of all_front/hard_to_hit, and

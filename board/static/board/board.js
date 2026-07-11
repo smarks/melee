@@ -340,6 +340,9 @@ async function refresh() {
     return;
   }
   LAYOUT = data.layout; S = data.state; captureOwnership(data); optCache = {};
+  // A deep-link joiner learns the game's rule profile from the state payload
+  // (#399): the inline character editor needs it to load the right catalog.
+  if (data.profile) PROFILE = data.profile;
   GAME_ACTIVE = true; syncGameControl(); render();
   maybeAutoTarget();   // #299: sole-target auto-queue on a fresh (deep-link) load
 }
@@ -3303,6 +3306,7 @@ function startPolling() {
   // Keep the cached layout when the poll omitted it (?layout=0); only replace it
   // when the server actually sent one (first load / reconnect) (#256).
   if (data.layout) LAYOUT = data.layout;
+  if (data.profile) PROFILE = data.profile;   // deep-link joiner: see refresh()
   S = data.state; captureOwnership(data); optCache = {}; render();
   maybeAutoTarget();   // #299: sole-target auto-queue when new state arrives
   } finally {
