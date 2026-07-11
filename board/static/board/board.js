@@ -31,6 +31,7 @@ let frAdvance = {};      // "attackerUid>targetUid" -> follow-into-vacated-hex t
 let YOU_CONTROL = [];    // sides this browser may act on (server-authoritative, #74/#85)
 let OPEN_SEATS = [];     // sides currently open to claim (#85)
 let IS_ADMIN = false;    // logged-in admin: may act on any figure (#86)
+let IS_HOST = false;     // this browser created the game: drives the setup lobby (#399)
 let SEATED = false;      // this game HAS seats (server-authoritative, #343) — a
                          // real multiplayer game; false only for seatless test
                          // fixtures / games built outside _start_game.
@@ -60,6 +61,7 @@ function captureOwnership(data) {
   if ("you_control" in data) YOU_CONTROL = data.you_control || [];
   if ("open_seats" in data) OPEN_SEATS = data.open_seats || [];
   if ("is_admin" in data) IS_ADMIN = !!data.is_admin;
+  if ("is_host" in data) IS_HOST = !!data.is_host;
   if ("seated" in data) SEATED = !!data.seated;
   pruneForeignPlan();
 }
@@ -219,6 +221,13 @@ function computerSides() {
   return PLAYERS.map((pl, index) => pl.type === "ai" ? ED_TEAMS[index] : null)
     .filter(Boolean).join(",");
 }
+// The Remote players' side ids, as the `open` list (#399): those seats are born
+// open, so the game starts in the setup lobby where a remote player can claim
+// its seat over the invite link and edit its characters before the host starts.
+function openSides() {
+  return PLAYERS.map((pl, index) => pl.type === "remote" ? ED_TEAMS[index] : null)
+    .filter(Boolean).join(",");
+}
 // "Wizards" in the rule-set dropdown is a roster MODE played under Classic rules,
 // not a rule set of its own. These two helpers resolve it everywhere the raw
 // dropdown value would otherwise leak out as a profile name.
@@ -234,14 +243,17 @@ async function startSetup() {
   // teams = player count, per_team = characters per player (uniform), and the AI
   // players' sides drive the explicit `computer` list the endpoint now honours.
   const q = `profile=${p}&teams=${PLAYERS.length}&per_team=${$("perTeam").value}`
-    + `&computer=${encodeURIComponent(computerSides())}&practice=${practice}`
+    + `&computer=${encodeURIComponent(computerSides())}`
+    + `&open=${encodeURIComponent(openSides())}&practice=${practice}`
     + (wizardsMode() ? "&wizards=1" : "");
   await startGame(q);
 }
-// Add a player of the given type ("human" | "ai") to the roster, up to the cap.
+// Add a player of the given type ("human" | "ai" | "remote") to the roster, up
+// to the cap. "remote" (#399) is a human player joining over the invite link:
+// their seat is born open and the game starts in the setup lobby.
 function addPlayer(type) {
   if (GAME_ACTIVE || PLAYERS.length >= MAX_PLAYERS) return;
-  PLAYERS.push({type: type === "ai" ? "ai" : "human"});
+  PLAYERS.push({type: (type === "ai" || type === "remote") ? type : "human"});
   renderPlayers();
 }
 // Remove a player. The local human (index 0) is never removable.
@@ -258,7 +270,8 @@ function renderPlayers() {
   const wrap = $("playerRoster");
   if (wrap) wrap.innerHTML = PLAYERS.map((pl, index) => {
     const local = index === 0;
-    const kind = local ? "You (human)" : pl.type === "ai" ? "AI" : "Human";
+    const kind = local ? "You (human)" : pl.type === "ai" ? "AI"
+      : pl.type === "remote" ? "Remote" : "Human";
     const side = ED_TEAMS[index];
     const remove = (local || locked) ? ""
       : `<button class="pl-remove" onclick="removePlayer(${index})" title="Remove player">✕</button>`;
@@ -270,6 +283,7 @@ function renderPlayers() {
   const full = count >= MAX_PLAYERS;
   const addHuman = $("addHumanBtn"); if (addHuman) addHuman.disabled = locked || full;
   const addAi = $("addAiBtn"); if (addAi) addAi.disabled = locked || full;
+  const addRemote = $("addRemoteBtn"); if (addRemote) addRemote.disabled = locked || full;
   const enoughPlayers = count >= 2;
   const newBtn = $("newGameBtn"); if (newBtn) newBtn.disabled = locked || !enoughPlayers;
   const reason = $("newGameReason");
@@ -397,7 +411,7 @@ function resetSelection() { sel = null; optInfo = null; chosenOption = null; pen
 function figByUid(uid) { return S.figures.find(f => f.uid === uid); }
 
 // human-readable labels + which options require a destination hex
-const PHASE_LABEL = {select: "Action selection", combat: "Combat"};
+const PHASE_LABEL = {setup: "Game setup", select: "Action selection", combat: "Combat"};
 const OPTION_LABEL = {
   move: "Full move", half_move: "Half move", charge_attack: "⚔ Charge & Attack", dodge: "Dodge",
   ready_weapon: "Ready Weapon", missile_attack: "🏹 Missile Attack", stand_up: "Stand Up", crawl: "Crawl 2",
@@ -793,9 +807,29 @@ function drawControls() {
   const state = classifyControlState(S, {
     myTurnActor, isComputerSide,
     plan: PLAN, chosenOption, sel, openSeats: OPEN_SEATS,
+    isHost: IS_HOST || IS_ADMIN,
   });
 
   switch (state.kind) {
+    case "setup_host":
+      // The pre-game lobby, host's view (#399): a Start-game control, always
+      // enabled — the host may start with seats still open (an unclaimed seat
+      // stays claimable mid-game, as today).
+      setHint("Game setup — waiting for players. Claim a seat, then edit your"
+        + " characters. Start the game when everyone is ready.");
+      bigPrimary(c, "Start game →", () => {
+        dbg("INTERACT", "Start game pressed");
+        act({type: "begin_game"}).then(after);
+      });
+      return;
+
+    case "setup_waiting":
+      // The lobby for everyone else: claim a seat, edit your fighters, and wait
+      // for the host to start.
+      setHint("Game setup — claim a seat, then edit your characters."
+        + " Waiting for the host to start the game…");
+      return;
+
     case "victory":
       // The match is decided. The old "Start next round →" here posted end_turn,
       // but #277 makes the server short-circuit turn-advancement once there's a
@@ -1539,10 +1573,13 @@ $("tokenMenu").addEventListener("mouseenter", cancelHoverClose);
 $("tokenMenu").addEventListener("mouseleave", scheduleHoverClose);
 
 // ---- side panels ------------------------------------------------------------
-// Only an admin edits a live figure (#323): the client gate mirrors the server,
-// which now rejects a non-admin update_figure. Regular players view a full
-// read-only sheet in play and edit pre-game via the setup editor.
-const canEditInline = () => IS_ADMIN;
+// Who may edit a figure inline, mirroring the server's update_figure rule: an
+// admin edits any live figure at any time (#323); during the pre-game setup
+// lobby (#399) a seat owner edits the figures of sides they hold and the HOST
+// edits ANY figure (including a computer side's). Regular players in a running
+// game view a read-only sheet.
+const canEditFigure = f => IS_ADMIN
+  || (!!S && S.phase === "setup" && (IS_HOST || myControlled(f)));
 
 function drawSelInfo() {
   const box = $("selInfo");
@@ -1574,13 +1611,16 @@ function drawSelInfo() {
   INLINE_EDIT_FOR = null;
   box.innerHTML = `<div data-selheader>`
     + statusHeader(f) + charSheetHtml(f) + planLine(f) + `</div>`;
-  // A figure you don't command shows the read-only sheet above but no controls (#214).
-  if (!myControlled(f) || !f.edit_spec) return;
+  // A figure you don't command shows the read-only sheet above but no controls
+  // (#214) — unless the setup lobby's edit rule grants you the card (#399: the
+  // host edits any figure, e.g. a computer side's, which myControlled denies).
+  if ((!myControlled(f) && !canEditFigure(f)) || !f.edit_spec) return;
   // Keep this fighter: a signed-in player may snapshot a fighter they control
-  // into their saved characters, straight from the running game (#234).
-  if (LOGGED_IN) box.appendChild(saveCharacterUi(f));
-  // Inline editing is admin-only (#323). Regular owners stop here (read-only).
-  if (!canEditInline()) return;
+  // into their saved characters, straight from the running game (#234). Stays
+  // gated on control: the server's save_character authz is seat-based.
+  if (LOGGED_IN && myControlled(f)) box.appendChild(saveCharacterUi(f));
+  // Inline editing: admin always; seat owner/host during the setup lobby (#399).
+  if (!canEditFigure(f)) return;
   if (!CAT || !RULES || CAT.profile !== PROFILE) { ensureGameCatalog(); return; }
   // The editor is built inline in this panel from the same chargen card the setup
   // wizard uses, so the #298 two-handed-shield handling is preserved; Apply posts
@@ -2538,8 +2578,9 @@ function refreshCard(card) {
 async function startCustom() {
   const fighters = Array.from($("editorRoster").children).map(readCard);
   const computer = computerSides();   // the AI players' sides, from the roster (#192)
+  const open = openSides();           // the Remote players' sides -> lobby (#399)
   const practice = $("practiceMode") && $("practiceMode").checked;
-  const body = {profile: chosenProfile(), computer, fighters, practice};
+  const body = {profile: chosenProfile(), computer, open, fighters, practice};
   const data = await api("/api/game/new_custom", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)});

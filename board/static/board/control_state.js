@@ -24,11 +24,21 @@ export const needsTarget = (figure, mustAttack, plan) =>
 //   chosenOption       -> UI global: a move option mid-placement (needs a hex)
 //   sel                -> UI global: the figure being placed
 //   openSeats          -> OPEN_SEATS: sides currently open to claim (#85)
+//   isHost             -> may this client start a lobby game (host or admin, #399)
 // }
 export function classifyControlState(state, ctx) {
-  const {myTurnActor, isComputerSide, plan, chosenOption, sel, openSeats} = ctx;
+  const {myTurnActor, isComputerSide, plan, chosenOption, sel, openSeats, isHost} = ctx;
 
   if (state.victory) return {kind: "victory"};
+
+  // The pre-game setup lobby (#399): seats are claimable and characters editable,
+  // but no turn is running yet. Only the host (or an admin) gets the Start-game
+  // control; everyone else waits on the host. The host may start with seats still
+  // open (an unclaimed seat stays claimable mid-game, as today), so setup_host
+  // never gates on openSeats.
+  if (state.phase === "setup") {
+    return isHost ? {kind: "setup_host"} : {kind: "setup_waiting"};
+  }
 
   if (state.phase === "select") {
     const active = state.active_uid

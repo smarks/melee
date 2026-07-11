@@ -2303,3 +2303,196 @@ def test_omitting_the_layout_meaningfully_shrinks_the_poll_payload(client: Clien
     full_bytes = len(client.get(f"/api/game/{gid}").content)
     trimmed_bytes = len(client.get(f"/api/game/{gid}?layout=0").content)
     assert trimmed_bytes < full_bytes * 0.5                 # more than half the bytes gone
+
+
+# ---- pre-game setup lobby (#399) ---------------------------------------------
+# A game created with a "Remote" side (an `open=` side list) is born in the
+# ``setup`` phase: its remote seats are open from birth, initiative is NOT yet
+# frozen, and nothing but seat changes / figure edits / begin_game may run until
+# the host starts the game.
+
+def _new_lobby(client: Client, query: str = "seed=1&open=blue") -> dict:
+    return client.get(f"/api/game/new?{query}").json()
+
+
+def _claim_seat(who: Client, gid: str, side: str):
+    return who.post(f"/api/game/{gid}/seat",
+                    data=json.dumps({"action": "claim", "side": side}),
+                    content_type="application/json")
+
+
+def _edit_figure(who: Client, gid: str, figure: dict, **changes):
+    spec = dict(figure["edit_spec"])
+    spec.update(changes)
+    return who.post(f"/api/game/{gid}/action",
+                    data=json.dumps({"type": "update_figure",
+                                     "uid": figure["uid"], "spec": spec}),
+                    content_type="application/json")
+
+
+def test_remote_side_creates_a_setup_lobby_with_an_open_seat(client: Client) -> None:
+    data = _new_lobby(client)
+    assert data["state"]["phase"] == "setup"
+    assert data["open_seats"] == ["blue"]        # the remote seat is born open
+    assert data["you_control"] == ["red"]        # the creator keeps only its own side
+    assert data["is_host"] is True
+    # No turn is running yet: initiative freezes at begin_game, not at creation,
+    # and the payload renders sanely with no active figure.
+    assert data["state"]["initiative_order"] == []
+    assert data["state"]["active_uid"] is None
+    assert data["state"]["moving_side"] is None
+
+
+def test_instant_start_is_unchanged_when_no_remote_sides(client: Client) -> None:
+    # The no-open-seat path must behave exactly as before #399: born at "select"
+    # with the turn-1 initiative frozen. (is_host rides along for the client but
+    # grants nothing outside the setup phase.)
+    data = _new(client)
+    assert data["state"]["phase"] == "select"
+    assert data["state"]["initiative_order"]
+    assert data["state"]["active_uid"] == data["state"]["initiative_order"][0]
+    assert data["open_seats"] == []
+    assert data["is_host"] is True
+
+
+def test_lobby_seat_owner_edits_own_figure_but_not_anothers(client: Client) -> None:
+    data = _new_lobby(client)
+    gid = data["gid"]
+    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+    blue = next(f for f in data["state"]["figures"] if f["side"] == "blue")
+
+    joiner = Client()
+    assert _claim_seat(joiner, gid, "blue").status_code == 200
+
+    # The joiner edits its OWN fighter in the lobby (a non-admin, mid-"game" —
+    # exactly what #323 forbids once play starts).
+    renamed = _edit_figure(joiner, gid, blue, name="Bluebeard")
+    assert renamed.status_code == 200
+    edited = next(f for f in renamed.json()["state"]["figures"]
+                  if f["uid"] == blue["uid"])
+    assert edited["name"] == "Bluebeard"
+
+    # ...but not the host's fighter (cross-side edit -> the per-figure 403).
+    assert _edit_figure(joiner, gid, red, name="Hijacked").status_code == 403
+
+    # A spectator (no seat) may not edit anything.
+    assert _edit_figure(Client(), gid, blue, name="Nope").status_code == 403
+
+
+def test_lobby_host_edits_any_figure_including_a_computer_side(client: Client) -> None:
+    data = _new_lobby(client, "seed=1&teams=3&per_team=1&computer=green&open=blue")
+    gid = data["gid"]
+    assert data["state"]["phase"] == "setup"
+    green = next(f for f in data["state"]["figures"] if f["side"] == "green")
+    blue = next(f for f in data["state"]["figures"] if f["side"] == "blue")
+
+    # The host may edit the AI's fighter and the (still unclaimed) remote one.
+    assert _edit_figure(client, gid, green, name="Trained AI").status_code == 200
+    assert _edit_figure(client, gid, blue, name="Prepared").status_code == 200
+
+    # A seat owner who is NOT the host has no such reach over the AI side.
+    joiner = Client()
+    _claim_seat(joiner, gid, "blue")
+    assert _edit_figure(joiner, gid, green, name="Nope").status_code == 403
+
+
+def test_lobby_edits_stay_validated_for_non_admins(client: Client) -> None:
+    # The lobby loosens WHO may edit, never WHAT: a non-admin's edit still goes
+    # through chargen validation, so an out-of-budget spec is a clean 400.
+    data = _new_lobby(client)
+    gid = data["gid"]
+    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+    over_budget = _edit_figure(client, gid, red, strength=99)
+    assert over_budget.status_code == 400
+
+
+@pytest.mark.django_db
+def test_begin_game_is_host_only(client: Client, django_user_model) -> None:
+    data = _new_lobby(client)
+    gid = data["gid"]
+
+    joiner = Client()
+    _claim_seat(joiner, gid, "blue")
+    blocked = joiner.post(f"/api/game/{gid}/action",
+                          data=json.dumps({"type": "begin_game"}),
+                          content_type="application/json")
+    assert blocked.status_code == 403            # a seat owner is not the host
+
+    spectator = Client()
+    assert spectator.post(f"/api/game/{gid}/action",
+                          data=json.dumps({"type": "begin_game"}),
+                          content_type="application/json").status_code == 403
+
+    # An admin may start it (the usual #86 override).
+    admin_user = django_user_model.objects.create_user(
+        username="gm-lobby", password="gm-pass-424242", is_staff=True)
+    admin = Client()
+    admin.force_login(admin_user)
+    started = admin.post(f"/api/game/{gid}/action",
+                         data=json.dumps({"type": "begin_game"}),
+                         content_type="application/json")
+    assert started.status_code == 200
+    assert started.json()["state"]["phase"] == "select"
+
+
+def test_begin_game_starts_the_game_and_drives_the_computer(client: Client) -> None:
+    data = _new_lobby(client, "seed=1&teams=3&per_team=1&computer=green&open=blue")
+    gid = data["gid"]
+
+    started = _post(client, gid, {"type": "begin_game"})
+    state = started["state"]
+    assert state["phase"] == "select"
+    # Initiative froze at begin_game: a full order, and the pointer has been
+    # driven PAST any leading computer figures to the first human one — the same
+    # post-start driving _start_game does for an instant-start game.
+    assert len(state["initiative_order"]) == 3
+    assert state["active_uid"] is not None
+    active_side = next(f["side"] for f in state["figures"]
+                       if f["uid"] == state["active_uid"])
+    assert state["controllers"][active_side] != "computer"
+
+    # Starting twice is a clean 400 — the game is no longer in the lobby.
+    again = _post(client, gid, {"type": "begin_game"})
+    assert again == {"error": "not the setup phase"}
+
+    # Once started, the lobby's edit loosening is over: a non-admin (even the
+    # host) is back to the #323 admin-only rule for update_figure.
+    red = next(f for f in state["figures"] if f["side"] == "red")
+    assert _edit_figure(client, gid, red, name="TooLate").status_code == 403
+
+
+def test_turn_actions_are_rejected_during_the_lobby(client: Client) -> None:
+    data = _new_lobby(client)
+    gid = data["gid"]
+    red = next(f for f in data["state"]["figures"] if f["side"] == "red")
+
+    assert _post(client, gid, {"type": "move", "uid": red["uid"],
+                               "option": "move"}) == {"error": "not the selection phase"}
+    assert _post(client, gid, {"type": "queue_attack", "uid": red["uid"],
+                               "target": red["uid"]}) == {"error": "not the combat phase"}
+    assert _post(client, gid, {"type": "resolve_combat"}) == {"error": "not the combat phase"}
+    assert _post(client, gid, {"type": "end_turn"}) == {"error": "the game has not started"}
+
+    # Seat actions still work in the lobby (claim/open/release are its point).
+    joiner = Client()
+    assert _claim_seat(joiner, gid, "blue").status_code == 200
+
+
+@pytest.mark.django_db
+def test_lobby_survives_a_registry_wipe_with_host_intact(client: Client) -> None:
+    # #275-style durability for the lobby: evict the game mid-setup and the
+    # load-on-demand reload must resurrect it AS a lobby, with the host id (and
+    # so the Start-game power) intact.
+    from board.views import GAMES
+
+    data = _new_lobby(client)
+    gid = data["gid"]
+    del GAMES[gid]                              # simulate a restart/eviction
+
+    seen = client.get(f"/api/game/{gid}").json()
+    assert seen["state"]["phase"] == "setup"
+    assert seen["open_seats"] == ["blue"]
+    assert seen["is_host"] is True              # the host survived the round-trip
+
+    started = _post(client, gid, {"type": "begin_game"})
+    assert started["state"]["phase"] == "select"

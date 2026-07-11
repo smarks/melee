@@ -493,3 +493,27 @@ def test_dropped_weapons_use_the_same_serializer_as_carried() -> None:
     # A catalog weapon collapses to the same value _weapon_to_json produces.
     assert dropped_entry["weapon"] == persistence._weapon_to_json(WEAPONS["Dagger"])
     assert dropped_entry["weapon"] == "Dagger"
+
+
+def test_setup_lobby_host_and_phase_round_trip() -> None:
+    # #399: a game snapshotted mid-lobby resumes AS a lobby — phase "setup", the
+    # open seat still open, and the host id intact (the host's edit-any-figure and
+    # Start-game powers must survive a restart/eviction).
+    state = _two_figure_game("Classic Melee")
+    game = {
+        "state": state,
+        "phase": "setup",
+        "profile": "Classic Melee",
+        "controllers": {"red": "human", "blue": "human"},
+        "seats": {"red": "pid-host", "blue": "open"},
+        "host": "pid-host",
+    }
+    restored = persistence.game_from_json(persistence.game_to_json(game))
+    assert restored["phase"] == "setup"
+    assert restored["host"] == "pid-host"
+    assert restored["seats"] == {"red": "pid-host", "blue": "open"}
+
+    # An old snapshot (pre-#399) carries no host key: it loads as None, no crash.
+    legacy = persistence.game_to_json(game)
+    del legacy["host"]
+    assert persistence.game_from_json(legacy)["host"] is None

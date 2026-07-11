@@ -8,14 +8,15 @@ import assert from "node:assert/strict";
 import {classifyControlState, needsTarget} from "../board/static/board/control_state.js";
 
 // Build a ctx whose myTurnActor is true for figures on `mySides`, and whose
-// isComputerSide is true for `computerSides`. plan/chosenOption/sel/openSeats
-// default to the "nothing queued, not placing, no open seats" case.
+// isComputerSide is true for `computerSides`. plan/chosenOption/sel/openSeats/
+// isHost default to the "nothing queued, not placing, no open seats, not the
+// host" case.
 function ctxFor({mySides = [], computerSides = [], plan = {}, chosenOption = null,
-                 sel = null, openSeats = []} = {}) {
+                 sel = null, openSeats = [], isHost = false} = {}) {
   return {
     myTurnActor: f => mySides.includes(f.side),
     isComputerSide: side => computerSides.includes(side),
-    plan, chosenOption, sel, openSeats,
+    plan, chosenOption, sel, openSeats, isHost,
   };
 }
 const fig = (uid, side, extra = {}) => ({uid, side, name: uid, label: uid, ...extra});
@@ -172,5 +173,35 @@ test("combat: a wizard with NO queued cast is idle, never a resolve-blocking mus
 });
 
 test("an unknown phase is the inert 'none' state", () => {
-  assert.equal(classifyControlState({phase: "setup"}, ctxFor()).kind, "none");
+  // ("setup" was the example unknown phase before #399 made it a real one.)
+  assert.equal(classifyControlState({phase: "bogus"}, ctxFor()).kind, "none");
+});
+
+// ---- pre-game setup lobby (#399) --------------------------------------------
+
+test("setup: the host gets the Start-game state", () => {
+  const state = {phase: "setup", figures: [fig("r1", "red"), fig("b1", "blue")]};
+  const out = classifyControlState(state, ctxFor({mySides: ["red"], isHost: true}));
+  assert.equal(out.kind, "setup_host");
+});
+
+test("setup: the host state holds with seats still open (start is never gated)", () => {
+  const state = {phase: "setup", figures: [fig("r1", "red"), fig("b1", "blue")]};
+  const out = classifyControlState(state,
+    ctxFor({mySides: ["red"], isHost: true, openSeats: ["blue"]}));
+  assert.equal(out.kind, "setup_host");
+});
+
+test("setup: a non-host (joiner or spectator) waits on the host", () => {
+  const state = {phase: "setup", figures: [fig("r1", "red"), fig("b1", "blue")]};
+  const joiner = classifyControlState(state, ctxFor({mySides: ["blue"]}));
+  assert.equal(joiner.kind, "setup_waiting");
+  const spectator = classifyControlState(state, ctxFor({}));
+  assert.equal(spectator.kind, "setup_waiting");
+});
+
+test("setup: victory still short-circuits the lobby states", () => {
+  const out = classifyControlState({phase: "setup", victory: "red"},
+    ctxFor({isHost: true}));
+  assert.equal(out.kind, "victory");
 });
