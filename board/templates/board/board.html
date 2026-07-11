@@ -585,14 +585,17 @@
       <div class="gc-section gc-players">
         <div class="muted">Players — <span id="playerCount">1</span>/5</div>
         <!-- The roster: player 0 is always the local human; the rest are added,
-             freely mixing human (same-screen) and AI, up to 5 total. -->
+             freely mixing human (same-screen), AI, and remote (invite-link, #399)
+             players, up to 5 total. -->
         <div id="playerRoster"></div>
         <div class="gc-add">
           <button id="addHumanBtn" onclick="addPlayer('human')">＋ Add human player</button>
           <button id="addAiBtn" onclick="addPlayer('ai')">＋ Add AI player</button>
+          <button id="addRemoteBtn" onclick="addPlayer('remote')">＋ Add remote player</button>
         </div>
         <div class="gc-note">You are the first player. Freely mix humans (same-screen
-          hot-seat) and AI opponents, up to 5 players total. A game needs at least 2.</div>
+          hot-seat), AI opponents, and remote players (they claim their seat over the
+          invite link before the game starts), up to 5 players total. A game needs at least 2.</div>
       </div>
       <div class="gc-section">
         <label>Characters per player

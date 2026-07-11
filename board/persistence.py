@@ -489,6 +489,10 @@ def game_to_json(game: dict) -> dict:
         "profile": game.get("profile"),
         "controllers": dict(game.get("controllers", {})),
         "seats": dict(game.get("seats", {})),
+        # The creator's player id (#399): the setup-lobby host survives a
+        # restart/eviction, so the lobby's edit-any-figure and Start-game powers
+        # don't vanish mid-setup. Absent from old snapshots -> None on load.
+        "host": game.get("host"),
         "combat_prepared": game.get("combat_prepared", False),
         # Per-turn combat coordination for networked multi-human play (#334): which
         # human sides have pressed Resolve, and whether the queue has resolved. Ride
@@ -514,6 +518,7 @@ def game_from_json(data: dict) -> dict:
         "profile": data.get("profile"),
         "controllers": dict(data.get("controllers", {})),
         "seats": dict(data.get("seats", {})),
+        "host": data.get("host"),
         "combat_prepared": data.get("combat_prepared", False),
         "combat_ready": list(data.get("combat_ready", [])),
         "combat_resolved": data.get("combat_resolved", False),

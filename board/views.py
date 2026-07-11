@@ -566,6 +566,11 @@ def _payload(game: dict, *, include_layout: bool = True) -> dict:
     every tick (#256).
     """
     payload = {"state": dump_game(game["state"], meta=_meta(game))}
+    # The rule profile rides on every payload so a deep-link joiner learns it
+    # too: the inline character editor needs it to load the right catalog, and
+    # before #399 only the creation responses carried it, which left a joiner's
+    # lobby edit card unable to mount.
+    payload["profile"] = game.get("profile")
     if include_layout:
         payload["layout"] = game["layout"]
     return payload
@@ -998,26 +1003,40 @@ def api_admin_character_delete(request, pk):
 
 
 def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
-                *, practice: bool = False) -> dict:
+                *, practice: bool = False, open_sides=frozenset()) -> dict:
     """Register a new game and return its initial payload (shared entry point).
 
     ``practice`` starts a Practice Combat bout (p.22): blunted half-damage
-    weapons, no missiles, and a drop-out at ST <= 3 (see :class:`GameState`)."""
+    weapons, no missiles, and a drop-out at ST <= 3 (see :class:`GameState`).
+
+    ``open_sides`` names the sides whose seats are born "open" (the setup roster's
+    "Remote" players, #399). A game created with any open seat starts in the
+    pre-game lobby — ``phase="setup"``, initiative NOT yet frozen, computer sides
+    not yet driven — so a remote player can claim a seat and edit their characters
+    before the host starts the game with ``begin_game``. With no open seat the
+    game starts instantly, exactly as before."""
     seed_value = _seed_int(seed)
     dice = Dice(seed=seed_value) if seed_value is not None else Dice()
     combat_type = (experience.CombatType.PRACTICE if practice
                    else experience.CombatType.DEATH)
     state = GameState(arena, figures, dice=dice, ruleset=profile.ruleset,
                       combat_type=combat_type)
-    state.begin_selection()   # freeze the turn-1 initiative order (#192)
     controllers = {side: ("computer" if side in computer_sides else "human")
                    for side in state.sides}
     # Seats record who may drive each side. The creating session owns every human
     # side, so same screen (one player, all sides) just works; computer sides are the
     # AI's. #85 lets the creator open human seats for others to claim over a shared
-    # link; #86 adds an admin override.
-    seats = {side: ("computer" if side in computer_sides else owner_key)
+    # link; #86 adds an admin override. A side declared "Remote" (#399) is born
+    # open instead of the creator's; a side can't be both an AI's and open, and
+    # unknown side names are ignored.
+    open_at_birth = ({side for side in open_sides if side in state.sides}
+                     - set(computer_sides))
+    seats = {side: ("computer" if side in computer_sides
+                    else "open" if side in open_at_birth else owner_key)
              for side in state.sides}
+    lobby = bool(open_at_birth)
+    if not lobby:
+        state.begin_selection()   # freeze the turn-1 initiative order (#192)
     # A game id doubles as the capability token for the unauthenticated spectate
     # endpoints (api_state, api_debug) and the shareable /game/<gid> deep link, so
     # it must be as hard to guess as the 128-bit player ids -- not the old 32-bit
@@ -1028,10 +1047,14 @@ def _start_game(arena, figures, profile, computer_sides, seed, owner_key,
     GAMES[gid] = {
         "state": state,
         "layout": layout(arena),
-        "phase": "select",
+        "phase": "setup" if lobby else "select",
         "profile": profile.name,
         "controllers": controllers,
         "seats": seats,
+        # The creator's player id (#399): during the setup lobby the host may edit
+        # ANY figure (including a computer side's) and is the one who starts the
+        # game (begin_game). Stable for the life of the game.
+        "host": owner_key,
         "combat_prepared": False,
         "combat_ready": [],           # human sides that have pressed Resolve (#334)
         "combat_resolved": False,     # this turn's combat has been resolved (#334)
@@ -1132,9 +1155,12 @@ def api_new_game(request):
         arena, figures = scenario.skirmish_for(profile.name)
         computer_sides = {s for s in request.GET.get("computer", "").split(",") if s}
     pid = _player_id(request) or secrets.token_hex(16)
+    # Sides declared "Remote" in the setup roster (#399): their seats are born
+    # open, and any open seat puts the game in the pre-game setup lobby.
+    open_sides = {s for s in request.GET.get("open", "").split(",") if s}
     payload = _start_game(
         arena, figures, profile, computer_sides, request.GET.get("seed"), pid,
-        practice=_is_truthy(request.GET.get("practice")))
+        practice=_is_truthy(request.GET.get("practice")), open_sides=open_sides)
     return _new_game_response(request, payload, pid)
 
 
@@ -1225,9 +1251,11 @@ def api_new_custom(request):
         # keys, so an internal KeyError stays a 500 rather than masquerading here.
         return JsonResponse({"error": str(exc)}, status=400)
     pid = _player_id(request) or secrets.token_hex(16)
+    # Remote sides' seats are born open -> the game starts in the lobby (#399).
+    open_sides = {s for s in (body.get("open") or "").split(",") if s}
     payload = _start_game(
         arena, figures, profile, computer_sides, body.get("seed"), pid,
-        practice=_is_truthy(body.get("practice")))
+        practice=_is_truthy(body.get("practice")), open_sides=open_sides)
     return _new_game_response(request, payload, pid)
 
 
@@ -1492,6 +1520,9 @@ def _ownership_fields(game: dict, pid: str | None) -> dict:
         "you_control": sorted(_sides_owned_by(seats, pid)),
         "open_seats": sorted(side for side, owner in seats.items() if owner == "open"),
         "seated": bool(seats),
+        # Whether this caller created the game (#399): the host drives the setup
+        # lobby (edit any figure, Start game). False on seatless fixture games.
+        "is_host": pid is not None and game.get("host") == pid,
     }
 
 
@@ -1563,13 +1594,28 @@ def _authorize_action(game: dict, request, body: dict) -> None:
     if not seats:
         return
     # A live figure re-spec is admin-only (#323): regular players build their
-    # fighters pre-game via new_custom and never drive update_figure on a running
-    # game. This mirrors the client gate (canEditInline = IS_ADMIN) and hardens the
-    # endpoint the same way #244/#257 gated the other per-figure writes. This gate
-    # precedes the shared prologue so a non-admin gets it whether or not they own a
-    # seat (matching the original ordering).
+    # fighters pre-game and never drive update_figure on a RUNNING game. The
+    # pre-game setup lobby (#399) is the exception — building your fighter is its
+    # point: the HOST may edit any figure (including a computer side's), and a
+    # seat owner falls through to the standard per-figure ownership check below,
+    # so they may edit exactly the sides they hold. Validation still binds them
+    # (allow_invalid stays admin-only in _act_update_figure). This gate precedes
+    # the shared prologue so a non-admin gets it whether or not they own a seat
+    # (matching the original ordering).
     if body.get("type") == "update_figure" and not _is_admin(request):
-        raise Forbidden("only an admin may edit a figure mid-game")
+        if game["phase"] != "setup":
+            raise Forbidden("only an admin may edit a figure mid-game")
+        host = game.get("host")
+        if host is not None and host == _player_id(request):
+            return                            # the lobby host edits any figure
+    # Starting a lobby game is the host's call (#399); an admin may too (they
+    # fall through to _require_seat_holder's admin bypass). A seat owner who is
+    # not the host may NOT start the game for everyone.
+    if body.get("type") == "begin_game" and not _is_admin(request):
+        host = game.get("host")
+        if host is None or host != _player_id(request):
+            raise Forbidden("only the host may start the game")
+        return
     mine = _require_seat_holder(game, request)
     if mine is None:                          # admin (seatless returned above)
         return
@@ -1721,7 +1767,7 @@ def api_seat(request, gid):
 # A phase's internal name vs. the word used in its guard message. Kept as a small
 # map so the declarative dispatch table below produces byte-for-byte identical
 # "not the <X> phase" errors.
-_PHASE_LABEL = {"select": "selection", "combat": "combat"}
+_PHASE_LABEL = {"setup": "setup", "select": "selection", "combat": "combat"}
 
 
 def _require_active(state: GameState, figure) -> None:
@@ -1915,8 +1961,9 @@ def _act_force_retreat(game: dict, body: dict, *, is_admin: bool = False, owner_
 def _act_end_turn(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
     """End the turn — but no-op a stale duplicate (#242).
 
-    ``end_turn`` runs in any phase, so nothing else stops a second end_turn from
-    landing in the fresh select phase the first one just opened. A double-click or a retried POST on a flaky
+    ``end_turn`` runs in any started phase (select or combat), so nothing else
+    stops a second end_turn from landing in the fresh select phase the first one
+    just opened. A double-click or a retried POST on a flaky
     connection would then call :func:`state.end_turn` twice for one player
     intent: it would skip a whole turn, erase the per-turn injury flags (a
     figure's mandatory -2 DX wounded penalty vanishes), grant a free missile
@@ -1945,10 +1992,29 @@ def _act_update_figure(game: dict, body: dict, *, is_admin: bool = False, owner_
     return None
 
 
-# Declarative action registry: action name -> (required_phase_or_None, handler).
-# The phase contract lives here once instead of being copy-pasted as a guard
-# prologue in each branch; ``None`` means the action runs in any phase. Adding an
-# action is a new handler plus one line here, not surgery in a long if/elif chain.
+def _act_begin_game(game: dict, body: dict, *, is_admin: bool = False, owner_sides: set | None = None):
+    """Start a lobby game (#399): freeze the turn-1 initiative and open selection.
+
+    Only reachable in the ``setup`` phase (the ``_ACTIONS`` table rejects it once
+    the game has started); authorization (host or admin only) lives in
+    :func:`_authorize_action`. The :func:`api_action` postlude then drives any
+    computer sides, autosaves, and bumps ``rev`` — exactly what
+    :func:`_start_game` does for an instant-start game.
+    """
+    state: GameState = game["state"]
+    state.begin_selection()   # freeze the turn-1 initiative order (#192)
+    game["phase"] = "select"
+    return None
+
+
+# Declarative action registry: action name -> (allowed_phases, handler). The
+# phase contract lives here once instead of being copy-pasted as a guard
+# prologue in each branch; a single phase name means that phase only, a tuple
+# means any of those phases, and ``None`` means the action runs in any phase.
+# Adding an action is a new handler plus one line here, not surgery in a long
+# if/elif chain. Note nothing but seat changes, figure edits, and begin_game
+# runs during the ``setup`` lobby (#399): every turn-driving action here names
+# select and/or combat, so the lobby rejects it with a clean 400.
 _ACTIONS = {
     "move": ("select", _act_move),
     "do_nothing": ("select", _act_do_nothing),
@@ -1962,8 +2028,9 @@ _ACTIONS = {
     "disengage_move": ("combat", _act_disengage_move),
     "resolve_combat": ("combat", _act_resolve_combat),
     "force_retreat": ("combat", _act_force_retreat),
-    "end_turn": (None, _act_end_turn),
+    "end_turn": (("select", "combat"), _act_end_turn),
     "update_figure": (None, _act_update_figure),
+    "begin_game": ("setup", _act_begin_game),
 }
 
 
@@ -1974,8 +2041,15 @@ def _dispatch(game: dict, body: dict, *, is_admin: bool = False, owner_sides: se
     if entry is None:
         raise IllegalAction(f"unknown action {action!r}")
     required_phase, handler = entry
-    if required_phase is not None and game["phase"] != required_phase:
-        raise IllegalAction(f"not the {_PHASE_LABEL[required_phase]} phase")
+    if required_phase is not None:
+        allowed = ((required_phase,) if isinstance(required_phase, str)
+                   else required_phase)
+        if game["phase"] not in allowed:
+            if len(allowed) == 1:
+                raise IllegalAction(f"not the {_PHASE_LABEL[allowed[0]]} phase")
+            # A multi-phase action refused outside its phases can only mean the
+            # game is still in the setup lobby (#399).
+            raise IllegalAction("the game has not started")
     return handler(game, body, is_admin=is_admin, owner_sides=owner_sides)
 
 
@@ -2027,8 +2101,22 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
     # wounds/consciousness/death and an unspent missile reload, restores
     # dropped_out (a fighter that bowed out of a practice bout stays out, not
     # resurrected), and carries banked XP + the bought ST/DX points.
+    #
+    # Exception: wizard identity. CARRY_OVER_STATE lists intelligence and
+    # spells_known so a rebuild whose spec is silent keeps them — but both are
+    # ALSO editor fields, and carrying the old values verbatim silently reverted
+    # any edit (found by the #399 lobby: a remote wizard could never change its
+    # spell picks). Where the spec explicitly sets them, the freshly-built values
+    # win; per-fight magic state (active_spells / spell_protection) carries
+    # regardless.
+    edited_identity = {name: getattr(rebuilt, name)
+                       for name, spec_key in (("intelligence", "intelligence"),
+                                              ("spells_known", "spells"))
+                       if spec_key in spec}
     for name in CARRY_OVER_STATE:
         setattr(rebuilt, name, getattr(figure, name))
+    for name, value in edited_identity.items():
+        setattr(rebuilt, name, value)
     # Nonhuman creature traits chargen.build never sets from a spec, so without
     # this a rebuilt monster collapses to single-hex human defaults: a giant to
     # size 1, a grounded gargoyle, a snake stripped of all_front/hard_to_hit, and
