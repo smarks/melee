@@ -145,19 +145,19 @@ def test_wizards_lobby_joiner_picks_its_wizards_spells(
         figures = _state(joiner, gid)["figures"]
         wizard = next(f for f in figures
                       if f["side"] == "blue" and f.get("is_wizard"))
-        assert set(wizard["spells_known"]) == {"magic_fist", "stone_flesh"}
+        assert set(wizard["spells_known"]) == {"magic_fist", "staff", "stone_flesh"}
         joiner.locator(f'#roster .row[data-uid="{wizard["uid"]}"]').click()
         card = joiner.locator("#selInfo .card")
         expect(card).to_be_visible(timeout=15_000)
         expect(card.locator("[data-spells]")).to_be_visible()
 
-        # Pick spells: drop Stone Flesh, keeping Magic Fist, and apply.
+        # Pick spells: drop Stone Flesh, keeping Magic Fist + Staff, and apply.
         card.locator('[data-spell="stone_flesh"]').uncheck()
         card.get_by_role("button", name="Apply to game").click()
         joiner.wait_for_function(
             "async ([g, uid]) => { const d = await (await fetch(`/api/game/${g}`)).json();"
             " const f = d.state.figures.find(x => x.uid === uid);"
-            " return !!f && JSON.stringify(f.spells_known) === '[\"magic_fist\"]'; }",
+            " return !!f && JSON.stringify(f.spells_known) === '[\"magic_fist\",\"staff\"]'; }",
             arg=[gid, wizard["uid"]], timeout=15_000)
 
         # The host starts the game; the joiner's spell pick is live.
@@ -167,7 +167,7 @@ def test_wizards_lobby_joiner_picks_its_wizards_spells(
             ".state.phase === 'select'", arg=gid, timeout=15_000)
         started_wizard = next(f for f in _state(host, gid)["figures"]
                               if f["uid"] == wizard["uid"])
-        assert started_wizard["spells_known"] == ["magic_fist"]
+        assert started_wizard["spells_known"] == ["magic_fist", "staff"]
     finally:
         host_ctx.close()
         joiner_ctx.close()
