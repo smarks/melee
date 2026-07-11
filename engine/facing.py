@@ -144,11 +144,16 @@ def _footprints_adjacent(layout: HexLayout, figure: Figure, other: Figure) -> bo
 def is_engaged_by(layout: HexLayout, figure: Figure, enemy: Figure) -> bool:
     """True if ``figure`` stands in ``enemy``'s front hex (so enemy engages it).
 
-    A prone or airborne enemy has no front and engages no one. Both figures'
-    footprints are honoured: ``figure`` is engaged if any of its footprint hexes
-    sits in the enemy's (footprint-wide) front.
+    A prone or airborne enemy has no front and engages no one. Engagement also
+    needs an *armed* enemy (p.9): "the only 'unarmed' enemy in this game is a
+    wizard who has no staff" (Wizard, rules line 536), so a staffless (empty-
+    handed) wizard engages no one either — foes in its front stay free to move.
+    Both figures' footprints are honoured: ``figure`` is engaged if any of its
+    footprint hexes sits in the enemy's (footprint-wide) front.
     """
     if enemy.posture == Posture.PRONE or enemy.collapsed or enemy.flying:
+        return False
+    if enemy.unarmed_wizard:       # a staffless wizard is unarmed and engages no one
         return False
     if figure.position is None or enemy.position is None:
         return False

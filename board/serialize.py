@@ -142,6 +142,9 @@ def _figure_dict(state: GameState, figure: Figure) -> dict:
         data["is_wizard"] = True
         data["intelligence"] = figure.intelligence
         data["spells_known"] = list(figure.spells_known)
+        # Whether this wizard owns a staff (the Staff spell, p.19). The staff
+        # currently in hand already rides the ordinary "weapon" field above.
+        data["has_staff"] = figure.has_staff
         data["active_spells"] = dict(figure.active_spells)
         data["spell_protection"] = figure.spell_protection
         data["mana"] = figure.current_st          # ST doubles as the mana pool

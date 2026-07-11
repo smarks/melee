@@ -79,7 +79,14 @@ def _game_for_seed(seed: int) -> tuple[RulesProfile, Arena, list]:
         arena, figures = tarmar_skirmish()
         return TARMAR, arena, figures
     if kind == 2:
-        arena, figures = build_game(CLASSIC.name, team_count, per_team)
+        # Every other classic multi-team game is a WIZARDS-mode game: the last
+        # seat per side is the preset wizard, staff in hand (#406), so the
+        # unarmed-wizard engagement rule, staff strikes/fumbles, and the
+        # owner-only staff pick-up all run under the same invariant net. (Named
+        # regression seeds 239 and 416 are kinds 3 and 0, untouched by this.)
+        wizards = (seed // 4) % 2 == 1
+        arena, figures = build_game(CLASSIC.name, team_count, per_team,
+                                    wizards=wizards)
         return CLASSIC, arena, figures
     arena, figures = build_game(TARMAR.name, team_count, per_team)
     return TARMAR, arena, figures

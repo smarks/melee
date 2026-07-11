@@ -2533,3 +2533,56 @@ def test_lobby_wizard_edit_changes_its_spell_picks(client: Client) -> None:
     live = next(f for f in started["state"]["figures"]
                 if f["uid"] == wizard["uid"])
     assert live["spells_known"] == ["magic_fist"]
+
+
+def test_wizard_staff_serializes_and_round_trips_the_lobby_edit(client: Client) -> None:
+    # The staff rides the Staff spell (#406, Wizard p.19): a wizard built with
+    # the "staff" pick surfaces has_staff + the Staff as its weapon in the wire
+    # payload, and a lobby edit that adds/removes the spell adds/removes the
+    # staff — the spell picker is the ONLY way to gain or lose it.
+    fighters = [
+        {"name": "F1", "side": "red", "strength": 12, "dexterity": 12,
+         "weapon": "Broadsword", "armor": "Leather", "shield": "None"},
+        {"name": "W2", "side": "blue", "strength": 9, "dexterity": 10,
+         "intelligence": 13, "armor": "None",
+         "spells": ["magic_fist", "staff"]},
+    ]
+    created = client.post(
+        "/api/game/new_custom",
+        data=json.dumps({"profile": "Classic Melee", "open": "blue",
+                         "fighters": fighters}),
+        content_type="application/json").json()
+    gid = created["gid"]
+    wizard = next(f for f in created["state"]["figures"] if f["name"] == "W2")
+    # Serialized: the staff shows on the sheet (weapon) and as has_staff, and the
+    # edit_spec round-trips the spell pick that grants it.
+    assert wizard["has_staff"] is True
+    assert wizard["weapon"] == "Staff"
+    assert "Staff" in wizard["weapons"]
+    assert set(wizard["edit_spec"]["spells"]) == {"magic_fist", "staff"}
+    assert wizard["edit_spec"]["has_staff"] is True
+    # The fighter's payload is untouched (no wizard keys).
+    fighter = next(f for f in created["state"]["figures"] if f["name"] == "F1")
+    assert "has_staff" not in fighter
+
+    joiner = Client()
+    _claim_seat(joiner, gid, "blue")
+    # Unpick the Staff spell -> the staff is gone (empty-handed wizard again).
+    edited = _edit_figure(joiner, gid, wizard, spells=["magic_fist"])
+    assert edited.status_code == 200
+    after = next(f for f in edited.json()["state"]["figures"]
+                 if f["uid"] == wizard["uid"])
+    assert after["has_staff"] is False
+    assert after["weapon"] is None
+    # Re-pick it -> the staff is back in hand.
+    restaffed = _edit_figure(joiner, gid, after, spells=["magic_fist", "staff"])
+    assert restaffed.status_code == 200
+    again = next(f for f in restaffed.json()["state"]["figures"]
+                 if f["uid"] == wizard["uid"])
+    assert again["has_staff"] is True and again["weapon"] == "Staff"
+
+    # The staff survives the start of the game.
+    started = _post(client, gid, {"type": "begin_game"})
+    live = next(f for f in started["state"]["figures"]
+                if f["uid"] == wizard["uid"])
+    assert live["has_staff"] is True and live["weapon"] == "Staff"

@@ -480,6 +480,38 @@ def test_dropped_non_catalog_weapon_round_trips() -> None:
     assert restored_weapon.hth_damage == dropped_weapon.hth_damage
 
 
+def test_wizard_staff_round_trips_through_json() -> None:
+    """#406: the staff is a non-catalog weapon (fighters can't pick it), so a
+    staffed wizard — and a staff lying dropped on the field — must survive
+    save/load by value, with has_staff and the ready-weapon identity intact."""
+    from engine.figure import create_wizard
+
+    wizard = create_wizard(
+        "Merlin", strength=12, dexterity=12, intelligence=8, side="red",
+        spells_known=["staff", "magic_fist"])
+    wizard.position = Hex(3, 3)
+    wizard.uid = "wiz"
+    restored = persistence._figure_from_json(persistence._figure_to_json(wizard))
+    assert restored.has_staff is True
+    assert restored.spells_known == ["staff", "magic_fist"]
+    assert restored.ready_weapon is not None
+    assert restored.ready_weapon.name == "Staff"
+    assert restored.ready_weapon in restored.weapons          # identity preserved
+    assert restored.ready_weapon.damage == DamageDice(1, 0)
+
+    # A dropped staff on the ground round-trips like any non-catalog weapon.
+    state = _two_figure_game("Classic Melee")
+    from engine.rules_data import STAFF
+    assert STAFF.name not in WEAPONS
+    state.dropped.append((Hex(5, 5), STAFF))
+    reloaded = persistence.state_from_json(
+        json.loads(json.dumps(persistence.state_to_json(state))))
+    dropped_hex, dropped_weapon = reloaded.dropped[0]
+    assert (dropped_hex.col, dropped_hex.row) == (5, 5)
+    assert dropped_weapon.name == "Staff"
+    assert dropped_weapon.damage == DamageDice(1, 0)
+
+
 def test_dropped_weapons_use_the_same_serializer_as_carried() -> None:
     """Drift guard (#303): the dropped list must serialize each weapon through
     the same by-value helper carried weapons use, so a non-catalog weapon keeps

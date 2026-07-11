@@ -124,6 +124,62 @@ def test_wizard_casts_magic_fist_deals_damage_and_spends_mana(
 
 
 @pytest.mark.django_db
+def test_staffed_wizard_shows_the_staff_and_still_casts(
+        live_server, page: Page) -> None:
+    # #406: a wizard who knows the Staff spell starts with the staff in hand
+    # (Wizard p.19). The character sheet must show it as the readied weapon, and
+    # — the staff being the ONE weapon that doesn't block a cast (p.19/p.23) —
+    # casting must still work exactly as for a bare-handed wizard. Scripted dice
+    # as in the Magic Fist test: to-hit [4,4,4]=12 hits, then the ST slider is
+    # set to 1, so one damage die [1] floors at the 1 ST invested -> 1 damage.
+    gid = "wizard-staff-cast"
+    wizard, blue = _seed_wizard_duel(
+        gid, scripted=[4, 4, 4, 1, 1],
+        spells=["magic_fist", "staff"])
+    try:
+        assert wizard.has_staff and wizard.ready_weapon.name == "Staff"
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "Combat", timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # The wire payload carries the staff...
+        merlin = _figure_by_name(page, live_server, gid, "Merlin")
+        assert merlin["has_staff"] is True
+        assert merlin["weapon"] == "Staff"
+
+        # ...and the character sheet shows it as the readied weapon.
+        page.locator(f'#roster .row[data-uid="{wizard.uid}"]').first.click()
+        sheet = page.locator("#selInfo .charsheet")
+        expect(sheet).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+        weapons = sheet.locator(".sheet-weapons")
+        expect(weapons).to_contain_text("Staff")
+        expect(weapons.locator(".readied")).to_contain_text("readied")
+
+        # Staff in hand, the cast is still offered and resolves normally.
+        blue_st_before = _figure_by_name(page, live_server, gid, "Bluecap")["st"]
+        _open_combat_menu_row(page, wizard.uid, "Cast Magic Fist")
+        expect(page.locator("#controls .checklist .done")).to_contain_text(
+            "Cast Magic Fist", timeout=POLL_SAFE_TIMEOUT_MS)
+        slider = page.locator("#controls .cast-st-range")
+        expect(slider).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+        slider.evaluate(
+            "el => { el.value = '1';"
+            " el.dispatchEvent(new Event('input', {bubbles: true})); }")
+        resolve = page.get_by_role("button", name=re.compile("Resolve"))
+        expect(resolve).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
+        resolve.click()
+        expect(page.get_by_role("button", name=re.compile("End turn"))).to_be_visible(
+            timeout=POLL_SAFE_TIMEOUT_MS)
+        blue_after = _figure_by_name(page, live_server, gid, "Bluecap")
+        assert blue_after["st"] == blue_st_before - 1, (
+            f"the staffed wizard's cast should land 1 damage; "
+            f"{blue_st_before} -> {blue_after['st']}")
+    finally:
+        from board.views import GAMES
+        GAMES.pop(gid, None)
+
+
+@pytest.mark.django_db
 def test_wizard_casts_stone_flesh_applies_protection_and_spends_mana(
         live_server, page: Page) -> None:
     # #388/#231: the Cast control for a PROTECTION spell. Merlin casts Stone Flesh on
@@ -212,7 +268,8 @@ def test_wizard_spell_picker_drops_an_unchecked_spell(live_server, page: Page) -
     state = page.evaluate(
         "async (g) => (await (await fetch(`/api/game/${g}`)).json()).state", gid)
     wizard = next(f for f in state["figures"] if f["name"] == "Radagast")
-    assert wizard.get("spells_known") == ["magic_fist"]    # Stone Flesh dropped
+    # Stone Flesh dropped; the preset's other picks (Magic Fist + Staff) remain.
+    assert wizard.get("spells_known") == ["magic_fist", "staff"]
 
 
 def test_wizard_spell_picker_gates_spells_above_iq(live_server, page: Page) -> None:

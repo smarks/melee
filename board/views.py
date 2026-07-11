@@ -2109,9 +2109,13 @@ def _update_figure(game: dict, uid: str, spec: dict, *, allow_invalid: bool = Fa
     # spell picks). Where the spec explicitly sets them, the freshly-built values
     # win; per-fight magic state (active_spells / spell_protection) carries
     # regardless.
+    # has_staff rides the spell list ("staff" picked => staff granted, p.19), so
+    # an edit that sets "spells" also decides has_staff — carrying the old value
+    # would resurrect (or vanish) a staff the spell picks no longer justify.
     edited_identity = {name: getattr(rebuilt, name)
                        for name, spec_key in (("intelligence", "intelligence"),
-                                              ("spells_known", "spells"))
+                                              ("spells_known", "spells"),
+                                              ("has_staff", "spells"))
                        if spec_key in spec}
     for name in CARRY_OVER_STATE:
         setattr(rebuilt, name, getattr(figure, name))
