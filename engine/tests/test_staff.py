@@ -141,6 +141,19 @@ def test_wizard_can_cast_with_the_staff_in_hand() -> None:
     assert_state_invariants(state, CLASSIC, phase="combat")
 
 
+def test_staff_spell_is_not_castable_in_game() -> None:
+    """The Staff spell's modeled effect is the start-of-game grant; the rare
+    in-game re-creation of a broken staff (spell-ref line 26, 5 ST) is
+    deliberately unmodeled — it has no legal targets and cannot be queued, so
+    the cast menu never offers it."""
+    wizard, foe = _staffed_wizard(), _fighter()
+    state = _face_off(wizard, foe, dice=Dice(seed=1))
+    assert state.spell_targets(wizard, STAFF_SPELL) == []
+    wizard.current_option = Option.CAST
+    with pytest.raises(IllegalAction):
+        state.queue_spell(wizard, STAFF_SPELL, wizard, st_used=5)
+
+
 # ---- engagement: a staffless wizard is unarmed (p.9, line 536) --------------
 
 def test_a_staffed_wizard_engages_but_a_staffless_one_does_not() -> None:
