@@ -5,7 +5,7 @@
 // actor) — now plain-object assertions with no DOM.
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {classifyControlState, needsTarget} from "../board/static/board/control_state.js";
+import {classifyControlState, needsSpell, needsTarget} from "../board/static/board/control_state.js";
 
 // Build a ctx whose myTurnActor is true for figures on `mySides`, and whose
 // isComputerSide is true for `computerSides`. plan/chosenOption/sel/openSeats/
@@ -170,6 +170,60 @@ test("combat: a wizard with NO queued cast is idle, never a resolve-blocking mus
   assert.equal(out.kind, "combat_render");
   assert.deepEqual(out.untargeted.map(f => f.uid), ["r2"]);   // the fighter, not the wizard
   assert.equal(out.idle, 1);                                   // the wizard, un-set
+});
+
+test("needsSpell is the must-cast ∧ no-plan invariant (#409)", () => {
+  const mustCast = new Set(["w1"]);
+  assert.equal(needsSpell({uid: "w1"}, mustCast, {}), true);
+  assert.equal(needsSpell({uid: "w1"}, mustCast, {w1: {cast: true}}), false); // picked
+  assert.equal(needsSpell({uid: "w2"}, mustCast, {}), false);   // never declared CAST
+});
+
+test("combat: a DECLARED caster without a spell pick gates Resolve as uncast (#409)", () => {
+  // The #409 defect: a wizard that chose Cast in the select phase and never picked
+  // a spell was a silent no-op. Now the server's must_cast puts it in the gate:
+  // named in `uncast` (its own prompt + "Don't cast" stand-down), never merely idle.
+  const state = {
+    phase: "combat",
+    combat_actionable: ["w1", "r2"],
+    must_attack: [],
+    must_cast: ["w1"],
+    figures: [fig("w1", "red", {is_wizard: true}), fig("r2", "red")],
+  };
+  const out = classifyControlState(state, ctxFor({mySides: ["red"], plan: {}}));
+  assert.equal(out.kind, "combat_render");
+  assert.deepEqual(out.uncast.map(f => f.uid), ["w1"]);
+  assert.equal(out.untargeted.length, 0);   // a cast is NOT a must-attack
+  assert.equal(out.idle, 1);                // only r2 — the gated caster is not "idle"
+});
+
+test("combat: picking the spell (a queued cast PLAN) clears the caster from uncast (#409)", () => {
+  const state = {
+    phase: "combat",
+    combat_actionable: ["w1"],
+    must_cast: ["w1"],
+    figures: [fig("w1", "red", {is_wizard: true})],
+  };
+  const out = classifyControlState(state,
+    ctxFor({mySides: ["red"], plan: {w1: {uid: "w1", cast: true}}}));
+  assert.equal(out.kind, "combat_render");
+  assert.equal(out.uncast.length, 0);
+  assert.equal(out.idle, 0);
+});
+
+test("combat: another player's (or the AI's) must-cast wizard never joins MY uncast gate (#409)", () => {
+  // uncast filters through `actors` (mine + actionable), so an AI or remote-human
+  // declared caster prompts on ITS owner's client, not mine.
+  const state = {
+    phase: "combat",
+    combat_actionable: ["w1", "r1"],
+    must_cast: ["w1"],
+    figures: [fig("w1", "green", {is_wizard: true}), fig("r1", "red")],
+  };
+  const out = classifyControlState(state,
+    ctxFor({mySides: ["red"], computerSides: ["green"]}));
+  assert.equal(out.kind, "combat_render");
+  assert.equal(out.uncast.length, 0);
 });
 
 test("an unknown phase is the inert 'none' state", () => {

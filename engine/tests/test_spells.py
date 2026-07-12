@@ -179,6 +179,25 @@ def test_one_cast_per_turn() -> None:
         state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
 
 
+def test_stand_down_cancels_a_queued_cast_and_clears_the_cast_option() -> None:
+    # #409: "Don't cast" is the cast gate's explicit decline. stand_down (the same
+    # hold_fire machinery as #397) flips the declared caster to DO_NOTHING and
+    # cancels its already-queued spell, so resolving spends no mana and the wizard
+    # leaves the Resolve gate.
+    wizard = _wizard()
+    dummy = _target()
+    state = _game(wizard, dummy, dice=Dice(scripted=[2, 2, 2, 6]))
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    assert any(pending.caster is wizard for pending in state._pending_casts)
+
+    state.stand_down(wizard)
+    assert wizard.current_option == Option.DO_NOTHING
+    assert not any(pending.caster is wizard for pending in state._pending_casts)
+    st_before = wizard.current_st
+    state.resolve_combat()
+    assert wizard.current_st == st_before      # the cancelled cast spent nothing
+
+
 # ---- Stone Flesh: protection folds into absorbed() -------------------------
 
 def test_stone_flesh_adds_protection_that_absorbed_applies() -> None:

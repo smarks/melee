@@ -17,6 +17,15 @@
 export const needsTarget = (figure, mustAttack, plan) =>
   mustAttack.has(figure.uid) && !plan[figure.uid];
 
+// The cast counterpart (#409): a wizard the server flagged as must-cast (it
+// declared CAST and still has a castable spell) with no queued PLAN owes an
+// EXPLICIT spell choice — or an explicit "Don't cast" stand-down. Deliberately a
+// separate set from needsTarget: the auto-target paths (queuePendingShotAt /
+// maybeAutoTarget #299) read must_attack only, so a cast is never auto-picked and
+// a declared caster is never silently auto-queued into a staff attack.
+export const needsSpell = (figure, mustCast, plan) =>
+  mustCast.has(figure.uid) && !plan[figure.uid];
+
 // ctx: {
 //   myTurnActor(f)     -> is this figure mine to set an action for this turn (#347)
 //   isComputerSide(s)  -> is this side AI-driven
@@ -82,10 +91,15 @@ export function classifyControlState(state, ctx) {
 
     // #212/#217/#220: gate Resolve on your own must-attack figures until each has a
     // PLAN entry; name the ones still needing a target; soft-warn the idle rest.
+    // #409: a declared-cast wizard still owing its spell pick (must_cast) gates the
+    // same way — named in `uncast`, and never counted as merely idle.
     const mustAttack = new Set(state.must_attack || []);
+    const mustCast = new Set(state.must_cast || []);
     const untargeted = actors.filter(f => needsTarget(f, mustAttack, plan));
-    const idle = actors.filter(f => !plan[f.uid] && !mustAttack.has(f.uid)).length;
-    return {kind: "combat_render", actors, others, untargeted, idle};
+    const uncast = actors.filter(f => needsSpell(f, mustCast, plan));
+    const idle = actors.filter(f => !plan[f.uid] && !mustAttack.has(f.uid)
+                                    && !mustCast.has(f.uid)).length;
+    return {kind: "combat_render", actors, others, untargeted, uncast, idle};
   }
 
   return {kind: "none"};

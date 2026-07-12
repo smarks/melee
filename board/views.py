@@ -254,6 +254,9 @@ def _meta(game: dict) -> dict:
         "force_retreat_options": retreat_options,
         "combat_actionable": _combat_actionable(state) if game["phase"] == "combat" else [],
         "must_attack": _must_attack(state) if game["phase"] == "combat" else [],
+        # #409: wizards that declared CAST and still owe an explicit spell choice —
+        # the cast counterpart of must_attack, driving the same Resolve gate.
+        "must_cast": _must_cast(state) if game["phase"] == "combat" else [],
         # #334: server-authoritative combat coordination for networked multi-human
         # play. ``combat_resolved`` is True once this turn's queued attacks have been
         # resolved; the client shows the End-turn screen from THIS, not a client-local
@@ -284,6 +287,31 @@ def _must_attack(state: GameState) -> list:
             continue
         targets = _attack_targets(state, figure)
         if targets.melee or targets.ranged or targets.hth:
+            uids.append(figure.uid)
+    return uids
+
+
+def _must_cast(state: GameState) -> list:
+    """uids of wizards that declared CAST this turn AND still owe a spell choice
+    (#409) — the cast counterpart of :func:`_must_attack`.
+
+    A declared cast is deliberately not a must-attack (CAST is not an attack
+    option), so before this list existed the Resolve gate never prompted the
+    wizard and a declared cast could quietly become a no-op turn. The client
+    gates Resolve on these exactly like untargeted attackers, with an explicit
+    "Don't cast" stand-down (``hold_fire`` → :meth:`GameState.stand_down`).
+    Mirroring must_attack's no-target rule, a caster with nothing castable (no
+    affordable spell, no legal target, hands not free) legitimately can't cast,
+    so it is left out and never blocks; so is one whose cast is already queued
+    or resolved this turn."""
+    uids = []
+    for figure in state.figures:
+        if figure.current_option != Option.CAST or figure.cast_this_turn:
+            continue
+        if any(pending.caster is figure for pending in state._pending_casts):
+            continue                       # its spell is already queued this step
+        castable, _ = _spell_options(state, figure)
+        if castable:
             uids.append(figure.uid)
     return uids
 

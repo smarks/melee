@@ -421,6 +421,7 @@ const OPTION_LABEL = {
   attack: "⚔ Attack", shift_attack: "⚔ Shift & Attack", shift_defend: "Shift & Defend",
   one_last_shot: "🏹 One Last Shot", change_weapons: "Change Weapons", disengage: "Disengage",
   hth_attack: "🤼 Grapple", pick_up: "Pick up weapon",
+  cast: "🔮 Cast a spell",
   go_prone: "Drop prone", kneel: "Kneel",
   do_nothing: "Do nothing", pass: "Pass (choose last)",
 };
@@ -934,7 +935,7 @@ function drawControls() {
     }
 
     case "combat_render": {
-      const {actors, others, untargeted, idle} = state;
+      const {actors, others, untargeted, uncast, idle} = state;
       if (actors.length) setHint("Choose each figure's attack, then resolve.");
       else if (others.length) setHint("🤖 Computer is playing… resolve when ready.");
       else setHint("Resolve combat to continue.");
@@ -966,6 +967,24 @@ function drawControls() {
         hold.addEventListener("click", () => holdFire(f));
         line.appendChild(hold);
       }
+      // #409: a wizard that declared CAST and still owes its spell pick gates
+      // Resolve exactly like an untargeted attacker — before this, a declared cast
+      // could quietly become a no-op turn (mana untouched, no feedback anywhere).
+      // The spell is ALWAYS an explicit pick (clicking the wizard opens the spell
+      // rows); "Don't cast" is the explicit decline, mirroring Hold fire (#397).
+      for (const f of uncast) {
+        const line = warnLine(c,
+          `${f.name} has not chosen a spell — click ${f.name} to choose.`);
+        line.classList.add("clickable");
+        line.title = `Click to choose ${f.name}'s spell`;
+        line.addEventListener("click", () => onFigureClick(f));
+        const hold = document.createElement("button");
+        hold.className = "holdfire";
+        hold.textContent = `Don't cast — ${f.name} won't cast a spell`;
+        hold.title = `${f.name} stands down and casts no spell this turn`;
+        hold.addEventListener("click", () => dontCast(f));
+        line.appendChild(hold);
+      }
       const resolveBtn = bigPrimary(c, actors.length ? "Resolve attacks" : "Resolve combat", () => {
         dbg("INTERACT", "Resolve pressed", {queued: Object.keys(PLAN).length, actors: actors.length});
         // Local optimistic flag: I've committed this turn's combat, so stop
@@ -975,16 +994,19 @@ function drawControls() {
         combatResolvedTurn = S.turn;
         executePlans("combat");
       });
-      if (untargeted.length) {
+      if (untargeted.length || uncast.length) {
         resolveBtn.disabled = true;
         // GATE: why Resolve is disabled — which must_attack figures are still
-        // untargeted. Deduped to when the untargeted set actually changes so a
-        // stalled combat doesn't refill the log on every re-render.
-        const gateKey = untargeted.map(f => f.uid).sort().join(",");
+        // untargeted, and which declared casters still owe a spell pick (#409).
+        // Deduped to when the gating set actually changes so a stalled combat
+        // doesn't refill the log on every re-render.
+        const gateKey = [...untargeted, ...uncast].map(f => f.uid).sort().join(",");
         if (gateKey !== _dbgGateKey) {
           _dbgGateKey = gateKey;
-          dbg("GATE", `Resolve disabled — ${untargeted.length} must-attack figure(s) untargeted`,
-              {untargeted: untargeted.map(f => ({uid: f.uid, name: f.name, option: f.option}))});
+          dbg("GATE", `Resolve disabled — ${untargeted.length} must-attack figure(s) untargeted, `
+              + `${uncast.length} declared caster(s) without a spell`,
+              {untargeted: untargeted.map(f => ({uid: f.uid, name: f.name, option: f.option})),
+               uncast: uncast.map(f => ({uid: f.uid, name: f.name, option: f.option}))});
           // Anomaly self-check (#217/#221 signature): a must-attack figure with
           // NO queueable target offered at all is the resolve-gate deadlock —
           // Resolve can never clear. Cheap: only inspects already-cached options.
@@ -1139,10 +1161,17 @@ function openMenu(f) {
     // in the combat controls before Resolve. The engine's spell_targets (#362) is the
     // single source of legal targets, mirroring the attack targeting plumbing.
     for (const spell of (optInfo.castable_spells || [])) {
+      // #409: each spell row is readable on its own — the ST/mana cost (a range
+      // for a missile spell that can invest 1..max_st) and the wizard's current
+      // mana pool ride the row, so the pick is an informed, explicit choice.
+      const affordableMax = Math.min(spell.max_st, f.st);
+      const cost = spell.is_missile && affordableMax > spell.st_cost
+        ? `${spell.st_cost}–${affordableMax}` : `${spell.st_cost}`;
       for (const uid of ((optInfo.spell_targets || {})[spell.id] || [])) {
         const e = figByUid(uid);
         const who = spell.is_protection && uid === f.uid ? "self" : (e ? e.name : uid);
-        rows.push({label: `🔮 Cast ${escapeHtml(spell.name)} → ${escapeHtml(who)}`,
+        rows.push({label: `🔮 Cast ${escapeHtml(spell.name)} → ${escapeHtml(who)}`
+                     + ` <span class="why">ST ${cost} · mana ${f.st}</span>`,
                    act: () => setCast(f, spell, uid)});
       }
     }
@@ -1212,8 +1241,12 @@ function openMenu(f) {
     // local plan entry: only a persisted DO_NOTHING drops the figure from the
     // server's must-attack gate and multi-human resolve-sync, so a remote game can
     // actually resolve (#397/#398). A local-only plan would clear this browser's
-    // gate while the server kept waiting on the side.
-    rows.push({label: "Hold fire — don't attack", act: () => holdFire(f)});
+    // gate while the server kept waiting on the side. A declared caster's row reads
+    // "Don't cast" (#409) — same stand-down, worded for the cast gate it clears.
+    if (f.option === "cast")
+      rows.push({label: "Don't cast — no spell this turn", act: () => dontCast(f)});
+    else
+      rows.push({label: "Hold fire — don't attack", act: () => holdFire(f)});
   } else return;
   const menu = $("tokenMenu");
   const plan = PLAN[f.uid];
@@ -1365,6 +1398,16 @@ function holdFire(f) {
   dbg("INTERACT", `hold fire ${f.name}`, {uid: f.uid});
   closeMenu();
   delete PLAN[f.uid];                 // drop any local plan for it too
+  act({type: "hold_fire", uid: f.uid}).then(after);
+}
+// #409: the cast gate's explicit decline — the same server stand-down as Hold
+// fire (hold_fire → GameState.stand_down flips the wizard to DO_NOTHING and
+// cancels any queued spell), logged under its own name so a declined cast is
+// distinguishable from a held shot in the diagnostic log.
+function dontCast(f) {
+  dbg("INTERACT", `don't cast — ${f.name} stands down`, {uid: f.uid});
+  closeMenu();
+  delete PLAN[f.uid];
   act({type: "hold_fire", uid: f.uid}).then(after);
 }
 function selectPass(f) {
