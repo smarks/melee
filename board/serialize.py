@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from engine.chargen import TARMAR_EXTRA_STATS
 from engine.figure import Figure
-from engine.state import GameState
+from engine.state import STAFF_WEAPON_NAME, GameState
 from engine.tarmar import TarmarFigure
 
 from .geometry import label_of
@@ -66,15 +66,26 @@ def _edit_spec(figure: Figure) -> dict:
     if figure.spells_known:
         # A wizard (Classic magic): its spec round-trips its IQ + chosen spells so
         # chargen.build re-recognises it as a wizard (engine.chargen._is_wizard keys
-        # on a non-empty "spells" list). A wizard casts bare-handed (p.23), so the
-        # weapon/shield fields are forced empty — carrying a "Dagger"/shield here would
-        # trip chargen._validate_wizard on the edit round-trip. Added only for a
-        # wizard, so a plain fighter's spec is byte-identical.
+        # on a non-empty "spells" list). A wizard may carry weapons like anyone
+        # else (#411): its spec's ``weapon`` is the READY weapon ("Staff"/"None"
+        # included — the wizard convention chargen._build_wizard reads), and
+        # ``weapon2`` the other carried pick. The staff itself is never a pick
+        # (the Staff spell grants it on rebuild) and the dagger is the free
+        # extra, so both are skipped when naming the second slot. A shield is
+        # still forced empty (a wizard cannot carry one, p.23). These keys are
+        # set only for a wizard, so a plain fighter's spec is byte-identical.
+        wizard_ready = ready.name if ready else "None"
+        second_pick = next(
+            (w for w in figure.weapons
+             if w is not ready and w.name not in ("Dagger", STAFF_WEAPON_NAME)),
+            None)
         spec.update(
             intelligence=figure.intelligence,
             spells=list(figure.spells_known),
             has_staff=figure.has_staff,
-            weapon="None", weapon2="None", shield="None",
+            weapon=wizard_ready,
+            weapon2=second_pick.name if second_pick else "None",
+            shield="None",
         )
     if isinstance(figure, TarmarFigure):
         # The four extra Tarmar attributes come from the one source (TARMAR_EXTRA_STATS)

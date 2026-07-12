@@ -1381,6 +1381,13 @@ class _ShieldRushMixin:
             weapon is not None and weapon.name == "Thrown rock")
         if thrown_attack and attacker.race == Race.HALFLING:
             mods += 2; notes.append("+2 halfling throw")
+        # A wizard's "DX is -4 with any weapon except his staff" (Wizard p.23,
+        # rules lines 1159-1162) — every attack path funnels through here, so
+        # this one line covers melee blows, thrown weapons, and missile fire.
+        # The staff is exempt; so are bare hands (no weapon at all).
+        if (attacker.spells_known and weapon is not None
+                and weapon.name != STAFF_WEAPON_NAME):
+            mods -= 4; notes.append("-4 wizard weapon")
         # The giant snake is "very hard to hit": -3 off the attacker's DX (p.21).
         if target.hard_to_hit:
             mods -= target.hard_to_hit; notes.append(f"-{target.hard_to_hit} hard to hit")
@@ -1994,10 +2001,17 @@ class _CombatMixin:
             )
         main_gauche = next(w for w in attacker.weapons if w.name == "Main-Gauche")
         zone = attack_zone(self.arena.layout, attacker, target)
+        # A wizard's -4 with any non-staff weapon (p.23) stacks with the jab's
+        # own -4: the jab bypasses _situational_mods (its penalty is fixed), so
+        # the wizard-weapon penalty is re-applied here.
+        situational, situational_note = -4, "-4 main-gauche"
+        if attacker.spells_known:
+            situational -= 4
+            situational_note += " -4 wizard weapon"
         self._pending.append(
             PendingAttack(attacker, target, zone=zone, ignore_facing=False,
-                          range_penalty=0, situational=-4,
-                          situational_note="-4 main-gauche", weapon=main_gauche)
+                          range_penalty=0, situational=situational,
+                          situational_note=situational_note, weapon=main_gauche)
         )
 
     def _order_dx(self, pending: PendingAttack) -> int:
