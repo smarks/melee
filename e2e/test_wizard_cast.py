@@ -22,6 +22,7 @@ from test_action_panel import (
     POLL_SAFE_TIMEOUT_MS,
     _game_state,
     _open_combat_menu_row,
+    _open_figure_menu,
 )
 
 
@@ -558,6 +559,134 @@ def test_full_casting_flow_from_select_phase_vs_ai(live_server, page: Page) -> N
         log = _game_state(page, live_server, gid)["log"]
         assert any("magic fist" in line.lower() for line in log), (
             f"the resolved cast must be narrated; log: {log}")
+    finally:
+        from board.views import GAMES
+        GAMES.pop(gid, None)
+
+
+# ---- #411: wizards carry two weapons like everyone else ---------------------
+
+
+def _seed_sword_wizard_duel(gid: str, *, scripted: list[int]):
+    """A deterministic hotseat COMBAT game: a chargen-built wizard (red) fielded
+    SWORD-IN-HAND (staff carried, re-slung) adjacent to and facing a plain
+    fighter (blue). Returns (wizard, blue)."""
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine import chargen
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.dice import Dice
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=9, rows=9)
+    grid = arena.layout
+    wizard = chargen.build("Classic Melee", {
+        "name": "Merlin", "side": "red", "strength": 12, "dexterity": 12,
+        "intelligence": 8, "spells": ["staff", "magic_fist"],
+        "weapon": "Shortsword", "armor": "None", "shield": "None"})
+    blue = create_human("Bluecap", 12, 12, "blue",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue.position = Hex(4, 4)
+    wizard.position = grid.neighbor(blue.position, 0)
+    wizard.facing = next(direction for direction in range(6)
+                         if grid.neighbor(wizard.position, direction) == blue.position)
+    blue.facing = next(direction for direction in range(6)
+                       if grid.neighbor(blue.position, direction) == wizard.position)
+    state = GameState(arena, [wizard, blue], dice=Dice(scripted=scripted))
+    GAMES[gid] = {
+        "state": state, "layout": board_layout(arena),
+        "phase": "combat",
+        "controllers": {"red": "human", "blue": "human"},
+        "combat_prepared": True, "combat_ready": [], "combat_resolved": False,
+    }
+    return wizard, blue
+
+
+@pytest.mark.django_db
+def test_editor_builds_a_sword_carrying_wizard_with_a_cast_block_hint(
+        live_server, page: Page) -> None:
+    # #411: the wizard editor card opens the carried-weapon picks. The readied
+    # weapon defaults to the staff (the Staff spell is picked), so the default
+    # flow still casts; choosing a carried weapon to start ready instead shows
+    # the persistent state-driven hint that it blocks casting, and Start match
+    # fields the wizard genuinely sword-in-hand with the staff re-slung.
+    page.goto(live_server.url)
+    page.get_by_role("button", name="Add AI player").click()
+    page.locator("#editCharBtn").click()
+
+    card = page.locator("#editorRoster .card").first
+    card.get_by_role("button", name=re.compile("Wizard")).click()
+    readied = card.locator("[data-readied]")
+    expect(readied).to_have_value("Staff", timeout=15_000)   # casting-mode default
+    expect(card.locator("[data-castnote]")).to_have_text("")
+
+    card.locator('[data-eq="weapon"]').select_option("Club")  # ST 9 = the preset's
+    expect(readied).to_have_value("Staff")                    # picking ≠ readying
+    readied.select_option("Club")
+    card.locator("[data-name]").fill("Bladewand")
+    # The hint is state-driven and persistent (not a toast): it stays while the
+    # non-staff weapon is set to start ready...
+    expect(card.locator("[data-castnote]")).to_contain_text("casting blocked")
+    # ...and clears when the staff is readied again. Then re-pick the sword mode.
+    readied.select_option("Staff")
+    expect(card.locator("[data-castnote]")).to_have_text("")
+    readied.select_option("Club")
+    expect(card.locator("[data-castnote]")).to_contain_text("casting blocked")
+
+    page.get_by_role("button", name="Start match").click()
+    page.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
+    gid = page.url.rstrip("/").rsplit("/", 1)[-1]
+
+    state = page.evaluate(
+        "async (g) => (await (await fetch(`/api/game/${g}`)).json()).state", gid)
+    wizard = next(f for f in state["figures"] if f["name"] == "Bladewand")
+    assert wizard.get("is_wizard") is True
+    assert wizard["weapon"] == "Club", "the picked weapon starts in hand"
+    assert "Staff" in wizard["weapons"], "the staff is carried (re-slung), not lost"
+    assert "Dagger" in wizard["weapons"]
+
+
+@pytest.mark.django_db
+def test_sword_ready_wizard_cannot_cast_and_fights_at_minus_four(
+        live_server, page: Page) -> None:
+    # #411 in play: a wizard fielded sword-in-hand is offered NO cast rows (the
+    # #406/#409 gate, read from the ready weapon) and swings at -4 DX. Scripted
+    # to-hit [4,4,3] = 11 would hit adjDX 12 — a plain fighter's certain hit —
+    # but the wizard's non-staff -4 makes the needed number 8, so it MUST miss.
+    gid = "wizard-sword-penalty"
+    wizard, blue = _seed_sword_wizard_duel(gid, scripted=[4, 4, 3])
+    try:
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "Combat", timeout=POLL_SAFE_TIMEOUT_MS)
+        blue_st_before = _figure_by_name(page, live_server, gid, "Bluecap")["st"]
+
+        # The menu offers the attack but no cast row of any kind: with the sword
+        # ready there is nothing castable, so the wizard never gates Resolve.
+        menu = _open_figure_menu(page, wizard.uid)
+        expect(menu.locator(".row", has_text="Attack Bluecap")).to_be_visible(
+            timeout=POLL_SAFE_TIMEOUT_MS)
+        assert menu.locator(".row", has_text=re.compile("Cast")).count() == 0, (
+            "a sword-ready wizard must be offered no Cast rows")
+
+        _open_combat_menu_row(page, wizard.uid, "Attack Bluecap")
+        expect(page.locator("#controls .checklist .done")).to_contain_text(
+            "Attack Bluecap", timeout=POLL_SAFE_TIMEOUT_MS)
+        resolve = page.get_by_role("button", name=re.compile("Resolve"))
+        expect(resolve).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
+        resolve.click()
+        expect(page.get_by_role("button", name=re.compile("End turn"))).to_be_visible(
+            timeout=POLL_SAFE_TIMEOUT_MS)
+
+        blue_after = _figure_by_name(page, live_server, gid, "Bluecap")
+        assert blue_after["st"] == blue_st_before, (
+            "11 vs adjDX 12 - 4 must miss: the wizard's non-staff -4 was not applied")
+        log = _game_state(page, live_server, gid)["log"]
+        assert any("misses" in line for line in log), (
+            f"the -4 miss must be narrated; log: {log}")
     finally:
         from board.views import GAMES
         GAMES.pop(gid, None)
