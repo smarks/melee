@@ -1790,6 +1790,34 @@ class _CombatMixin:
             return False
         return zone_of_direction(attacker.facing, direction) == FRONT
 
+    def turn_cast_block_reason(self, caster: Figure) -> str | None:
+        """Why what ``caster`` already did THIS TURN forbids a cast, or ``None``.
+
+        The turn-flow counterpart of :func:`cast_block_reason` (which covers the
+        figure's hands/nature), shared by :meth:`_validate_cast` (rejecting the
+        declaration) and :meth:`spell_targets` (so the UI never offers a cast the
+        queue would reject):
+
+        * the CAST option moves nothing (options.py movement_cap), so a figure
+          that already spent movement took a different option and cannot have it
+          overwritten into a cast (wizard-rules lines 271-274, 286) (#413);
+        * dodge/defend permits "the casting of a spell or any sort of attack"
+          to neither (wizard-rules lines 1010-1011) (#413);
+        * one option per turn (wizard-rules lines 262-263): a figure that struck,
+          or has a blow queued, may not also cast (#414).
+        """
+        cast_budget = self.rules.movement_budget(
+            caster.movement_allowance, spec(Option.CAST).movement_cap)
+        if caster.moved_this_turn > cast_budget:
+            return f"moved {caster.moved_this_turn} hex(es) this turn"
+        if caster.dodging or caster.defending:
+            return "dodging/defending this turn"
+        if caster.attacked_this_turn or any(
+            pending.attacker is caster for pending in self._pending
+        ):
+            return "already attacked this turn"
+        return None
+
     def spell_targets(self, caster: Figure, spell) -> list[Figure]:
         """Which figures ``caster`` may cast ``spell`` at (TFT: Wizard).
 
@@ -1802,6 +1830,10 @@ class _CombatMixin:
         targets until their gate.
         """
         if not caster.can_act() or caster.position is None:
+            return []
+        # What the figure already did this turn can rule a cast out entirely
+        # (#413/#414) — offer no targets the queue would reject.
+        if self.turn_cast_block_reason(caster) is not None:
             return []
         if spell.is_missile:
             return [enemy for enemy in self.enemies_of(caster)
@@ -1841,27 +1873,9 @@ class _CombatMixin:
             raise IllegalAction(f"{caster.name} did not choose to cast this turn")
         if not caster.can_act():
             raise IllegalAction(f"{caster.name} cannot cast")
-        # The CAST option moves nothing (options.py movement_cap) — a figure that
-        # already spent movement this turn took a different option and cannot have
-        # it overwritten into a cast (wizard-rules lines 271-274, 286) (#413).
-        cast_budget = self.rules.movement_budget(
-            caster.movement_allowance, spec(Option.CAST).movement_cap)
-        if caster.moved_this_turn > cast_budget:
-            raise IllegalAction(
-                f"{caster.name} moved {caster.moved_this_turn} "
-                f"hex(es) this turn and cannot cast")
-        # Dodge/defend "permits the casting of a spell or any sort of attack"
-        # to neither (wizard-rules lines 1010-1011) (#413).
-        if caster.dodging or caster.defending:
-            raise IllegalAction(
-                f"{caster.name} is dodging/defending this turn and cannot cast")
-        # One action per turn (wizard-rules lines 262-263): a figure that struck
-        # (or has a blow queued) may not also cast (#414).
-        if caster.attacked_this_turn or any(
-            pending.attacker is caster for pending in self._pending
-        ):
-            raise IllegalAction(
-                f"{caster.name} has already attacked this turn and cannot also cast")
+        turn_block = self.turn_cast_block_reason(caster)
+        if turn_block is not None:
+            raise IllegalAction(f"{caster.name} cannot cast: {turn_block}")
         block = cast_block_reason(caster)
         if block is not None:
             raise IllegalAction(f"{caster.name} cannot cast: {block}")

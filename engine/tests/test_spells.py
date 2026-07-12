@@ -347,7 +347,7 @@ def test_staff_blow_then_cast_same_turn_is_rejected() -> None:
     wizard.current_option = Option.SHIFT_ATTACK
     state.queue_attack(wizard, dummy)           # staff blow queued
     wizard.current_option = Option.CAST         # what _act_cast_spell stamps
-    with pytest.raises(IllegalAction, match="cannot also cast"):
+    with pytest.raises(IllegalAction, match="already attacked"):
         state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
 
 
