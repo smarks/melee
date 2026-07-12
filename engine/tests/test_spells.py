@@ -304,3 +304,119 @@ def test_spell_reference_numbers() -> None:
     assert STAFF_SPELL.type == "S" and STAFF_SPELL.iq_tier == 8
     assert STAFF_SPELL.st_cost == 5 and not STAFF_SPELL.continuing
     assert set(SPELLS) == {"magic_fist", "staff", "stone_flesh"}
+
+
+# ---- one action per turn / option integrity (#413, #414) --------------------
+
+def test_cast_after_moving_is_rejected() -> None:
+    """#413: the CAST option moves nothing (options.py movement_cap), so a figure
+    that already spent movement this turn cannot have its option overwritten into
+    a cast (wizard-rules lines 271-274, 286)."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.position = Hex(8, 2)                  # far enough not to engage
+    state = _game(wizard, dummy, dice=Dice(scripted=[2, 2, 2]))
+    wizard.current_option = None
+    state.move(wizard, Option.MOVE, path=[Hex(3, 2)])   # a real one-hex move
+    wizard.current_option = Option.CAST         # what _act_cast_spell stamps
+    with pytest.raises(IllegalAction, match="moved"):
+        state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+
+
+def test_cast_while_dodging_is_rejected() -> None:
+    """#413: dodge/defend permits neither an attack nor a cast (wizard-rules
+    lines 1010-1011) — the dodging flag outlives an option overwrite."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.position = Hex(8, 2)
+    state = _game(wizard, dummy, dice=Dice(scripted=[2, 2, 2]))
+    wizard.current_option = None
+    state.move(wizard, Option.DODGE)            # sets the dodging flag
+    wizard.current_option = Option.CAST         # what _act_cast_spell stamps
+    with pytest.raises(IllegalAction, match="dodging"):
+        state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+
+
+def test_staff_blow_then_cast_same_turn_is_rejected() -> None:
+    """#414: one option per turn (wizard-rules lines 262-263) — a wizard with a
+    queued staff blow may not also queue a cast."""
+    wizard = _wizard(spells=["staff", "magic_fist"])    # staff readied in hand
+    dummy = _target()
+    dummy.position = Hex(3, 2)                  # adjacent, in the wizard's front
+    state = _game(wizard, dummy, dice=Dice(scripted=[3] * 10))
+    wizard.current_option = Option.SHIFT_ATTACK
+    state.queue_attack(wizard, dummy)           # staff blow queued
+    wizard.current_option = Option.CAST         # what _act_cast_spell stamps
+    with pytest.raises(IllegalAction, match="cannot also cast"):
+        state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+
+
+def test_cast_then_staff_blow_same_turn_is_rejected() -> None:
+    """#414, the reverse order: a wizard with a queued cast may not also queue a
+    weapon attack."""
+    wizard = _wizard(spells=["staff", "magic_fist"])
+    dummy = _target()
+    dummy.position = Hex(3, 2)
+    state = _game(wizard, dummy, dice=Dice(scripted=[3] * 10))
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    wizard.current_option = Option.SHIFT_ATTACK  # what _ensure_attack_option does
+    with pytest.raises(IllegalAction, match="cannot also attack"):
+        state.queue_attack(wizard, dummy)
+
+
+# ---- resolve-time re-checks (#415, #416) ------------------------------------
+
+def _duel(wizard: Figure, foe: Figure, dice: Dice) -> GameState:
+    """Wizard at (2,2) and an adjacent armed foe at (3,2), each facing the other."""
+    foe.position = Hex(3, 2)
+    state = _game(wizard, foe, dice=dice)
+    foe.facing = state.arena.layout.direction_to(foe.position, wizard.position)
+    return state
+
+
+def test_wounded_caster_cast_fizzles_harmlessly_instead_of_self_kill() -> None:
+    """#415: "A wizard cannot cast a spell which would reduce his ST below 0"
+    (rules lines 167-169). A cast declared legally but no longer affordable at
+    resolution (the caster was wounded first) fizzles harmlessly: no damage
+    dealt, no ST drained, and never a self-kill."""
+    wizard = _wizard(strength=8)
+    wizard.damage_taken = 5                     # current ST 3: a 3-ST cast is legal
+    foe = _target(strength=12, weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    # Foe's blow: to-hit 9 (hit under adjDX 10), broadsword 2d rolls 1+1 = 2.
+    state = _duel(wizard, foe, Dice(scripted=[3, 3, 3, 1, 1]))
+    state.queue_spell(wizard, MAGIC_FIST, foe, st_used=3)
+    foe.current_option = Option.ATTACK
+    state.queue_attack(foe, wizard)
+
+    state.resolve_combat()
+
+    assert wizard.current_st == 1               # the foe's 2 landed; the cast cost 0
+    assert not wizard.is_dead                   # the old bug drove ST to -2 (dead)
+    assert foe.damage_taken == 0                # the fizzled cast harmed nothing
+    assert state.spell_results == []            # no cast was rolled at all
+    assert wizard.cast_this_turn                # the action is still spent
+    assert any("too weakened" in line for line in state.log)
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_knocked_down_caster_loses_its_cast() -> None:
+    """#416: "If any figure is killed or knocked down before its turn to act
+    comes, it does not get to act that turn" (rules lines 250-251) — the cast
+    mirror of _can_strike_now's knocked-down gate on weapon blows."""
+    wizard = _wizard()                          # ST 20
+    foe = _target(strength=14, weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    # Foe's blow: to-hit 9 (hit), broadsword 2d rolls 4+4 = 8 -> KNOCKDOWN.
+    state = _duel(wizard, foe, Dice(scripted=[3, 3, 3, 4, 4]))
+    state.queue_spell(wizard, MAGIC_FIST, foe, st_used=2)
+    foe.current_option = Option.ATTACK
+    state.queue_attack(foe, wizard)
+
+    state.resolve_combat()
+
+    assert wizard.posture == Posture.PRONE and wizard.knocked_down_this_turn
+    assert foe.damage_taken == 0                # the lost cast harmed nothing
+    assert wizard.current_st == 12              # only the blow: no cast ST drained
+    assert state.spell_results == []            # no cast was rolled at all
+    assert wizard.cast_this_turn                # the action is still spent
+    assert any("uncast" in line for line in state.log)
+    assert_state_invariants(state, CLASSIC, phase="combat")

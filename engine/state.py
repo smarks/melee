@@ -42,6 +42,7 @@ from .experience import PRACTICE_DROPOUT_ST, CombatType
 from .narrative import (
     narrate_attack,
     narrate_cascade,
+    narrate_cast_lost,
     narrate_dropout,
     narrate_fumble,
     narrate_hth,
@@ -1804,6 +1805,27 @@ class _CombatMixin:
             raise IllegalAction(f"{caster.name} did not choose to cast this turn")
         if not caster.can_act():
             raise IllegalAction(f"{caster.name} cannot cast")
+        # The CAST option moves nothing (options.py movement_cap) — a figure that
+        # already spent movement this turn took a different option and cannot have
+        # it overwritten into a cast (wizard-rules lines 271-274, 286) (#413).
+        cast_budget = self.rules.movement_budget(
+            caster.movement_allowance, spec(Option.CAST).movement_cap)
+        if caster.moved_this_turn > cast_budget:
+            raise IllegalAction(
+                f"{caster.name} moved {caster.moved_this_turn} "
+                f"hex(es) this turn and cannot cast")
+        # Dodge/defend "permits the casting of a spell or any sort of attack"
+        # to neither (wizard-rules lines 1010-1011) (#413).
+        if caster.dodging or caster.defending:
+            raise IllegalAction(
+                f"{caster.name} is dodging/defending this turn and cannot cast")
+        # One action per turn (wizard-rules lines 262-263): a figure that struck
+        # (or has a blow queued) may not also cast (#414).
+        if caster.attacked_this_turn or any(
+            pending.attacker is caster for pending in self._pending
+        ):
+            raise IllegalAction(
+                f"{caster.name} has already attacked this turn and cannot also cast")
         block = cast_block_reason(caster)
         if block is not None:
             raise IllegalAction(f"{caster.name} cannot cast: {block}")
@@ -1892,6 +1914,29 @@ class _CombatMixin:
             pending.attacker is attacker for pending in self._pending
         ):
             raise IllegalAction(f"{attacker.name} has already attacked this turn")
+        # One action per turn (wizard-rules lines 262-263): a figure that cast
+        # (or has a cast queued) may not also strike (#414).
+        if attacker.cast_this_turn or any(
+            pending.caster is attacker for pending in self._pending_casts
+        ):
+            raise IllegalAction(
+                f"{attacker.name} is casting this turn and cannot also attack")
+        # "A figure can never attack if it moved more than half its MA"
+        # (wizard-rules lines 273-274): the movement already taken this turn must
+        # fit the attack option's own cap (options.py movement_cap), so a full-MA
+        # mover whose option was overwritten in the combat phase is caught (#413).
+        budget = self.rules.movement_budget(
+            attacker.movement_allowance, spec(option).movement_cap)
+        if attacker.moved_this_turn > budget:
+            raise IllegalAction(
+                f"{attacker.name} moved {attacker.moved_this_turn} hex(es) this "
+                f"turn — too far to attack with {option.value} "
+                f"(at most {budget})")
+        # Dodge/defend permits neither an attack nor a cast (wizard-rules lines
+        # 1010-1011); the flags outlive an option overwrite, so check them too.
+        if attacker.dodging or attacker.defending:
+            raise IllegalAction(
+                f"{attacker.name} is dodging/defending this turn and cannot attack")
         weapon = attacker.ready_weapon
         if weapon is None:
             raise IllegalAction(f"{attacker.name} has no ready weapon")
@@ -2171,6 +2216,25 @@ class _CombatMixin:
         target = pending.target
         if not caster.can_act():
             return                              # felled before its turn to cast
+        # A figure knocked down before its turn to act "does not get to act that
+        # turn" (rules lines 250-251) — the cast is lost, exactly as
+        # _can_strike_now cancels a knocked-down attacker's blow (#416). No ST is
+        # drained (the spell was never begun); the wizard's action is still spent.
+        if caster.posture == Posture.PRONE:
+            caster.cast_this_turn = True
+            caster.attacked_this_turn = True
+            self.log.append(narrate_cast_lost(caster, spell, "knocked_down"))
+            return
+        # Re-check ST at resolution (#415): an enemy blow this phase may have cut
+        # the caster below what the cast was declared with. "A wizard cannot cast
+        # a spell which would reduce his ST below 0" (rules lines 167-169), so an
+        # unaffordable cast fizzles harmlessly — no dice, no ST drained, never a
+        # self-kill. (Equal is legal: a cast to exactly 0 ST stands.)
+        if pending.st_used > caster.current_st:
+            caster.cast_this_turn = True
+            caster.attacked_this_turn = True
+            self.log.append(narrate_cast_lost(caster, spell, "too_weak"))
+            return
         # A missile spell needs a live target: a foe already felled this phase is
         # not struck (the #310 rule). A self-protection cast always has its caster.
         if spell.is_missile and target.out_of_play:
