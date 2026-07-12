@@ -2642,6 +2642,42 @@ def test_end_turn_stand_up_is_cancelled_when_the_figure_is_knocked_out() -> None
     assert downed.posture == Posture.PRONE
 
 
+# ---- falling unconscious means falling (#423) ------------------------------
+# "Any figure whose ST is reduced to 0 falls unconscious" — the engine already
+# treats its hex as a fallen body (``_body_hexes``), so the figure's posture
+# must go PRONE with it. Before #423 a figure dropped to exactly 0 ST (without
+# crossing the 8-hit knockdown) kept ``posture: standing`` and was drawn as an
+# upright, faced token.
+
+
+def test_a_blow_to_exactly_zero_st_drops_the_figure_prone() -> None:
+    # The #423 repro: an ST-12 figure carrying 8 damage takes a 4-hit blow —
+    # to-hit 3d6 = 9 (a hit at adjDX 12), broadsword damage 2d6 = 4 -> ST 0.
+    state, attacker, target = _duel(Dice(scripted=[3, 3, 3, 2, 2]))
+    target.damage_taken = 8
+    state.move(attacker, Option.ATTACK, facing=attacker.facing)
+    state.queue_attack(attacker, target)
+    results = state.resolve_combat()
+    assert results and results[0].hit
+    assert target.current_st == 0
+    assert target.unconscious and target.collapsed and not target.is_dead
+    assert target.posture == Posture.PRONE            # it FELL unconscious
+    assert not target.can_act()                       # so STAND UP is never offered
+
+
+def test_a_cast_that_spends_the_last_st_drops_the_caster_prone() -> None:
+    # The other UNCONSCIOUS site: a legal cast may spend the caster's last ST
+    # (p.3-4); the collapse must floor the caster the same way.
+    from engine.ruleset import UNCONSCIOUS
+
+    state, caster, _foe = _duel()
+    caster.damage_taken = caster.strength             # ST 0 after paying the cost
+    assert state.rules.status_after_hit(caster) == UNCONSCIOUS
+    state._apply_cast_status(caster, state.rules.status_after_hit(caster))
+    assert caster.unconscious
+    assert caster.posture == Posture.PRONE
+
+
 # ---- plain stand-still Attack option (#300) --------------------------------
 # Melee option (j) is "shift one hex (staying engaged) OR stand still, and
 # attack" -- the shift is optional, so a figure adjacent to a foe may strike

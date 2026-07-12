@@ -680,12 +680,15 @@ function drawArena() {
       }
     }
 
-    // A flying figure casts a soft "shadow" ring so it reads as airborne.
+    // A flying figure casts a soft ground "shadow" so it reads as airborne: an
+    // ellipse flattened by perspective, dropped below the token. (This was a
+    // <circle> carrying a dead "rx" attribute — circles have no rx.)
     if (f.flying && !f.dead) {
-      const shadow = document.createElementNS(SVG, "circle");
+      const shadow = document.createElementNS(SVG, "ellipse");
+      shadow.setAttribute("class", "shadow");
       shadow.setAttribute("cx", h.cx); shadow.setAttribute("cy", h.cy + LAYOUT.size * 0.3);
       shadow.setAttribute("rx", LAYOUT.size * 0.6);
-      shadow.setAttribute("r", LAYOUT.size * 0.55);
+      shadow.setAttribute("ry", LAYOUT.size * 0.3);
       shadow.setAttribute("fill", "#0006");
       g.appendChild(shadow);
     }
