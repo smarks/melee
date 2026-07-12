@@ -2403,7 +2403,27 @@ function savedCharacterOptions() {   // was loadOptions — collided with the ga
 function applySpecToCard(card, spec) {        // fill a card from a saved spec (keep its team)
   if (spec.name != null) card.querySelector("[data-name]").value = spec.name;
   card.querySelectorAll("[data-stat]").forEach(i => { if (spec[i.dataset.stat] != null) i.value = spec[i.dataset.stat]; });
-  card.querySelectorAll("[data-eq]").forEach(s => { if (spec[s.dataset.eq] != null) s.value = spec[s.dataset.eq]; });
+  if (isWizardCard(card)) {
+    // A wizard spec's `weapon` is the START-READY weapon ("Staff"/"None"
+    // included), not a carried slot (#411): split it back into the two carried
+    // selects (non-staff picks only) and hand the readied choice to
+    // syncWizardReadied via data-want (its options don't exist yet).
+    const isPick = name => name && name !== "None" && name !== "Staff";
+    const picks = [spec.weapon, spec.weapon2].filter(isPick);
+    const primary = card.querySelector('[data-eq="weapon"]');
+    const secondary = card.querySelector('[data-eq="weapon2"]');
+    if (primary) primary.value = picks[0] || "None";
+    if (secondary) secondary.value = picks[1] || "None";
+    const armor = card.querySelector('[data-eq="armor"]');
+    if (armor && spec.armor != null) armor.value = spec.armor;
+    const readiedSel = card.querySelector("[data-readied]");
+    if (readiedSel && spec.weapon != null) {
+      readiedSel.dataset.want = spec.weapon;
+      readiedSel.value = "";       // let data-want win in syncWizardReadied
+    }
+  } else {
+    card.querySelectorAll("[data-eq]").forEach(s => { if (spec[s.dataset.eq] != null) s.value = spec[s.dataset.eq]; });
+  }
   card.querySelectorAll("[data-skillkey]").forEach(i => { if (spec[i.dataset.skillkey] != null) i.value = spec[i.dataset.skillkey]; });
   const shieldReady = card.querySelector("[data-shieldready]");
   if (shieldReady && spec.shield_ready != null) shieldReady.checked = spec.shield_ready;
@@ -2460,12 +2480,15 @@ function cardInner(f) {     // the editable fields shared by the editor and the 
     + `<span class="muted" data-shieldready-note></span></div>`
     + `<div class="hint" data-err></div>`;
 }
-// A wizard's editor card: ST/DX/IQ spread + armour + a spell picker. Spells are
-// picked exactly like a fighter's weapons — a catalog-driven control (one checkbox
-// per spell in CAT.spells) whose legality is gated by an attribute: weapons gate on
-// ST (disableByStrength), spells gate on IQ (disableSpellsByIq). No weapon/shield
-// picker — a wizard casts bare-handed (p.23). The [data-spells] container is also
-// the flag isWizardCard() keys on, and readCard reads the checked boxes from it.
+// A wizard's editor card: ST/DX/IQ spread + armour + weapon picks + a spell
+// picker. Spells are picked exactly like a fighter's weapons — a catalog-driven
+// control (one checkbox per spell in CAT.spells) whose legality is gated by an
+// attribute: weapons gate on ST (disableByStrength), spells gate on IQ
+// (disableSpellsByIq). A wizard may carry two weapons like anyone else (#411,
+// Wizard p.23) — the staff (from the Staff spell) counts as one, so the two
+// carried selects hold the NON-staff picks and the Readied select offers
+// Staff/None plus the picks. The [data-spells] container is also the flag
+// isWizardCard() keys on, and readCard reads the checked boxes from it.
 function wizardCardInner(f) {
   const iq = f.intelligence || 8;
   const known = new Set(f.spells || []);
@@ -2478,14 +2501,29 @@ function wizardCardInner(f) {
     + `${known.has(spell.id) ? "checked" : ""}> ${escapeHtml(spell.name)} `
     + `<span class="muted">(IQ ${spell.iq_tier}, ${escapeHtml(spellCostText(spell))})</span>`
     + `</label>`).join("");
+  // The wizard spec's `weapon` is the START-READY weapon ("Staff"/"None"
+  // included); the non-staff carried picks fill the two selects. Splitting the
+  // spec back into controls: any real catalog names among weapon/weapon2 are
+  // the picks, and the readied select wants the spec's `weapon` (data-want,
+  // consumed by syncEquipControls once its options exist).
+  const isPick = name => name && name !== "None" && name !== "Staff";
+  const picks = [f.weapon, f.weapon2].filter(isPick);
   return `<div><span class="chip ${f.side}">${f.side}</span> `
     + `<input data-name value="${escapeHtml(f.name)}" style="width:130px"> `
     + `<span class="muted">— 🔮 Wizard</span></div>`
     + `<div style="margin-top:6px">${stat("strength", "ST", f.strength)} `
     + `${stat("dexterity", "DX", f.dexterity)} ${stat("intelligence", "IQ", iq)} `
     + `<span class="muted" data-budget></span></div>`
+    + `<div style="margin-top:6px">Carried weapon <select data-eq="weapon">`
+    + `<option ${picks[0] ? "" : "selected"}>None</option>${optionTags(CAT.weapons, picks[0])}</select></div>`
+    + `<div style="margin-top:6px">Carried weapon 2 <select data-eq="weapon2">`
+    + `<option ${picks[1] ? "" : "selected"}>None</option>${optionTags(CAT.weapons, picks[1])}</select></div>`
+    + `<div style="margin-top:6px">Readied weapon <select data-readied `
+    + `data-want="${escapeHtml(f.weapon || "")}"></select> `
+    + `<span class="muted">— starts in hand</span></div>`
     + `<div style="margin-top:6px">Armour <select data-eq="armor">`
     + `${optionTags(CAT.armors, f.armor || "None")}</select></div>`
+    + `<div class="hint" data-castnote></div>`
     + `<div style="margin-top:6px" data-spells>`
     + `<div class="muted">Spells known <span data-spellcount></span> · casts bare-handed</div>`
     + spellRows + `</div>`
@@ -2543,13 +2581,20 @@ function readCard(card) {
   if (shieldReady) f.shield_ready = shieldReady.checked;
   // A wizard card picks its spells from the [data-spells] checkbox list, exactly as
   // a fighter picks weapons from the [data-eq] selects (chargen keys "is this a
-  // wizard?" on a non-empty spells list). A wizard casts bare-handed, so its
-  // weapon/shield fields stay empty (chargen._validate_wizard).
+  // wizard?" on a non-empty spells list). Its spec convention differs from a
+  // fighter's (#411): `weapon` is the START-READY weapon — "Staff", "None", or
+  // one of the carried picks — and `weapon2` is the other carried pick, so the
+  // readied select's value maps back onto the two spec slots here. No shield
+  // ever (chargen._validate_wizard, p.23).
   const spellsEl = card.querySelector("[data-spells]");
   if (spellsEl) {
     f.spells = Array.from(card.querySelectorAll("[data-spell]:checked"))
                     .map(box => box.dataset.spell);
-    f.weapon = "None"; f.weapon2 = "None"; f.shield = "None";
+    f.shield = "None";
+    const readiedWiz = card.querySelector("[data-readied]");
+    const picks = [f.weapon, f.weapon2].filter(n => n && n !== "None");
+    f.weapon = (readiedWiz && readiedWiz.value) || "None";
+    f.weapon2 = picks.find(n => n !== f.weapon) || "None";
   }
   return f;
 }
@@ -2577,6 +2622,7 @@ function syncEquipControls(card) {
   // selects, and show "Shield readied" only when it's meaningful (#207).
   const readiedSel = card.querySelector("[data-readied]");
   if (!readiedSel) return;
+  if (isWizardCard(card)) { syncWizardReadied(card, readiedSel); return; }
   const primary = card.querySelector('[data-eq="weapon"]');
   const secondary = card.querySelector('[data-eq="weapon2"]');
   const carried = primary ? [primary.value] : [];
@@ -2610,6 +2656,33 @@ function syncEquipControls(card) {
   }
 }
 
+// The wizard flavour of the readied-weapon sync (#411): the choices are the
+// staff (when the Staff spell is picked), the non-staff carried picks, and bare
+// hands ("None" — but only while it leaves no carried pick inexpressible: a
+// staffless wizard with two picks must ready one, since the spec's `weapon`
+// slot IS the readied pick). Defaults to the staff (casting mode) when known,
+// honouring a spec's explicit start-ready choice via data-want on first sync.
+function syncWizardReadied(card, readiedSel) {
+  const knowsStaff = !!card.querySelector('[data-spell="staff"]:checked');
+  const picks = [];
+  ["weapon", "weapon2"].forEach(key => {
+    const sel = card.querySelector(`[data-eq="${key}"]`);
+    if (sel && sel.value && sel.value !== "None" && !picks.includes(sel.value))
+      picks.push(sel.value);
+  });
+  const choices = [];
+  if (knowsStaff) choices.push("Staff");
+  else if (picks.length < 2) choices.push("None");
+  choices.push(...picks);
+  const wanted = readiedSel.dataset.want;   // the spec's start-ready, first sync only
+  delete readiedSel.dataset.want;
+  const want = (readiedSel.value && choices.includes(readiedSel.value)) ? readiedSel.value
+    : (wanted && choices.includes(wanted)) ? wanted
+    : choices[0];
+  readiedSel.innerHTML = choices.map(
+    name => `<option ${name === want ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
+}
+
 function refreshCard(card) {
   syncEquipControls(card);
   const f = readCard(card);
@@ -2631,6 +2704,36 @@ function refreshCard(card) {
     if (spells.length === 0) err = err || "pick at least one spell";
     const count = card.querySelector("[data-spellcount]");
     if (count) count.textContent = `${spells.length}/${iq}`;
+    // Weapon picks (#411): gate by ST like a fighter's, and enforce the p.23
+    // slot rule live — the staff counts as one of the two carried weapons, so a
+    // staff-owning wizard gets at most one other pick.
+    const st = f.strength || 0;
+    disableByStrength(card.querySelector('[data-eq="weapon"]'), st, 1);   // None is option 0
+    disableByStrength(card.querySelector('[data-eq="weapon2"]'), st, 1);
+    for (const name of [f.weapon, f.weapon2]) {
+      if (name && name !== "None" && name !== "Staff") {
+        const w = CAT.weapons.find(x => x.name === name);
+        if (w && (w.str_req || 0) > st) err = err || `${name} needs ST ${w.str_req}`;
+      }
+    }
+    const knowsStaff = spells.includes("staff");
+    const carriedPicks = [];
+    ["weapon", "weapon2"].forEach(key => {
+      const sel = card.querySelector(`[data-eq="${key}"]`);
+      if (sel && sel.value && sel.value !== "None" && !carriedPicks.includes(sel.value))
+        carriedPicks.push(sel.value);
+    });
+    if (knowsStaff && carriedPicks.length > 1)
+      err = err || "the staff counts as one of two weapons (p.23) — carry at most one other";
+    // State-driven hint (not a toast): a readied non-staff weapon blocks
+    // casting (and fights at -4 DX) until re-slung, so say so while it's true.
+    const castnote = card.querySelector("[data-castnote]");
+    if (castnote) {
+      const ready = f.weapon;   // the spec's weapon = the start-ready pick
+      castnote.textContent = (ready && ready !== "None" && ready !== "Staff")
+        ? `⚠ ${ready} readied — casting blocked (and -4 DX) until it is re-slung`
+        : "";
+    }
     const total = (f.strength || 0) + (f.dexterity || 0) + (f.intelligence || 0);
     note = `ST+DX+IQ ${total}/32` + (total !== 32 ? " — must equal 32" : "");
     card.querySelector("[data-budget]").textContent = note;

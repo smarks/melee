@@ -484,15 +484,20 @@ def create_wizard(
     spells = list(spells_known or [])
     # "If he knows the Staff spell, he starts the game with a staff, without
     # expending any ST to create it" (Wizard p.19, rules lines 940-942): equip
-    # the Staff weapon, readied, at build. The staff is the ONE weapon a wizard
-    # may hold and still cast (engine.state.cast_block_reason passes it).
+    # the Staff weapon at build, readied by default. The staff is the ONE weapon
+    # a wizard may hold and still cast (engine.state.cast_block_reason passes
+    # it), so a caller that names no ready weapon starts staff-in-hand — but a
+    # wizard may carry (and start with) another weapon readied instead (#411),
+    # so an explicit ``ready_weapon`` in ``gear`` is honoured.
     grants_staff = bool(has_staff) or "staff" in spells
     if grants_staff:
         gear = dict(gear)
         weapons = list(gear.get("weapons") or [])
-        weapons.append(STAFF)
+        if STAFF not in weapons:
+            weapons.append(STAFF)
         gear["weapons"] = weapons
-        gear["ready_weapon"] = STAFF
+        if gear.get("ready_weapon") is None:
+            gear["ready_weapon"] = STAFF
     return Figure(
         name=name, strength=strength, dexterity=dexterity, side=side,
         race=Race.HUMAN, intelligence=intelligence,

@@ -26,6 +26,7 @@ from .rules_data import (
     HUMAN_MIN_ATTRIBUTE,
     HUMAN_START_TOTAL,
     SHIELDS,
+    STAFF,
     WEAPONS,
 )
 from .spells import SPELLS
@@ -156,8 +157,12 @@ def _validate_wizard(spec: dict, errors: list[str]) -> None:
     """Append any wizard-specific rule problems to ``errors`` (TFT: Wizard).
 
     A wizard spends ST + DX + IQ = 32, each >= 8; knows at most IQ spells, every
-    one a real spell whose tier is within its IQ; and keeps its hands free for
-    casting (no shield, no non-staff weapon, p.23).
+    one a real spell whose tier is within its IQ; and may carry two weapons plus
+    a dagger like anyone else — but the staff counts as one of the two, and a
+    staff comes only from knowing the Staff spell (p.19, p.23). A shield is
+    still forbidden (casting needs that hand free, p.23). Weapon ST requirements
+    apply as for a fighter; the -4 DX with a non-staff weapon is an in-play
+    penalty (engine.state._situational_mods), not a chargen block.
     """
     for stat in WIZARD_STATS:
         value = spec.get(stat)
@@ -184,9 +189,37 @@ def _validate_wizard(spec: dict, errors: list[str]) -> None:
                 f"{spell.name} needs IQ {spell.iq_tier} (have {intelligence})")
     if (spec.get("shield") or "None") != "None":
         errors.append("a wizard cannot ready a shield while casting (p.23)")
-    if (spec.get("weapon") or "None") != "None":
+    # "A wizard may carry two weapons plus a dagger (his staff counts as a
+    # weapon)" (p.23, rules lines 1159-1162). The staff never appears in the
+    # picks itself — it comes from the Staff spell — so a staffed wizard has at
+    # most ONE non-staff, non-dagger pick. The dagger is the free extra, so a
+    # "Dagger" pick (e.g. a mid-fight edit of a dagger-ready wizard) never
+    # occupies a weapon slot.
+    knows_staff = "staff" in spells
+    strength = spec.get("strength")
+    picks = []
+    for key in ("weapon", "weapon2"):
+        name = spec.get(key) or "None"
+        if name == "None":
+            continue
+        if name == STAFF.name:
+            # A "Staff" pick without the Staff spell is IGNORED, not an error
+            # (like the spec's has_staff key): an edit that unpicks the spell
+            # still carries the stale weapon="Staff", and must round-trip to a
+            # simply staffless wizard rather than be rejected.
+            continue
+        carried = WEAPONS.get(name)
+        if carried is None:
+            continue          # already reported as an unknown weapon by validate()
+        if isinstance(strength, int) and strength < carried.min_strength:
+            errors.append(
+                f"{carried.name} needs ST {carried.min_strength} (have {strength})")
+        if carried is not DAGGER and carried not in picks:
+            picks.append(carried)
+    if knows_staff and len(picks) > 1:
         errors.append(
-            "a wizard cannot ready a non-staff weapon while casting (p.23)")
+            "a wizard's staff counts as one of his two weapons (p.23) — "
+            "carry at most one other")
 
 
 def validate(profile_name: str, spec: dict) -> list[str]:
@@ -201,12 +234,17 @@ def validate(profile_name: str, spec: dict) -> list[str]:
     weapon_name = spec.get("weapon")
     second_name = spec.get("weapon2")
     has_second = bool(second_name) and second_name != "None"
-    # A wizard casts bare-handed (a non-staff weapon is forbidden, p.23), so its
-    # "weapon" field is optional; a fighter must name a real weapon.
+    # A wizard's "weapon" field is optional (it may go bare-handed to cast) and
+    # may also name the staff (granted by the Staff spell, checked in
+    # _validate_wizard); a fighter must name a real catalog weapon — the staff
+    # is deliberately NOT in WEAPONS ("Fighters cannot carry magical staffs",
+    # p.23), so a fighter spec naming it still fails here as unknown.
+    wizard_staff = is_wizard and weapon_name == STAFF.name
     wizard_unarmed = is_wizard and weapon_name in (None, "", "None")
-    if not wizard_unarmed and weapon_name not in WEAPONS:
+    if not (wizard_unarmed or wizard_staff) and weapon_name not in WEAPONS:
         errors.append(f"unknown weapon {weapon_name!r}")
-    if has_second and second_name not in WEAPONS:
+    if (has_second and second_name not in WEAPONS
+            and not (is_wizard and second_name == STAFF.name)):
         errors.append(f"unknown weapon {second_name!r}")
     if (spec.get("armor") or "None") not in ARMORS:
         errors.append(f"unknown armour {spec.get('armor')!r}")
@@ -329,18 +367,30 @@ def build(profile_name: str, spec: dict, *, validate_spec: bool = True) -> Figur
 def _build_wizard(spec: dict) -> Figure:
     """Assemble a Classic wizard from a (validated) spec (TFT: Wizard).
 
-    A wizard casts bare-handed: it carries a Dagger but readies no weapon and
-    slings any shield (p.23), so :func:`engine.state.cast_block_reason` clears it
-    to cast from the first turn. Armour is honoured (a wizard may wear it, p.23).
+    A wizard may carry two weapons plus a dagger like anyone else (#411): the
+    spec's ``weapon`` is the START-READY weapon — a catalog name readies it,
+    "Staff"/"None" leave the default (staff-in-hand when the Staff spell is
+    known, bare hands otherwise) — and ``weapon2`` is the other carried weapon.
+    No shield ever (p.23). Armour is honoured (a wizard may wear it, p.23).
 
     The staff comes from the SPELL LIST alone: a wizard who knows the Staff
-    spell starts with a staff readied (p.19) — :func:`create_wizard` derives
+    spell starts with a staff (p.19) — :func:`create_wizard` derives
     ``has_staff`` and equips the weapon — so picking/unpicking the Staff spell
-    in the editor is the one way to gain or lose it. Any ``has_staff`` key in
+    in the editor is the one way to gain or lose it. "Staff" in a weapon slot is
+    therefore skipped here (never added as a pick), and any ``has_staff`` key in
     the spec (the edit_spec round-trip carries one for display) is deliberately
-    ignored here, or an edit that removed the spell would keep a stale staff.
+    ignored, or an edit that removed the spell would keep a stale staff.
     """
     armor = _from_catalog(ARMORS, spec.get("armor") or "None", "armour")
+    weapon_name = spec.get("weapon") or "None"
+    second_name = spec.get("weapon2") or "None"
+    weapons = []
+    for name in (weapon_name, second_name):
+        carried = WEAPONS.get(name)     # "Staff"/"None" are not catalog names
+        if carried is not None and carried not in weapons:
+            weapons.append(carried)
+    if DAGGER not in weapons:
+        weapons.append(DAGGER)
     figure = create_wizard(
         _required(spec, "name"),
         strength=_required(spec, "strength"),
@@ -348,8 +398,8 @@ def _build_wizard(spec: dict) -> Figure:
         intelligence=_required(spec, "intelligence"),
         side=_required(spec, "side"),
         spells_known=list(spec.get("spells") or []),
-        armor=armor, shield=SHIELDS["None"], weapons=[DAGGER],
-        ready_weapon=None, shield_ready=False,
+        armor=armor, shield=SHIELDS["None"], weapons=weapons,
+        ready_weapon=WEAPONS.get(weapon_name), shield_ready=False,
     )
     figure.char_class = (spec.get("char_class") or "Wizard").strip()
     return figure

@@ -2717,3 +2717,78 @@ def test_wizard_staff_serializes_and_round_trips_the_lobby_edit(client: Client) 
     live = next(f for f in started["state"]["figures"]
                 if f["uid"] == wizard["uid"])
     assert live["has_staff"] is True and live["weapon"] == "Staff"
+
+
+def test_wizard_weapon_picks_serialize_and_round_trip_the_lobby_edit(
+        client: Client) -> None:
+    # #411: a wizard may carry weapons like anyone else. Fielded sword-in-hand,
+    # its edit_spec names the READY weapon in `weapon` (the wizard convention)
+    # and round-trips through a lobby edit unchanged; switching the readied pick
+    # to "Staff" re-readies the staff and re-slings the sword.
+    fighters = [
+        {"name": "F1", "side": "red", "strength": 12, "dexterity": 12,
+         "weapon": "Broadsword", "armor": "Leather", "shield": "None"},
+        {"name": "W2", "side": "blue", "strength": 12, "dexterity": 12,
+         "intelligence": 8, "armor": "None",
+         "spells": ["magic_fist", "staff"], "weapon": "Shortsword"},
+    ]
+    created = client.post(
+        "/api/game/new_custom",
+        data=json.dumps({"profile": "Classic Melee", "open": "blue",
+                         "fighters": fighters}),
+        content_type="application/json").json()
+    gid = created["gid"]
+    wizard = next(f for f in created["state"]["figures"] if f["name"] == "W2")
+    assert wizard["weapon"] == "Shortsword"          # readied, as picked
+    assert set(wizard["weapons"]) == {"Shortsword", "Dagger", "Staff"}
+    assert wizard["edit_spec"]["weapon"] == "Shortsword"
+    assert wizard["edit_spec"]["weapon2"] == "None"  # staff/dagger are not picks
+    assert wizard["has_staff"] is True
+
+    joiner = Client()
+    _claim_seat(joiner, gid, "blue")
+    # A no-change edit round-trips (the spec chargen.validate sees is legal).
+    unchanged = _edit_figure(joiner, gid, wizard)
+    assert unchanged.status_code == 200
+    # Re-ready the staff: the sword stays carried, the staff is back in hand.
+    edited = _edit_figure(joiner, gid, wizard,
+                          weapon="Staff", weapon2="Shortsword")
+    assert edited.status_code == 200
+    after = next(f for f in edited.json()["state"]["figures"]
+                 if f["uid"] == wizard["uid"])
+    assert after["weapon"] == "Staff"
+    assert "Shortsword" in after["weapons"]
+    assert after["edit_spec"]["weapon"] == "Staff"
+    assert after["edit_spec"]["weapon2"] == "Shortsword"
+
+
+def test_must_cast_excludes_a_wizard_whose_hands_are_not_free() -> None:
+    # #409 x #411: a CAST-declared wizard with a non-staff weapon ready has
+    # nothing castable (cast_block_reason), so _must_cast must leave it out —
+    # it can never pick a spell, and listing it would deadlock Resolve.
+    from hexarena.hex import Hex
+
+    from board.views import _must_cast
+    from engine.arena import Arena
+    from engine.figure import create_human, create_wizard
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD, SHORTSWORD
+    from engine.state import GameState
+
+    arena = Arena(cols=9, rows=9)
+    grid = arena.layout
+    wizard = create_wizard(
+        "Zed", strength=12, dexterity=12, intelligence=8, side="red",
+        spells_known=["magic_fist", "staff"],
+        weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    foe = create_human("Bruno", 12, 12, "blue",
+                       weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    wizard.position, wizard.facing = Hex(4, 4), 0
+    foe.position = grid.neighbor(wizard.position, 0)
+    foe.facing = 3
+    state = GameState(arena, [wizard, foe])
+    wizard.current_option = Option.CAST     # forced: the option gate would refuse
+    assert _must_cast(state) == []
+    # With the staff back in hand the same declared cast DOES gate Resolve.
+    wizard.ready_weapon = next(w for w in wizard.weapons if w.name == "Staff")
+    assert _must_cast(state) == [wizard.uid]
