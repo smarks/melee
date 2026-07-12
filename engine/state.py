@@ -310,10 +310,16 @@ class _TurnMixin:
         already queued this step. Unlike :meth:`set_do_nothing` it does NOT re-run
         movement (the figure already moved in the select pass); it only clears the
         attack commitment.
+
+        A wizard that declared CAST stands down the same way ("Don't cast", #409):
+        the flip to DO_NOTHING drops it from the cast gate, and any spell it had
+        already queued this step is cancelled alongside the attacks.
         """
         figure.current_option = Option.DO_NOTHING
         self._pending = [
             pending for pending in self._pending if pending.attacker is not figure]
+        self._pending_casts = [
+            pending for pending in self._pending_casts if pending.caster is not figure]
 
     # ---- end of turn ----
     def end_turn(self) -> None:

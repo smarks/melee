@@ -399,6 +399,137 @@ def test_hold_fire_is_rejected_outside_the_combat_phase(client: Client) -> None:
         del GAMES["duel-test"]
 
 
+def _wizard_duel(spells: list[str] | None = None):
+    """A red wizard adjacent to and facing a blue knight, registered in combat
+    phase (the cast-gate counterpart of :func:`_combat_duel`, #409)."""
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human, create_wizard
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=7, rows=7)
+    grid = arena.layout
+    wizard = create_wizard(
+        "Merlin", strength=20, dexterity=12, intelligence=13, side="red",
+        spells_known=list(spells or ["magic_fist", "stone_flesh"]))
+    blue = create_human("Knight", 12, 12, "blue",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue.position = Hex(3, 3)
+    wizard.position = grid.neighbor(blue.position, 0)
+    wizard.facing = next(d for d in range(6)
+                         if grid.neighbor(wizard.position, d) == blue.position)
+    GAMES["duel-test"] = {
+        "state": GameState(arena, [wizard, blue]), "layout": board_layout(arena),
+        "phase": "combat",
+        "controllers": {"red": "human", "blue": "human"}, "combat_prepared": True,
+    }
+    return wizard, blue
+
+
+def test_declared_cast_wizard_is_must_cast_but_never_must_attack(client: Client) -> None:
+    # #409: a wizard that declared CAST joins the cast gate (must_cast, served in
+    # the state meta) so the Resolve gate can prompt for its spell — but it must
+    # NEVER appear in must_attack, even with a staff in hand and a foe in reach:
+    # must_attack feeds the #299 sole-target auto-queue, and a declared caster
+    # silently auto-queued into a staff attack would steal the player's cast.
+    from board.views import GAMES, _attack_targets, _must_attack, _must_cast
+    from engine.options import Option
+
+    wizard, blue = _wizard_duel(spells=["magic_fist", "staff"])
+    try:
+        assert wizard.ready_weapon is not None            # the #406 staff is in hand
+        wizard.current_option = Option.CAST
+        state = GAMES["duel-test"]["state"]
+        assert _attack_targets(state, wizard).melee == [blue.uid]  # staff could hit...
+        assert wizard.uid not in _must_attack(state)      # ...but no auto-queue path
+        assert wizard.uid in _must_cast(state)            # the cast gate has it
+
+        meta = client.get("/api/game/duel-test").json()["state"]
+        assert wizard.uid in meta["must_cast"]            # served to the client gate
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_must_cast_leaves_out_a_wizard_with_nothing_castable(client: Client) -> None:
+    # Mirrors must_attack's no-target rule: a declared caster that CANNOT cast
+    # (here: a sword in hand blocks casting, engine cast_block_reason) must not
+    # block Resolve forever — it is simply left out of the gate.
+    from board.views import GAMES, _must_cast
+    from engine.options import Option
+    from engine.rules_data import BROADSWORD
+
+    wizard, _blue = _wizard_duel()
+    try:
+        wizard.weapons = [BROADSWORD]
+        wizard.ready_weapon = BROADSWORD                  # hands not free -> no cast
+        wizard.current_option = Option.CAST
+        assert wizard.uid not in _must_cast(GAMES["duel-test"]["state"])
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_queueing_the_spell_or_standing_down_clears_the_cast_gate(client: Client) -> None:
+    # #409: the two legitimate exits from the cast gate. Queueing the spell
+    # (cast_spell) satisfies it; "Don't cast" (the hold_fire stand-down, #397
+    # machinery) declines it explicitly — flipping the wizard to DO_NOTHING and
+    # cancelling any spell it had queued, so Resolve can clear either way.
+    import json
+
+    from board.views import GAMES, _must_cast
+    from engine.options import Option
+
+    wizard, _blue = _wizard_duel()
+    try:
+        wizard.current_option = Option.CAST
+        state = GAMES["duel-test"]["state"]
+        assert wizard.uid in _must_cast(state)
+
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "cast_spell", "uid": wizard.uid,
+                                           "spell": "stone_flesh",
+                                           "target": wizard.uid}),
+                          content_type="application/json")
+        assert out.status_code == 200 and "error" not in out.json()
+        assert wizard.uid not in _must_cast(state)        # queued -> gate satisfied
+
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "hold_fire", "uid": wizard.uid}),
+                          content_type="application/json")
+        assert out.status_code == 200 and "error" not in out.json()
+        assert wizard.current_option == Option.DO_NOTHING  # persisted stand-down
+        assert not state._pending_casts                    # the queued cast is gone
+        assert wizard.uid not in _must_cast(state)
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_server_resolve_is_not_blocked_by_an_ai_wizard_in_the_cast_gate(
+        client: Client) -> None:
+    # AI wizards are unaffected by the cast gate (#409): the gate is a client-side
+    # per-owner prompt (like must_attack), so resolve_combat proceeds even while a
+    # computer-side declared caster sits in must_cast — the AI queues its own casts.
+    import json
+
+    from board.views import GAMES, _must_cast
+    from engine.options import Option
+
+    wizard, _blue = _wizard_duel()
+    try:
+        GAMES["duel-test"]["controllers"]["red"] = "computer"
+        wizard.current_option = Option.CAST
+        assert wizard.uid in _must_cast(GAMES["duel-test"]["state"])
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "resolve_combat"}),
+                          content_type="application/json")
+        assert out.status_code == 200 and "error" not in out.json()
+        assert GAMES["duel-test"]["combat_resolved"] is True
+    finally:
+        del GAMES["duel-test"]
+
+
 def test_auto_facing_follows_direction_of_travel() -> None:
     from board.views import _auto_facing
     from engine.arena import Arena

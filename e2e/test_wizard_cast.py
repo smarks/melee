@@ -350,3 +350,214 @@ def test_wizard_sheet_shows_mana_gauge_and_spells(live_server, page: Page) -> No
     finally:
         from board.views import GAMES
         GAMES.pop(gid, None)
+
+
+# ---- #409: the guided, gated casting flow ------------------------------------
+
+
+@pytest.mark.django_db
+def test_declared_cast_gates_resolve_with_a_prompt_until_the_spell_is_picked(
+        live_server, page: Page) -> None:
+    # #409 core defect: a wizard that declared Cast in the select phase used to
+    # reach combat with NO prompt anywhere — four turns of "Cast" could pass
+    # without a single spell. Now the declared caster joins the Resolve gate like
+    # an untargeted attacker: Resolve is disabled, a clickable prompt names the
+    # wizard, clicking it opens the spell rows (each showing its ST/mana cost and
+    # the wizard's current mana), and picking one queues the cast (slider intact).
+    gid = "wizard-cast-gate"
+    wizard, blue = _seed_wizard_duel(gid, scripted=[4, 4, 4, 1, 1])
+    try:
+        from engine.options import Option
+        wizard.current_option = Option.CAST      # declared Cast in the select pass
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "Combat", timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # The gate: Resolve disabled, and the prompt names the spell-less wizard.
+        resolve = page.get_by_role("button", name=re.compile("Resolve"))
+        expect(resolve).to_be_disabled(timeout=POLL_SAFE_TIMEOUT_MS)
+        prompt = page.locator("#controls .warnline.clickable",
+                              has_text="Merlin has not chosen a spell")
+        expect(prompt).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # Clicking the prompt opens the wizard's menu: explicit spell rows, each
+        # readable on its own — ST/mana cost (1–3 for Magic Fist) + current mana —
+        # plus the explicit "Don't cast" decline.
+        prompt.click()
+        menu = page.locator("#tokenMenu")
+        expect(menu).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+        fist_row = menu.locator(".row:not(.disabled)", has_text="Cast Magic Fist")
+        expect(fist_row).to_contain_text("ST 1–3 · mana 20")
+        expect(menu.locator(".row", has_text="Cast Stone Flesh")).to_contain_text(
+            "ST 2 · mana 20")
+        expect(menu.locator(".row", has_text="Don't cast")).to_be_visible()
+
+        # Picking the spell is the explicit choice: it queues, the gate clears,
+        # and the ST/mana slider still works for the missile cast.
+        fist_row.click()
+        expect(page.locator("#controls .checklist .done")).to_contain_text(
+            "Cast Magic Fist", timeout=POLL_SAFE_TIMEOUT_MS)
+        expect(page.locator("#controls .warnline.clickable")).to_have_count(
+            0, timeout=POLL_SAFE_TIMEOUT_MS)
+        slider = page.locator("#controls .cast-st-range")
+        expect(slider).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+        slider.evaluate(
+            "el => { el.value = '2';"
+            " el.dispatchEvent(new Event('input', {bubbles: true})); }")
+        expect(resolve).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
+
+        blue_st_before = _figure_by_name(page, live_server, gid, "Bluecap")["st"]
+        resolve.click()
+        expect(page.get_by_role("button", name=re.compile("End turn"))).to_be_visible(
+            timeout=POLL_SAFE_TIMEOUT_MS)
+        blue_after = _figure_by_name(page, live_server, gid, "Bluecap")
+        wiz_after = _figure_by_name(page, live_server, gid, "Merlin")
+        assert blue_after["st"] == blue_st_before - 2, (
+            f"the gated cast should land 2 damage; {blue_st_before} -> {blue_after['st']}")
+        assert wiz_after["st"] == 18, f"the cast should spend 2 mana; got {wiz_after['st']}"
+    finally:
+        from board.views import GAMES
+        GAMES.pop(gid, None)
+
+
+@pytest.mark.django_db
+def test_dont_cast_declines_explicitly_and_frees_resolve(
+        live_server, page: Page) -> None:
+    # #409: "Don't cast" is the explicit decline, mirroring Hold fire (#397) — a
+    # persisted server stand-down (DO_NOTHING), never a silent no-op. It clears
+    # the gate so Resolve runs, and the turn spends no mana and deals no damage.
+    gid = "wizard-dont-cast"
+    wizard, blue = _seed_wizard_duel(gid, scripted=[])
+    try:
+        from engine.options import Option
+        wizard.current_option = Option.CAST
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "Combat", timeout=POLL_SAFE_TIMEOUT_MS)
+
+        resolve = page.get_by_role("button", name=re.compile("Resolve"))
+        expect(resolve).to_be_disabled(timeout=POLL_SAFE_TIMEOUT_MS)
+        decline = page.locator("#controls button.holdfire", has_text="Don't cast")
+        expect(decline).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+        decline.click()
+
+        # The stand-down persists server-side and the gate clears.
+        expect(page.locator("#controls .warnline.clickable")).to_have_count(
+            0, timeout=POLL_SAFE_TIMEOUT_MS)
+        expect(resolve).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
+        merlin = _figure_by_name(page, live_server, gid, "Merlin")
+        assert merlin["option"] == "do_nothing", (
+            f"Don't cast must persist a DO_NOTHING stand-down; got {merlin['option']}")
+
+        blue_st_before = _figure_by_name(page, live_server, gid, "Bluecap")["st"]
+        resolve.click()
+        expect(page.get_by_role("button", name=re.compile("End turn"))).to_be_visible(
+            timeout=POLL_SAFE_TIMEOUT_MS)
+        assert _figure_by_name(page, live_server, gid, "Bluecap")["st"] == blue_st_before
+        assert _figure_by_name(page, live_server, gid, "Merlin")["st"] == 20, (
+            "a declined cast must spend no mana")
+    finally:
+        from board.views import GAMES
+        GAMES.pop(gid, None)
+
+
+def _seed_select_wizard_vs_ai(gid: str, *, scripted: list[int], seed: int = 7):
+    """A SELECT-phase solo-vs-AI game: the red wizard (human, first in initiative)
+    adjacent to and facing a blue AI knight. Scripted dice run out into a fixed
+    seed, so the whole turn — the AI's select pass included — is deterministic."""
+    from board.geometry import layout as board_layout
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human, create_wizard
+    from engine.rules_data import BROADSWORD
+    from engine.state import GameState
+    from hexarena.dice import Dice
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=9, rows=9)
+    grid = arena.layout
+    wizard = create_wizard(
+        "Merlin", strength=20, dexterity=20, intelligence=13, side="red",
+        spells_known=["magic_fist", "stone_flesh"])
+    blue = create_human("Bluecap", 12, 12, "blue",
+                        weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    blue.position = Hex(4, 4)
+    wizard.position = grid.neighbor(blue.position, 0)
+    wizard.facing = next(direction for direction in range(6)
+                         if grid.neighbor(wizard.position, direction) == blue.position)
+    blue.facing = next(direction for direction in range(6)
+                       if grid.neighbor(blue.position, direction) == wizard.position)
+    state = GameState(arena, [wizard, blue], dice=Dice(seed=seed, scripted=scripted))
+    state.initiative_order = [wizard.uid, blue.uid]
+    state.active_index = 0
+    state.passed = []
+    GAMES[gid] = {
+        "state": state, "layout": board_layout(arena),
+        "phase": "select",
+        "controllers": {"red": "human", "blue": "computer"},
+        "combat_prepared": False,
+    }
+    return wizard, blue
+
+
+@pytest.mark.django_db
+def test_full_casting_flow_from_select_phase_vs_ai(live_server, page: Page) -> None:
+    # The #409 flow end-to-end, solo vs the AI, from the SELECT phase on: declare
+    # "🔮 Cast a spell" on the wizard's select menu; the combat phase then prompts
+    # (checklist + disabled Resolve) instead of silently no-oping; picking the
+    # spell queues it and Resolve lands it. Scripted dice: the AI knight's 3-die
+    # to-hit [6,6,6]=18 misses vs adjDX 12, the cast's [4,4,4]=12 hits vs adjDX 20
+    # (casts resolve after the weapon rounds), and its 3 damage dice [1,1,1] floor
+    # at the 3 ST invested (the slider default: the wizard's full affordable max).
+    gid = "wizard-select-flow"
+    wizard, blue = _seed_select_wizard_vs_ai(
+        gid, scripted=[6, 6, 6, 4, 4, 4, 1, 1, 1])
+    try:
+        page.goto(f"{live_server.url}/game/{gid}")
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "Action selection", timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # Declare the cast — an explicit select-phase option (the Action panel's
+        # inline option buttons for the active figure, labelled "🔮 Cast a spell").
+        cast_option = page.locator(
+            '#controls .charctl.enabled button[data-opt="cast"]')
+        expect(cast_option).to_be_visible(timeout=POLL_SAFE_TIMEOUT_MS)
+        expect(cast_option).to_contain_text("Cast a spell")
+        cast_option.click()
+
+        # The AI side auto-plays its select pass; combat opens with the guided
+        # gate: the wizard is prompted by name and Resolve is disabled.
+        expect(page.locator("#phaseBanner")).to_contain_text(
+            "Combat", timeout=POLL_SAFE_TIMEOUT_MS)
+        resolve = page.get_by_role("button", name=re.compile("Resolve"))
+        expect(resolve).to_be_disabled(timeout=POLL_SAFE_TIMEOUT_MS)
+        expect(page.locator("#controls .warnline.clickable",
+                            has_text="Merlin has not chosen a spell")).to_be_visible(
+            timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # The explicit pick, then Resolve.
+        blue_st_before = _figure_by_name(page, live_server, gid, "Bluecap")["st"]
+        _open_combat_menu_row(page, wizard.uid, "Cast Magic Fist")
+        expect(page.locator("#controls .checklist .done")).to_contain_text(
+            "Cast Magic Fist", timeout=POLL_SAFE_TIMEOUT_MS)
+        expect(resolve).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
+        resolve.click()
+        # Solo vs the AI, the server drives the turn straight on after Resolve, so
+        # wait on the narrated cast in the shared log rather than an End-turn button.
+        expect(page.locator("#log")).to_contain_text(
+            "Magic Fist", timeout=POLL_SAFE_TIMEOUT_MS)
+
+        # The cast REALLY happened this time: damage landed, mana was spent, and
+        # the log narrates it — the exact opposite of the silent no-op defect.
+        blue_after = _figure_by_name(page, live_server, gid, "Bluecap")
+        wiz_after = _figure_by_name(page, live_server, gid, "Merlin")
+        assert blue_after["st"] == blue_st_before - 3, (
+            f"Magic Fist at 3 ST floors at 3 damage; {blue_st_before} -> {blue_after['st']}")
+        assert wiz_after["st"] == 17, (
+            f"the cast should spend its 3 invested ST (mana); got {wiz_after['st']}")
+        log = _game_state(page, live_server, gid)["log"]
+        assert any("magic fist" in line.lower() for line in log), (
+            f"the resolved cast must be narrated; log: {log}")
+    finally:
+        from board.views import GAMES
+        GAMES.pop(gid, None)
