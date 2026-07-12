@@ -642,8 +642,11 @@ function drawArena() {
     if (f.uid === sel) cls += " sel";
     if (isTarget(f.uid)) cls += " target";
     if (f.posture === "prone") cls += " prone";
+    if (f.posture === "kneeling") cls += " kneeling";
     if (f.dodging || f.defending) cls += " dodge";
     g.setAttribute("class", cls);
+    g.setAttribute("data-uid", f.uid);          // token lookup (tests, tooling)
+    g.setAttribute("data-posture", f.posture);
 
     // Grapplers share one hex — fan them around its centre so each stays visible.
     if (f.hth_opponents && f.hth_opponents.length) {
@@ -655,6 +658,7 @@ function drawArena() {
 
     const tip = document.createElementNS(SVG, "title");   // native hover tooltip
     tip.textContent = `${f.name} (${f.side})`
+      + (f.posture && f.posture !== "standing" ? ` — ${f.posture}` : "")
       + (f.flying ? " — flying" : "")
       + ((f.size > 1) ? ` — ${f.size} hexes` : "");
     g.appendChild(tip);
@@ -685,11 +689,41 @@ function drawArena() {
       g.appendChild(shadow);
     }
 
-    const body = document.createElementNS(SVG, "circle");
+    // Posture is carried by the body's GEOMETRY, not color (#408, state-driven,
+    // theme/colorblind safe): standing keeps the upright disc; kneeling is a
+    // half-height body dropped onto the same baseline (it keeps its front, #354);
+    // prone is a flat ellipse tipped over sideways (plus the CSS dim). Dead
+    // figures keep their grey ✗ disc regardless of the posture they fell in.
+    let body;
+    if (!f.dead && f.posture === "prone") {
+      body = document.createElementNS(SVG, "ellipse");
+      body.setAttribute("cx", h.cx); body.setAttribute("cy", h.cy);
+      body.setAttribute("rx", LAYOUT.size * 0.72);
+      body.setAttribute("ry", LAYOUT.size * 0.3);
+      body.setAttribute("transform", `rotate(-24 ${h.cx} ${h.cy})`);  // sprawled
+    } else if (!f.dead && f.posture === "kneeling") {
+      body = document.createElementNS(SVG, "ellipse");
+      body.setAttribute("cx", h.cx);
+      body.setAttribute("cy", h.cy + LAYOUT.size * 0.15);
+      body.setAttribute("rx", LAYOUT.size * 0.6);
+      body.setAttribute("ry", LAYOUT.size * 0.45);
+    } else {
+      body = document.createElementNS(SVG, "circle");
+      body.setAttribute("cx", h.cx); body.setAttribute("cy", h.cy);
+      body.setAttribute("r", LAYOUT.size * 0.6);
+    }
     body.setAttribute("class", "body");
-    body.setAttribute("cx", h.cx); body.setAttribute("cy", h.cy);
-    body.setAttribute("r", LAYOUT.size * 0.6);
     body.setAttribute("fill", f.dead ? "#555" : fillFor(f.side));
+    // A downed body is flatter than the standing disc; an invisible full-size
+    // disc keeps the click/hover target as large as a standing figure's.
+    if (!f.dead && (f.posture === "prone" || f.posture === "kneeling")) {
+      const hit = document.createElementNS(SVG, "circle");
+      hit.setAttribute("class", "hitdisc");
+      hit.setAttribute("cx", h.cx); hit.setAttribute("cy", h.cy);
+      hit.setAttribute("r", LAYOUT.size * 0.6);
+      hit.setAttribute("fill", "transparent");
+      g.appendChild(hit);
+    }
     g.appendChild(body);
 
     const txt = document.createElementNS(SVG, "text");
@@ -697,14 +731,17 @@ function drawArena() {
     txt.textContent = f.dead ? "✗" : hpCur(f);
     g.appendChild(txt);
 
-    // facing arrow — drawn on top of the token, in white, so it reads clearly
-    if (!f.dead && f.front_label && LAYOUT.hexes[f.front_label]) {
+    // facing arrow — drawn on top of the token, in white, so it reads clearly.
+    // A prone figure has no front (#354) — no arrow. Kneeling keeps its front.
+    if (!f.dead && f.posture !== "prone"
+        && f.front_label && LAYOUT.hexes[f.front_label]) {
       const fh = LAYOUT.hexes[f.front_label];
       const len = Math.hypot(fh.cx - h.cx, fh.cy - h.cy) || 1;
       const ux = (fh.cx - h.cx) / len, uy = (fh.cy - h.cy) / len;
       const ox = -uy, oy = ux, s = LAYOUT.size;
       const rIn = s * 0.5, rOut = s * 0.92, w = s * 0.32;
       const arrow = document.createElementNS(SVG, "polygon");
+      arrow.setAttribute("class", "facing");
       arrow.setAttribute("points",
         `${h.cx + ux*rOut},${h.cy + uy*rOut} `
         + `${h.cx + ux*rIn + ox*w},${h.cy + uy*rIn + oy*w} `
