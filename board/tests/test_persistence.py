@@ -549,3 +549,76 @@ def test_setup_lobby_host_and_phase_round_trip() -> None:
     legacy = persistence.game_to_json(game)
     del legacy["host"]
     assert persistence.game_from_json(legacy)["host"] is None
+
+
+def _wizard_duel_state() -> GameState:
+    """A wizard with a legal cast queued at an enemy dummy (for #420 tests)."""
+    from engine.arena import Arena
+    from engine.figure import Figure, create_wizard
+    from engine.spells import MAGIC_FIST
+
+    wizard = create_wizard(
+        "Merlin", strength=20, dexterity=12, intelligence=13, side="red",
+        spells_known=["magic_fist", "stone_flesh"])
+    wizard.position, wizard.facing, wizard.uid = Hex(2, 2), 0, "wiz"
+    wizard.current_option = Option.CAST
+    dummy = Figure(name="Dummy", strength=20, dexterity=10, side="blue")
+    dummy.position, dummy.uid = Hex(4, 2), "dummy"
+    state = GameState(Arena(cols=12, rows=12), [wizard, dummy],
+                      dice=Dice(scripted=[2, 2, 2, 6, 6]))
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=2)
+    return state
+
+
+def test_pending_casts_round_trip() -> None:
+    """#420: a save taken with a cast declared but unresolved restores it exactly
+    — like the queued weapon attacks above — with the caster/target rebound to
+    the RESTORED figures and the spell to its catalog singleton, and the cast
+    still resolving after the load."""
+    from engine.spells import SPELLS
+
+    state = _wizard_duel_state()
+    assert len(state._pending_casts) == 1
+
+    restored = persistence.state_from_json(
+        json.loads(json.dumps(persistence.state_to_json(state))))
+
+    assert len(restored._pending_casts) == 1
+    original, copy = state._pending_casts[0], restored._pending_casts[0]
+    assert copy.caster is restored.figures[0]     # rebound, not a stale object
+    assert copy.target is restored.figures[1]
+    assert copy.spell is SPELLS["magic_fist"]     # catalog singleton, by id
+    assert copy.st_used == original.st_used
+    assert copy.zone == original.zone
+    assert copy.range_penalty == original.range_penalty
+    assert copy.situational == original.situational
+    assert copy.situational_note == original.situational_note
+    # The declared cast still resolves after the reload (scripted 2,2,2 hit).
+    restored.resolve_combat()
+    assert restored.figures[0].cast_this_turn
+    assert restored.figures[1].damage_taken > 0
+
+
+def test_pending_cast_serialization_covers_every_field() -> None:
+    """Drift guard, the PendingCast mirror of the PendingAttack one above (#420):
+    the persisted key set must equal the dataclass field set, so a field added to
+    PendingCast can never silently drop from a mid-combat save (#245 class)."""
+    import dataclasses
+
+    from engine.state import PendingCast
+
+    state = _wizard_duel_state()
+    persisted_keys = set(
+        persistence._pending_cast_to_json(state._pending_casts[0]))
+    dataclass_fields = {field.name for field in dataclasses.fields(PendingCast)}
+    assert persisted_keys == dataclass_fields
+
+
+def test_snapshot_without_pending_casts_still_loads() -> None:
+    """A pre-#420 snapshot (no ``pending_casts`` key) loads with no queued casts
+    rather than failing."""
+    state = _wizard_duel_state()
+    blob = persistence.state_to_json(state)
+    del blob["pending_casts"]                     # what an old save looks like
+    restored = persistence.state_from_json(json.loads(json.dumps(blob)))
+    assert restored._pending_casts == []
