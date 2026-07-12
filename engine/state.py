@@ -1669,6 +1669,37 @@ class AttackCandidates:
 
 class _CombatMixin:
     # ---- combat ----
+    def declarable_attack_option(self, figure: Figure) -> Option:
+        """The option a combat-phase attack declaration would run under (#413).
+
+        A figure that already committed to an attack option keeps it; otherwise
+        this is the option the board layer's ``_ensure_attack_option`` would
+        assign — the single definition shared by that view helper and
+        :meth:`attack_candidates`, so the targets the UI offers and the option a
+        declaration is validated against can never diverge.
+        """
+        option = figure.current_option
+        if option is not None and spec(option).is_attack:
+            return option
+        weapon = figure.ready_weapon
+        if weapon is not None and weapon.kind == WeaponKind.MISSILE:
+            return (Option.ONE_LAST_SHOT if self.engaged(figure)
+                    else Option.MISSILE_ATTACK)
+        return (Option.SHIFT_ATTACK if self.engaged(figure)
+                else Option.CHARGE_ATTACK)
+
+    def _movement_permits_attack(self, figure: Figure) -> bool:
+        """Whether the movement ``figure`` already spent this turn still allows
+        an attack declaration (#413): the hexes moved must fit the declarable
+        attack option's own cap (options.py movement_cap) — "a figure can never
+        attack if it moved more than half its MA" (wizard-rules lines 273-274).
+        The mirror of :meth:`_validate_attack`'s guard, applied to the candidate
+        lists so the UI never offers a target the queue would reject."""
+        option = self.declarable_attack_option(figure)
+        budget = self.rules.movement_budget(
+            figure.movement_allowance, spec(option).movement_cap)
+        return figure.moved_this_turn <= budget
+
     def attack_candidates(self, figure: Figure) -> AttackCandidates:
         """Which foes ``figure`` may attack this combat phase, by kind (#362).
 
@@ -1701,6 +1732,11 @@ class _CombatMixin:
         hth = self.hth_targets(figure)          # foes it could grapple
         weapon = figure.ready_weapon
         if weapon is None:
+            return AttackCandidates([], [], hth)
+        # A figure that already moved beyond what its declarable attack option
+        # permits cannot strike or fire this turn (#413) — don't offer targets
+        # the queue would reject.
+        if not self._movement_permits_attack(figure):
             return AttackCandidates([], [], hth)
         if weapon.kind == WeaponKind.MISSILE:
             if figure.missile_cooldown > 0:

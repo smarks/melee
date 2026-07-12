@@ -511,13 +511,10 @@ def _ensure_attack_option(state: GameState, figure) -> None:
     if option is not None and (spec(option).sets_dodge or spec(option).sets_defend):
         raise IllegalAction(
             f"{figure.name} chose {option.value} this turn and cannot attack")
-    weapon = figure.ready_weapon
-    if weapon is not None and weapon.kind == WeaponKind.MISSILE:
-        new_option = (Option.ONE_LAST_SHOT if state.engaged(figure)
-                      else Option.MISSILE_ATTACK)
-    else:
-        new_option = (Option.SHIFT_ATTACK if state.engaged(figure)
-                      else Option.CHARGE_ATTACK)
+    # The one definition of "which attack option would this declaration run
+    # under" is the engine's (#413): attack_candidates gates the offered targets
+    # on the same answer, so the two can never diverge.
+    new_option = state.declarable_attack_option(figure)
     budget = state.rules.movement_budget(
         figure.movement_allowance, spec(new_option).movement_cap)
     if figure.moved_this_turn > budget:

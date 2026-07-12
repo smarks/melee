@@ -2787,3 +2787,25 @@ def test_dodge_then_stamped_attack_is_rejected() -> None:
     dodger.current_option = Option.SHIFT_ATTACK   # what _ensure_attack_option does
     with pytest.raises(IllegalAction, match="dodging"):
         state.queue_attack(dodger, foe)
+
+
+def test_attack_candidates_honor_the_movement_already_taken() -> None:
+    # #413: attack_candidates feeds the UI's target rows (#362), so it must apply
+    # the same movement rule the queue enforces — otherwise the client is offered
+    # a "⚔ Attack"/"🏹 Shoot" row that can only be rejected. A full-MA mover gets
+    # no melee/ranged candidates; a half-MA (charge-legal) mover keeps them.
+    arena = Arena(cols=16, rows=8)
+    mover = create_human("Runner", 12, 12, "red",
+                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe = create_human("Foe", 12, 12, "blue",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    mover.position, foe.position = Hex(2, 2), Hex(13, 2)
+    _aim(mover, foe)
+    state = GameState(arena, [mover, foe])
+    state.move(mover, Option.MOVE, path=[Hex(col, 2) for col in range(3, 13)])
+    candidates = state.attack_candidates(mover)     # moved 10: no attack left
+    assert candidates.melee == [] and candidates.ranged == []
+
+    mover.moved_this_turn = 5                       # exactly half its MA of 10
+    candidates = state.attack_candidates(mover)     # charge-legal: foe offered
+    assert foe in candidates.melee
