@@ -704,9 +704,9 @@ function drawArena() {
     } else if (!f.dead && f.posture === "kneeling") {
       body = document.createElementNS(SVG, "ellipse");
       body.setAttribute("cx", h.cx);
-      body.setAttribute("cy", h.cy + LAYOUT.size * 0.15);
+      body.setAttribute("cy", h.cy + LAYOUT.size * 0.2);
       body.setAttribute("rx", LAYOUT.size * 0.6);
-      body.setAttribute("ry", LAYOUT.size * 0.45);
+      body.setAttribute("ry", LAYOUT.size * 0.4);
     } else {
       body = document.createElementNS(SVG, "circle");
       body.setAttribute("cx", h.cx); body.setAttribute("cy", h.cy);
