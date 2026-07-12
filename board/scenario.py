@@ -89,13 +89,16 @@ ARCHETYPE_NAMES = ["Knight", "Swordsman", "Spearman", "Archer"]
 
 # The pick-up-game wizard preset. Same spread and spell list as the editor's
 # 🔮 Wizard fielding button (ST 9 / DX 10 / IQ 13 -> ST+DX+IQ = 32, each >= 8, the
-# chargen wizard rule), able to field both starter spells: Magic Fist (IQ 8) and
-# Stone Flesh (IQ 13). No weapon — a wizard must be bare-handed to cast (p.23).
+# chargen wizard rule), able to field the starter spells: Magic Fist (IQ 8),
+# Staff (IQ 8), and Stone Flesh (IQ 13) — 3 spells, comfortably within the
+# at-most-IQ (13) cap. Knowing Staff means the preset starts with a staff in
+# hand (p.19): a playable default wizard can strike, parry, and engage — and the
+# staff is the one weapon that does not block its casting (p.19/p.23).
 WIZARD_PRESET = {
     "strength": 9,
     "dexterity": 10,
     "intelligence": 13,
-    "spells_known": ["magic_fist", "stone_flesh"],
+    "spells_known": ["magic_fist", "staff", "stone_flesh"],
 }
 
 

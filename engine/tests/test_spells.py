@@ -274,9 +274,14 @@ def test_chargen_wizard_unknown_spell_id_rejected() -> None:
 
 def test_spell_reference_numbers() -> None:
     """Pin the exact reference values encoded in engine.spells."""
+    from engine.spells import STAFF_SPELL
+
     assert MAGIC_FIST.type == "M" and MAGIC_FIST.iq_tier == 8
     assert MAGIC_FIST.damage_per_st == -2 and MAGIC_FIST.max_st == 3
     assert STONE_FLESH.type == "T" and STONE_FLESH.iq_tier == 13
     assert STONE_FLESH.stops == 4 and STONE_FLESH.st_cost == 2
     assert STONE_FLESH.continuing and STONE_FLESH.renew_cost == 1
-    assert set(SPELLS) == {"magic_fist", "stone_flesh"}
+    # Staff (spell-reference lines 25-26): IQ 8, Special, 5 ST if cast in-game.
+    assert STAFF_SPELL.type == "S" and STAFF_SPELL.iq_tier == 8
+    assert STAFF_SPELL.st_cost == 5 and not STAFF_SPELL.continuing
+    assert set(SPELLS) == {"magic_fist", "staff", "stone_flesh"}

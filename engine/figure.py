@@ -32,6 +32,7 @@ from .rules_data import (
     LEATHER,
     NO_ARMOR,
     NO_SHIELD,
+    STAFF,
     Shield,
     Weapon,
 )
@@ -323,6 +324,20 @@ class Figure:
         """A figure that is conscious and not dead may take options."""
         return not self.collapsed and not self.dead
 
+    @property
+    def unarmed_wizard(self) -> bool:
+        """A wizard with no weapon in hand — the one truly *unarmed* figure (p.9).
+
+        "The only 'unarmed' enemy in this game is a wizard who has no staff"
+        (Wizard p.9 / rules line 536): such a figure engages no one, so foes walk
+        past it freely (:func:`engine.facing.is_engaged_by`). Deliberately
+        NARROW: only a wizard (non-empty ``spells_known``) with nothing readied
+        qualifies. A fumble-disarmed *fighter* still engages (Melee-side
+        behaviour, unchanged), and a wizard who readies a real weapon — its
+        staff, or a dagger — is armed again.
+        """
+        return bool(self.spells_known) and self.ready_weapon is None
+
 
 # The per-turn flags reset at end of turn, listed once (name -> reset default) so
 # end_turn, the figure rebuild (board.views._update_figure), and the save/load
@@ -460,11 +475,26 @@ def create_wizard(
         intelligence: IQ -- gates which spells and how many the wizard may know.
         spells_known: Spell ids (see :mod:`engine.spells`); empty means an
             unarmed-of-magic figure, which then behaves exactly like a fighter.
-        has_staff: Whether the wizard began with a staff (the Staff spell, p.19).
+        has_staff: Force-grant a staff without the spell (direct engine callers
+            only). Normally derived: knowing the Staff spell ("staff" in
+            ``spells_known``) is what grants a staff (p.19), so the editor's
+            spell picker is the one way to gain or lose it.
         **gear: Armour/shield/weapons, as for :func:`create_fighter`.
     """
+    spells = list(spells_known or [])
+    # "If he knows the Staff spell, he starts the game with a staff, without
+    # expending any ST to create it" (Wizard p.19, rules lines 940-942): equip
+    # the Staff weapon, readied, at build. The staff is the ONE weapon a wizard
+    # may hold and still cast (engine.state.cast_block_reason passes it).
+    grants_staff = bool(has_staff) or "staff" in spells
+    if grants_staff:
+        gear = dict(gear)
+        weapons = list(gear.get("weapons") or [])
+        weapons.append(STAFF)
+        gear["weapons"] = weapons
+        gear["ready_weapon"] = STAFF
     return Figure(
         name=name, strength=strength, dexterity=dexterity, side=side,
         race=Race.HUMAN, intelligence=intelligence,
-        spells_known=list(spells_known or []), has_staff=has_staff, **gear,
+        spells_known=spells, has_staff=grants_staff, **gear,
     )

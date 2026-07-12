@@ -2126,17 +2126,16 @@ const ARCHETYPES = {
   ],
 };
 
-// The minimal demo wizard (Gate 2). ST + DX + IQ = 32, each >= 8 (the 3-attribute
+// The default fielded wizard. ST + DX + IQ = 32, each >= 8 (the 3-attribute
 // wizard spread, TFT: Wizard p.3-4). IQ 13 is chosen deliberately so the preset can
-// field BOTH gate-2 spells: Magic Fist is IQ 8 (a starter wizard could cast it) but
-// Stone Flesh is IQ 13. A default IQ-8 wizard could only field Magic Fist — this
-// spell-tier point is flagged for Spencer. Casts bare-handed (no ready weapon/shield,
-// p.23), so `cast_block_reason` clears it to cast from turn 1. The full live-gated
-// spell-picker is Gate 3; this is the one-button minimal path to field a wizard.
+// field all three starter spells: Magic Fist and Staff are IQ 8, Stone Flesh is
+// IQ 13. Knowing Staff starts it with a staff in hand (p.19) — the one weapon
+// that does not block casting — so `cast_block_reason` clears it to cast from
+// turn 1 and it can still strike/parry/engage. Mirrors board.scenario.WIZARD_PRESET.
 const WIZARD_ARCHETYPE = {
   name: "Wizard", char_class: "Wizard",
   strength: 9, dexterity: 10, intelligence: 13,
-  armor: "None", spells: ["magic_fist", "stone_flesh"],
+  armor: "None", spells: ["magic_fist", "staff", "stone_flesh"],
 };
 let CAT = null, RULES = null;
 const isWizardCard = card => !!card.querySelector("[data-spells]");

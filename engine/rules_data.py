@@ -89,6 +89,21 @@ MORNINGSTAR = Weapon("Morningstar", DamageDice(2, 1), 13)
 TWO_HANDED_SWORD = Weapon("Two-handed sword", DamageDice(3, -1), 14, two_handed=True)
 BATTLEAXE = Weapon("Battleaxe", DamageDice(3, 0), 15, two_handed=True)
 
+# The wizard's staff (TFT: Wizard, "The Wizard's Staff", p.19 / rules lines
+# 937-951). "It does one die of damage when the wizard hits with it. Striking
+# with the staff is treated just as though the wizard were a fighter using a
+# one-die weapon. It costs no ST to strike with a staff." -> 1d damage, reach 1,
+# not throwable, no ST requirement. (The "costs no ST" clause is a no-op in this
+# engine: NO weapon strike drains ST under the classic ruleset — only casting
+# does — so the staff needs no special exemption; recorded here so the rule is
+# auditable.) Deliberately NOT in the WEAPONS catalog below: "Fighters cannot
+# carry magical staffs" (p.23 / line 1162), and the catalog is exactly what the
+# fighter editor offers and chargen accepts, so keeping the staff out makes a
+# fighter spec naming it fail as "unknown weapon". A wizard gets one only by
+# knowing the Staff spell (engine.spells.STAFF_SPELL -> engine.figure.create_wizard).
+STAFF = Weapon("Staff", DamageDice(1, 0), 0,
+               notes="a wizard's magical staff — wizards only (Wizard p.19)")
+
 # pole weapons (Pole Weapon rules, p.12)
 JAVELIN = Weapon("Javelin", DamageDice(1, -1), 9, kind=WeaponKind.POLE,
                  throwable=True, notes="too short to jab")

@@ -15,11 +15,15 @@ Table) and, for the missile cap and casting mechanics,
 cited on each field so a value is auditable against the rulebook (#229/#270: no
 fabricated numbers).
 
-This gate ships two spells, one per new engine seam:
+The catalog ships three spells, one per engine seam:
 
 * **Magic Fist** -- a Missile spell (flight/line + damage-per-ST).
 * **Stone Flesh** -- a Thrown, continuing protection spell (folds into
   ``Ruleset.absorbed`` as extra hit-stopping, renewed each turn).
+* **Staff** -- a Special spell: knowing it means the wizard *starts the game
+  with a staff in hand* at no ST cost (rules p.19); the staff itself is the
+  ``Staff`` weapon in :mod:`engine.rules_data`, granted by
+  :func:`engine.figure.create_wizard`.
 """
 from __future__ import annotations
 
@@ -104,6 +108,26 @@ MAGIC_FIST = Spell(
     damage_per_st=-2,
 )
 
+# --- Staff ------------------------------------------------------------------
+# Spell-reference line 7 ("IQ 8 SPELLS" heading) -> iq_tier 8.
+# Spell-reference lines 25-26: "Staff (S): This spell is used to make any piece
+#   of wood into a staff (see The Wizard's Staff). This spell is rarely used
+#   during a game, because any wizard who knows it can start the game with a
+#   staff. If used during a game, its ST cost is 5."
+#   -> type SPECIAL ("(S)"), st_cost 5 (the in-game cost only).
+# Rules lines 940-942: "If he knows the Staff spell, he starts the game with a
+#   staff, without expending any ST to create it." The start-of-game grant is
+#   the mechanic the engine implements (engine.figure.create_wizard equips the
+#   staff weapon when this spell is known); the rare in-game re-creation of a
+#   broken staff is not modelled — a wizard whose staff breaks does without.
+STAFF_SPELL = Spell(
+    id="staff",
+    name="Staff",
+    type=SPECIAL,
+    iq_tier=8,
+    st_cost=5,
+)
+
 # --- Stone Flesh ----------------------------------------------------------
 # Spell-reference: Stone Flesh sits at line 204, between the "IQ 13 SPELLS"
 #   heading (line 172) and "IQ 14 SPELLS" (line 217) -> iq_tier 13.
@@ -129,7 +153,7 @@ STONE_FLESH = Spell(
 # The spells this gate ships, keyed by id -- the single source both chargen's
 # catalog and the resolve path read (a wizard's ``spells_known`` holds ids).
 SPELLS: dict[str, Spell] = {
-    spell.id: spell for spell in (MAGIC_FIST, STONE_FLESH)
+    spell.id: spell for spell in (MAGIC_FIST, STAFF_SPELL, STONE_FLESH)
 }
 
 

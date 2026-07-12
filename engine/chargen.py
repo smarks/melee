@@ -332,6 +332,13 @@ def _build_wizard(spec: dict) -> Figure:
     A wizard casts bare-handed: it carries a Dagger but readies no weapon and
     slings any shield (p.23), so :func:`engine.state.cast_block_reason` clears it
     to cast from the first turn. Armour is honoured (a wizard may wear it, p.23).
+
+    The staff comes from the SPELL LIST alone: a wizard who knows the Staff
+    spell starts with a staff readied (p.19) — :func:`create_wizard` derives
+    ``has_staff`` and equips the weapon — so picking/unpicking the Staff spell
+    in the editor is the one way to gain or lose it. Any ``has_staff`` key in
+    the spec (the edit_spec round-trip carries one for display) is deliberately
+    ignored here, or an edit that removed the spell would keep a stale staff.
     """
     armor = _from_catalog(ARMORS, spec.get("armor") or "None", "armour")
     figure = create_wizard(
@@ -341,7 +348,6 @@ def _build_wizard(spec: dict) -> Figure:
         intelligence=_required(spec, "intelligence"),
         side=_required(spec, "side"),
         spells_known=list(spec.get("spells") or []),
-        has_staff=bool(spec.get("has_staff", False)),
         armor=armor, shield=SHIELDS["None"], weapons=[DAGGER],
         ready_weapon=None, shield_ready=False,
     )

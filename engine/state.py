@@ -140,8 +140,10 @@ class PendingCast:
 
 
 # A wizard's staff is the ONLY weapon it may hold and still cast (Wizard p.19,
-# p.23). The Staff spell / staff weapon arrives in Gate 3; until then a wizard
-# casts bare-handed, so any ready weapon blocks a cast.
+# p.23): "A wizard who has a staff may keep it in hand at all times, even when
+# he is casting spells" (rules lines 947-948). A wizard who knows the Staff
+# spell starts with the staff readied (engine.figure.create_wizard); any OTHER
+# ready weapon still blocks a cast.
 STAFF_WEAPON_NAME = "Staff"
 
 
@@ -578,8 +580,10 @@ class _MovementMixin:
             # ``is_engaged_by`` / ``zone_toward``, which treat a prone figure as
             # having no front), so a mover is not forced to halt entering its
             # "front" hex. A KNEELING enemy keeps its front and its stop-hexes
-            # per Spencer's rulebook ruling (#354).
-            if enemy.posture == Posture.PRONE:
+            # per Spencer's rulebook ruling (#354). A staffless wizard is
+            # *unarmed* (Wizard p.9) and engages no one either, so its front
+            # hexes don't stop a mover — matching ``is_engaged_by``.
+            if enemy.posture == Posture.PRONE or enemy.unarmed_wizard:
                 continue
             fronts.update(front_hexes(self.arena.layout, enemy))
         return fronts
@@ -828,12 +832,36 @@ class _MovementMixin:
         if pending.thrown:
             self._discard_thrown(pending.attacker, landing_hex)
 
+    def _may_take_dropped(self, figure: Figure, weapon) -> bool:
+        """Whether ``figure`` may take ``weapon`` off the ground (option q).
+
+        Any dropped weapon may be recovered — except a wizard's staff. "If
+        anyone other than the owner of a staff picks it up against his will, it
+        explodes, doing the fool who touched it 3 dice damage. A dead wizard's
+        staff eventually becomes safer to touch. You don't know when." (Wizard
+        p.19, rules lines 950-952.) The zap's mechanics are deliberately vague
+        (you never know when it becomes safe), so the simple faithful cut is:
+        a non-owner simply cannot pick a staff up; the owner can — a wizard who
+        dropped his staff (HTH, a 17 fumble) recovers it like any weapon.
+        Ownership is keyed on ``has_staff`` (the wizard who started with one):
+        exact for the one-staffed-wizard board; two staffed wizards' identical
+        staffs are indistinguishable, an accepted edge.
+        """
+        if weapon.name != STAFF_WEAPON_NAME:
+            return True
+        return figure.has_staff
+
     def dropped_in_reach(self, figure: Figure) -> list:
-        """Dropped weapons in ``figure``'s hex or an adjacent one (option q)."""
+        """Dropped weapons in ``figure``'s hex or an adjacent one (option q).
+
+        Only what ``figure`` may actually take: a wizard's dropped staff is
+        never offered to a non-owner (see :meth:`_may_take_dropped`).
+        """
         if figure.position is None:
             return []
         reach = {figure.position, *self.arena.neighbors(figure.position)}
-        return [weapon for hex_pos, weapon in self.dropped if hex_pos in reach]
+        return [weapon for hex_pos, weapon in self.dropped
+                if hex_pos in reach and self._may_take_dropped(figure, weapon)]
 
     def pick_up_weapon(self, figure: Figure, weapon_name: str) -> None:
         """Take a named dropped weapon in reach, dropping the current one (p.7, q)."""
@@ -844,6 +872,11 @@ class _MovementMixin:
                       if weapon.name == weapon_name and hex_pos in reach), None)
         if entry is None:
             raise IllegalAction(f"no {weapon_name} within reach to pick up")
+        if not self._may_take_dropped(figure, entry[1]):
+            # A non-owner cannot take a wizard's staff (Wizard p.19 — it would
+            # occult-zap the fool who touched it; see _may_take_dropped).
+            raise IllegalAction(
+                f"{figure.name} cannot take a wizard's staff — it is not theirs")
         if figure.ready_weapon is not None:        # drop what you're holding first
             if figure.ready_weapon in figure.weapons:
                 figure.weapons.remove(figure.ready_weapon)
