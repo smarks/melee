@@ -2211,6 +2211,9 @@ class _CombatMixin:
             figure.dead = True
         elif status == UNCONSCIOUS:
             figure.unconscious = True
+            # It falls unconscious — a body on the map goes prone (#423), same
+            # as the hit path in :meth:`_apply`.
+            figure.posture = Posture.PRONE
         elif status == KNOCKDOWN:
             figure.posture = Posture.PRONE
             figure.knocked_down_this_turn = True
@@ -2459,6 +2462,12 @@ class _CombatMixin:
             target.dead = True
         elif status == UNCONSCIOUS:
             target.unconscious = True
+            # It FALLS unconscious (p.3): the figure is now a body on the map
+            # (``_body_hexes`` already counts it), so its posture goes prone —
+            # one source of truth, and the renderer draws it sprawled with no
+            # facing wedge instead of an upright, faced token (#423). It is
+            # never offered STAND UP: ``can_act`` is False while collapsed.
+            target.posture = Posture.PRONE
         elif status == KNOCKDOWN:
             target.posture = Posture.PRONE
             # Knocked down by damage this turn: it "may not attack that turn" if
