@@ -73,6 +73,33 @@ class Arena:
     def distance(self, start: Hex, end: Hex) -> int:
         return self.layout.distance(start, end)
 
+    def ray_past(self, start: Hex, target: Hex) -> list[Hex]:
+        """The hexes a straight flight from ``start`` through ``target`` enters
+        BEYOND the target, in order, extended well past the field edge.
+
+        Repeatedly stepping one neighbor direction index is NOT straight on
+        this offset grid — the continuation bends at the target instead of
+        following the true ``start``->``target`` line — so the flight is
+        extended far past the field in CUBE space and walked with the standard
+        hex lerp (#417, #429). The lerp fractions of the extended line
+        reproduce the original ``start``->``target`` hexes exactly, so the
+        continuation agrees with the lane already walked. Off-field hexes are
+        included; callers stop at the first hex the field does not contain.
+
+        The one straight-line-of-flight geometry, shared by the missile-spell
+        fly-on (:meth:`engine.state.GameState._spell_fly_on`) and the weapon
+        fly-on (:meth:`engine.state.GameState._flight_fly_on`).
+        """
+        span = self.layout.distance(start, target)
+        scale = (self.cols + self.rows) // span + 2
+        cube_start = self.layout.to_cube(start)
+        cube_target = self.layout.to_cube(target)
+        far = self.layout.from_cube(
+            *(start_component + (target_component - start_component) * scale
+              for start_component, target_component
+              in zip(cube_start, cube_target)))
+        return self.layout.line(start, far)[span + 1:]
+
     # ---- entrance hexes (Section V) ----
     @property
     def north_entrances(self) -> list[Hex]:

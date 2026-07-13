@@ -818,13 +818,16 @@ class _MovementMixin:
     ) -> None:
         """Phase 3: a clean miss flies on up to ten hexes (p.15), striking the
         first figure it does not miss; otherwise it spends itself and lands by the
-        target."""
+        target.
+
+        The stray follows the exact attacker->target line continued past the
+        target (:meth:`Arena.ray_past` — the cube-space ray shared with the
+        missile-spell fly-on), not a fixed neighbor direction stepped from the
+        lane's last hex, which bends at the target with column parity on this
+        offset grid (#429)."""
         attacker = pending.attacker
         layout = self.arena.layout
-        direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
-        current = target.position
-        for _ in range(10):
-            current = layout.neighbor(current, direction)
+        for current in self.arena.ray_past(attacker.position, target.position)[:10]:
             if not self.arena.contains(current):
                 break
             figure = held.get(current)
@@ -2443,20 +2446,10 @@ class _CombatMixin:
         """
         caster, target = pending.caster, pending.target
         layout = self.arena.layout
-        # Extend the caster->target ray far past the field in CUBE space and
-        # walk the exact straight line. (Repeatedly stepping one neighbor
-        # direction index is NOT straight on this offset grid — the same index
-        # zigzags rows with column parity — so the rulebook's "continues along
-        # the straight line" is the scaled cube ray.) The lerp fractions of the
-        # extended line reproduce the original caster->target hexes exactly, so
-        # the continuation agrees with the phase-1 lane.
-        span = layout.distance(caster.position, target.position)
-        scale = (self.arena.cols + self.arena.rows) // span + 2
-        cube_start = layout.to_cube(caster.position)
-        cube_end = layout.to_cube(target.position)
-        far = layout.from_cube(*(start + (end - start) * scale
-                                 for start, end in zip(cube_start, cube_end)))
-        for current in layout.line(caster.position, far)[span + 1:]:
+        # The rulebook's "continues along the straight line" is the exact
+        # cube-space ray past the target — :meth:`Arena.ray_past`, the one
+        # line-of-flight geometry shared with the weapon fly-on (#417, #429).
+        for current in self.arena.ray_past(caster.position, target.position):
             if not self.arena.contains(current):
                 return None                     # out over the edge of the field
             megahexes = megahex_distance(layout, caster.position, current)

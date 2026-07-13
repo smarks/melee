@@ -1574,6 +1574,113 @@ def test_missile_that_misses_flies_on_and_is_never_picked_up() -> None:
     assert archer.ready_weapon == SMALL_BOW               # the bow itself is kept
 
 
+# ---- fly-on geometry (#429): the stray follows the TRUE shooter->target ray ----
+# Hand-computed rays (flat-top odd-q; to_cube: x=col-1, z=row-1-(x-parity)//2):
+#   (1,1)->(2,3): cube (0,0,0)->(1,-3,2), span 3. Continuation fractions 4/3,
+#     5/3, 2, 7/3 round to cubes (1,-4,3), (2,-5,3), (2,-6,4), (2,-7,5) =
+#     offset (2,4), (3,5), (3,6), (3,7).   [even target column]
+#   (1,1)->(3,3): cube (0,0,0)->(2,-3,1), span 3. Fractions 4/3, 5/3, 2, 7/3
+#     round to (3,-4,1), (3,-5,2), (4,-6,2), (5,-7,2) = offset (4,3), (4,4),
+#     (5,5), (6,5).                        [odd target column]
+# The pre-#429 code instead stepped the lane's LAST neighbor direction from the
+# target forever, bending the flight at the target: (1,1)->(2,3) continued
+# straight down column 2 ((2,4),(2,5),(2,6)...), and (1,1)->(3,3) continued
+# (4,3),(5,4),(6,4)... — both leave the true line after one hex.
+
+def test_ray_past_walks_the_true_line_on_both_column_parities() -> None:
+    """Arena.ray_past continues the exact shooter->target cube ray (#429),
+    against the hand-computed hexes above, on both target column parities."""
+    arena = Arena(cols=9, rows=15)
+    even_column = arena.ray_past(Hex(1, 1), Hex(2, 3))
+    assert even_column[:4] == [Hex(2, 4), Hex(3, 5), Hex(3, 6), Hex(3, 7)]
+    odd_column = arena.ray_past(Hex(1, 1), Hex(3, 3))
+    assert odd_column[:4] == [Hex(4, 3), Hex(4, 4), Hex(5, 5), Hex(6, 5)]
+    # The continuation is a connected straight walk: every hex adjacent to the
+    # one before, starting from the target itself.
+    for start, target in ((Hex(1, 1), Hex(2, 3)), (Hex(1, 1), Hex(3, 3))):
+        walk = [target] + arena.ray_past(start, target)[:10]
+        assert all(LAYOUT.distance(one, two) == 1
+                   for one, two in zip(walk, walk[1:]))
+
+
+def _stray_shot_setup(target_hex, victim_hex, decoy_hex):
+    """An archer at (1,1) misses its target; a victim stands on the TRUE ray
+    beyond the target and a decoy on the pre-#429 bent path. Dice: 6+6+4=16
+    cleanly misses the aimed shot (not a 17/18 fumble), then 2+2+2=6 lets the
+    stray strike the victim (needs <= adjDX 12 - distance 5 = 7)."""
+    from engine.rules_data import LIGHT_CROSSBOW
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 12, 12, "a",
+                          weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    target = create_human("Target", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    victim = create_human("Victim", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    decoy = create_human("Decoy", 12, 12, "b",
+                         weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(1, 1)
+    target.position = target_hex
+    victim.position = victim_hex
+    decoy.position = decoy_hex
+    _aim(archer, target)  # aim along the line of fire
+    state = GameState(arena, [archer, target, victim, decoy],
+                      dice=Dice(scripted=[6, 6, 4, 2, 2, 2] + [3] * 12))
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, target)
+    state.resolve_combat()
+    return target, victim, decoy
+
+
+def test_stray_missile_follows_the_true_ray_even_target_column() -> None:
+    """(1,1)->(2,3) missed: the stray enters (2,4) then (3,5) — the true ray —
+    not the pre-#429 bent path straight down column 2 (#429)."""
+    target, victim, decoy = _stray_shot_setup(
+        target_hex=Hex(2, 3), victim_hex=Hex(3, 5), decoy_hex=Hex(2, 5))
+    assert target.damage_taken == 0                       # the aimed shot missed
+    assert victim.damage_taken > 0                        # struck on the true ray
+    assert decoy.damage_taken == 0                        # the bent path is not flown
+
+
+def test_stray_missile_follows_the_true_ray_odd_target_column() -> None:
+    """(1,1)->(3,3) missed: the stray enters (4,3) then (4,4) — the true ray —
+    not the pre-#429 bent path (4,3),(5,4),(6,4) (#429)."""
+    target, victim, decoy = _stray_shot_setup(
+        target_hex=Hex(3, 3), victim_hex=Hex(4, 4), decoy_hex=Hex(5, 4))
+    assert target.damage_taken == 0                       # the aimed shot missed
+    assert victim.damage_taken > 0                        # struck on the true ray
+    assert decoy.damage_taken == 0                        # the bent path is not flown
+
+
+def test_weapon_fly_on_uses_the_shared_ray_past_helper(monkeypatch) -> None:
+    """DRY (#429): the weapon fly-on routes through Arena.ray_past — the one
+    line-of-flight geometry it shares with the missile-spell fly-on — so the
+    two paths can never disagree again."""
+    import engine.arena as arena_module
+    from engine.rules_data import LIGHT_CROSSBOW
+    calls: list[tuple[Hex, Hex]] = []
+    original = arena_module.Arena.ray_past
+
+    def recording(self, start, target):
+        calls.append((start, target))
+        return original(self, start, target)
+
+    arena = Arena(cols=9, rows=15)
+    archer = create_human("Archer", 12, 12, "a",
+                          weapons=[LIGHT_CROSSBOW], ready_weapon=LIGHT_CROSSBOW)
+    target = create_human("Target", 12, 12, "b",
+                          weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    archer.position = Hex(1, 1)
+    target.position = Hex(2, 3)
+    _aim(archer, target)
+    state = GameState(arena, [archer, target],
+                      dice=Dice(scripted=[6, 6, 4] + [3] * 12))
+    archer.current_option = Option.MISSILE_ATTACK
+    state.queue_attack(archer, target)
+    monkeypatch.setattr(arena_module.Arena, "ray_past", recording)
+    state.resolve_combat()
+    assert calls == [(Hex(1, 1), Hex(2, 3))]              # the weapon path used it
+
+
 def _shield_rush_setup(rusher_st, rusher_dx, foe_st, foe_dx, dice):
     """A shield-bearing rusher squarely facing an adjacent foe in its front."""
     from engine.rules_data import DAGGER, SMALL_SHIELD
