@@ -345,7 +345,10 @@ def narrate_dropout(figure: Figure) -> str:
 
 
 def narrate_ready(figure: Figure, weapon) -> str:
-    """A figure drawing a different carried weapon."""
+    """A figure drawing a different carried weapon — or, with ``weapon`` None,
+    re-slinging what it held to stand bare-handed (#425)."""
+    if weapon is None:
+        return _cap(f"{_name(figure)} re-slings its weapon and readies bare hands.")
     return _cap(f"{_name(figure)} readies {_article(weapon.name)}.")
 
 

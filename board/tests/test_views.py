@@ -2410,6 +2410,35 @@ def test_api_options_reports_is_missile_false_for_a_melee_fighter(
         del GAMES["options-melee"]
 
 
+def test_api_options_offers_bare_hands_among_the_ready_choices(
+        client: Client) -> None:
+    # #425: the options payload carries the engine's ready_choices — carried
+    # weapons plus "(bare hands)" when something is in hand to re-sling — so a
+    # staffless wizard's weapon selector shows the choice that clears its cast.
+    from board.views import GAMES
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD, NO_ARMOR
+    from engine.state import BARE_HANDS_CHOICE, GameState
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=15, rows=15)
+    knight = create_human("Knight", 12, 12, "red",
+                          weapons=[BROADSWORD], ready_weapon=BROADSWORD, armor=NO_ARMOR)
+    knight.position, knight.uid = Hex(5, 5), "knight"
+    GAMES["options-barehands"] = {"state": GameState(arena, [knight]),
+                                  "profile": "Classic Melee", "phase": "combat"}
+    try:
+        data = client.get("/api/game/options-barehands/options?uid=knight").json()
+        assert data["ready_choices"] == ["Broadsword", BARE_HANDS_CHOICE]
+        # Nothing in hand -> no phantom bare-hands row.
+        GAMES["options-barehands"]["state"].figures[0].ready_weapon = None
+        data = client.get("/api/game/options-barehands/options?uid=knight").json()
+        assert data["ready_choices"] == ["Broadsword"]
+    finally:
+        del GAMES["options-barehands"]
+
+
 def test_poll_can_omit_the_immutable_layout(client: Client) -> None:
     # #256: the hex layout never changes after game creation, so a poll that
     # already has it requests ?layout=0 and the server omits it — while still

@@ -162,6 +162,15 @@ class PendingCast:
 # ready weapon still blocks a cast.
 STAFF_WEAPON_NAME = "Staff"
 
+# The explicit "ready nothing" choice for a weapon switch (#425): the figure
+# re-slings its ready weapon — it stays carried, nothing drops to the ground —
+# and stands bare-handed. This wires the rules' "the weapon must be dropped or
+# re-slung" alternative (Wizard p.23, rules lines 1159-1162) for the STAFFLESS
+# wizard whose readied weapon blocks its casting with no staff to swap to.
+# Offered to ANY figure with a weapon in hand: the rulebook puts no class gate
+# on re-slinging; a fighter simply has no reason to use it.
+BARE_HANDS_CHOICE = "(bare hands)"
+
 
 def cast_block_reason(figure: Figure) -> str | None:
     """Why ``figure`` may not cast a spell right now, or ``None`` if it may (p.23).
@@ -1570,9 +1579,29 @@ class _ShieldRushMixin:
                 f"the arena or hit another figure"
             )
 
+    def ready_choices(self, figure: Figure) -> list[str]:
+        """What a Ready Weapon / Change Weapons switch may ready: every carried
+        weapon, plus :data:`BARE_HANDS_CHOICE` when something is in hand to
+        re-sling (#425). The single source for the client's weapon selector, so
+        the menu and :meth:`_validate_ready` can never drift."""
+        choices = [carried.name for carried in figure.weapons]
+        if figure.ready_weapon is not None:
+            choices.append(BARE_HANDS_CHOICE)
+        return choices
+
     def _validate_ready(self, figure: Figure, option: Option, weapon_name: str) -> None:
         """Check a weapon switch is legal, mutating nothing. Called both up front
         (before the board is touched, #77) and again inside :meth:`_ready_weapon`."""
+        if weapon_name == BARE_HANDS_CHOICE:
+            # Readying bare hands (#425): re-sling whatever is in hand. Legal on
+            # the same two switch options as any weapon change; meaningless — so
+            # rejected — when nothing is readied.
+            if option not in (Option.READY_WEAPON, Option.CHANGE_WEAPONS):
+                raise IllegalAction(f"{option.value} cannot change weapons")
+            if figure.ready_weapon is None:
+                raise IllegalAction(
+                    f"{figure.name} has nothing readied to re-sling")
+            return
         weapon = next((w for w in figure.weapons if w.name == weapon_name), None)
         # A Halfling "may throw any weapon on the same turn he readies it" (p.22):
         # readying ordinarily ends the action, but a halfling may ready a
@@ -1590,8 +1619,14 @@ class _ShieldRushMixin:
             raise IllegalAction("cannot ready a missile weapon while engaged")
 
     def _ready_weapon(self, figure: Figure, option: Option, weapon_name: str) -> None:
-        """Switch ``figure``'s ready weapon to a carried one (Section IV e/m)."""
+        """Switch ``figure``'s ready weapon to a carried one (Section IV e/m) —
+        or, for :data:`BARE_HANDS_CHOICE`, re-sling it and ready bare hands
+        (#425): the weapon stays carried, nothing drops to the ground."""
         self._validate_ready(figure, option, weapon_name)
+        if weapon_name == BARE_HANDS_CHOICE:
+            figure.ready_weapon = None
+            self.log.append(narrate_ready(figure, None))
+            return
         weapon = next(w for w in figure.weapons if w.name == weapon_name)
         figure.ready_weapon = weapon
         if weapon.two_handed and figure.shield_ready:
