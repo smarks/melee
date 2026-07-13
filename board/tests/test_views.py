@@ -2792,3 +2792,55 @@ def test_must_cast_excludes_a_wizard_whose_hands_are_not_free() -> None:
     # With the staff back in hand the same declared cast DOES gate Resolve.
     wizard.ready_weapon = next(w for w in wizard.weapons if w.name == "Staff")
     assert _must_cast(state) == [wizard.uid]
+
+
+def test_rejected_cast_after_a_move_keeps_the_taken_option(client: Client) -> None:
+    # #413: _act_cast_spell may not stamp CAST over the option the figure actually
+    # took. A wizard that spent movement this turn gets a clean 400 — and keeps its
+    # MOVE option, so the #409 must_cast Resolve gate is not stranded on a cast
+    # that can never happen.
+    import json
+
+    from board.views import GAMES, _must_cast
+    from engine.options import Option
+
+    wizard, blue = _wizard_duel()
+    try:
+        wizard.current_option = Option.MOVE
+        wizard.moved_this_turn = wizard.movement_allowance      # a full-MA move
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "cast_spell", "uid": wizard.uid,
+                                           "spell": "magic_fist",
+                                           "target": blue.uid}),
+                          content_type="application/json")
+        assert out.status_code == 400 and "error" in out.json()
+        assert wizard.current_option == Option.MOVE             # not stamped CAST
+        state = GAMES["duel-test"]["state"]
+        assert not state._pending_casts
+        assert wizard.uid not in _must_cast(state)              # gate not stranded
+    finally:
+        del GAMES["duel-test"]
+
+
+def test_rejected_attack_after_a_full_move_keeps_the_taken_option(client: Client) -> None:
+    # #413: the attack side of the same seam — _ensure_attack_option may not flip
+    # a full-MA MOVE into a charge attack ("a figure can never attack if it moved
+    # more than half its MA"). The declaration 400s and the option stands.
+    import json
+
+    from board.views import GAMES
+    from engine.options import Option
+
+    wizard, blue = _wizard_duel(spells=["magic_fist", "staff"])  # staff in hand
+    try:
+        wizard.current_option = Option.MOVE
+        wizard.moved_this_turn = wizard.movement_allowance      # a full-MA move
+        out = client.post("/api/game/duel-test/action",
+                          data=json.dumps({"type": "queue_attack", "uid": wizard.uid,
+                                           "target": blue.uid}),
+                          content_type="application/json")
+        assert out.status_code == 400 and "error" in out.json()
+        assert wizard.current_option == Option.MOVE             # not stamped attack
+        assert not GAMES["duel-test"]["state"]._pending
+    finally:
+        del GAMES["duel-test"]

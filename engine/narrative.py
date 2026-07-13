@@ -154,6 +154,23 @@ def narrate_status(target: Figure, status: str | None) -> str | None:
     return None
 
 
+def narrate_cast_lost(caster: Figure, spell, reason: str) -> str:
+    """One truthful line for a queued cast that never happened.
+
+    ``reason`` is ``"knocked_down"`` (floored before its turn to act, rules lines
+    250-251, #416) or ``"too_weak"`` (wounded below the declared ST since
+    declaring, rules lines 167-169, #415). Either way no dice were rolled and no
+    ST was drained — the line says so, so the log stays auditable.
+    """
+    caster_name = _name(caster)
+    if reason == "knocked_down":
+        return _cap(
+            f"{caster_name} is down — the {spell.name} is lost, uncast.")
+    return _cap(
+        f"{caster_name} is too weakened to power {spell.name} — "
+        f"the spell fizzles harmlessly, costing nothing.")
+
+
 def narrate_spell(caster: Figure, target: Figure, result: SpellResult) -> str:
     """One truthful line for a cast's outcome (TFT: Wizard).
 

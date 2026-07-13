@@ -67,7 +67,8 @@ from engine.rules_data import (
     WeaponKind,
 )
 from engine.ruleset import Ruleset
-from engine.state import GameState, PendingAttack
+from engine.spells import SPELLS
+from engine.state import GameState, PendingAttack, PendingCast
 from engine.tarmar import TarmarFigure, TarmarRuleset
 
 from .geometry import layout
@@ -420,6 +421,74 @@ def _pending_from_json(data: dict, by_uid: dict[str, Figure]) -> PendingAttack:
     return PendingAttack(**kwargs)
 
 
+# ---- pending casts ----------------------------------------------------------
+# The cast mirror of the PendingAttack machinery above (#420): driven off the
+# PendingCast dataclass so a newly added field is persisted by default (the
+# #245-class drift), with the same round-trip test asserting the persisted key
+# set equals the dataclass field set. Figures ride by uid; the spell rides by
+# its catalog id (engine.spells.SPELLS); everything else is a JSON-safe scalar.
+
+# Fields holding a Figure — persisted by uid, restored via the by-uid map.
+_PENDING_CAST_FIGURE_FIELDS = ("caster", "target")
+# Fields holding a catalog Spell singleton — persisted by id.
+_PENDING_CAST_SPELL_FIELDS = ("spell",)
+_PENDING_CAST_SPECIAL_FIELDS = (
+    _PENDING_CAST_FIGURE_FIELDS + _PENDING_CAST_SPELL_FIELDS
+)
+
+_PENDING_CAST_FIELD_NAMES = tuple(
+    field.name for field in dataclasses.fields(PendingCast))
+_PENDING_CAST_SCALAR_FIELDS = tuple(
+    name for name in _PENDING_CAST_FIELD_NAMES
+    if name not in _PENDING_CAST_SPECIAL_FIELDS
+)
+_PENDING_CAST_SCALAR_DEFAULTS = {
+    field.name: field.default
+    for field in dataclasses.fields(PendingCast)
+    if field.name in _PENDING_CAST_SCALAR_FIELDS
+}
+
+# Guard against a special-field list that names a field the dataclass no longer
+# has (a rename/removal) — fail at import, not with a confusing KeyError later.
+if not set(_PENDING_CAST_SPECIAL_FIELDS) <= set(_PENDING_CAST_FIELD_NAMES):
+    raise RuntimeError(
+        "PendingCast persistence names unknown fields: "
+        f"{sorted(set(_PENDING_CAST_SPECIAL_FIELDS) - set(_PENDING_CAST_FIELD_NAMES))}"
+    )
+
+
+def _pending_cast_to_json(pending: PendingCast) -> dict:
+    payload: dict = {}
+    for field_name in _PENDING_CAST_SCALAR_FIELDS:
+        payload[field_name] = getattr(pending, field_name)
+    for field_name in _PENDING_CAST_FIGURE_FIELDS:
+        figure = getattr(pending, field_name)
+        payload[field_name] = figure.uid if figure is not None else None
+    for field_name in _PENDING_CAST_SPELL_FIELDS:
+        spell = getattr(pending, field_name)
+        payload[field_name] = spell.id if spell is not None else None
+    return payload
+
+
+def _pending_cast_from_json(data: dict, by_uid: dict[str, Figure]) -> PendingCast:
+    kwargs: dict = {}
+    for field_name in _PENDING_CAST_SCALAR_FIELDS:
+        default = _PENDING_CAST_SCALAR_DEFAULTS[field_name]
+        # Required scalars (no default) were always persisted; optional ones fall
+        # back to the dataclass default so earlier snapshots still load.
+        if default is dataclasses.MISSING:
+            kwargs[field_name] = data[field_name]
+        else:
+            kwargs[field_name] = data.get(field_name, default)
+    for field_name in _PENDING_CAST_FIGURE_FIELDS:
+        uid = data.get(field_name)
+        kwargs[field_name] = by_uid[uid] if uid is not None else None
+    for field_name in _PENDING_CAST_SPELL_FIELDS:
+        spell_id = data.get(field_name)
+        kwargs[field_name] = SPELLS[spell_id] if spell_id is not None else None
+    return PendingCast(**kwargs)
+
+
 # ---- game state -------------------------------------------------------------
 def _ruleset_name(ruleset: Ruleset) -> str:
     return _TARMAR if isinstance(ruleset, TarmarRuleset) else _CLASSIC
@@ -446,6 +515,11 @@ def state_to_json(state: GameState) -> dict:
             for hex_pos, weapon in state.dropped
         ],
         "pending": [_pending_to_json(pending) for pending in state._pending],
+        # Queued-but-unresolved casts round-trip like the attacks above, so a
+        # mid-combat autosave reload doesn't silently drop a declared spell (#420).
+        "pending_casts": [
+            _pending_cast_to_json(pending) for pending in state._pending_casts
+        ],
         "log": list(state.log),
     }
 
@@ -473,6 +547,11 @@ def state_from_json(data: dict) -> GameState:
     by_uid = {figure.uid: figure for figure in figures}
     state._pending = [
         _pending_from_json(pending, by_uid) for pending in data.get("pending", [])
+    ]
+    # Absent from snapshots taken before #420 — they load with no queued casts.
+    state._pending_casts = [
+        _pending_cast_from_json(pending, by_uid)
+        for pending in data.get("pending_casts", [])
     ]
     return state
 

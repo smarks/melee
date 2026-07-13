@@ -2730,3 +2730,82 @@ def test_plain_attack_grants_no_charge_or_shift_bonus() -> None:
     pending = state._pending[0]
     assert pending.damage_dice_bonus == 0                  # no pole-charge extra die
     assert pending.charge_resolve_first is False           # no strike-first priority
+
+
+# ---- movement/attack trade-off at declaration (#413) ------------------------
+
+def test_full_move_then_stamped_charge_attack_is_rejected() -> None:
+    # #413 repro: a 10-hex MOVE (full MA) whose option is overwritten to
+    # CHARGE_ATTACK in the combat phase. "A figure can never attack if it moved
+    # more than half its MA" (wizard-rules lines 273-274), so the queue rejects it.
+    arena = Arena(cols=16, rows=8)
+    mover = create_human("Runner", 12, 12, "red",
+                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe = create_human("Foe", 12, 12, "blue",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    mover.position, foe.position = Hex(2, 2), Hex(13, 2)
+    _aim(mover, foe)
+    state = GameState(arena, [mover, foe])
+    state.move(mover, Option.MOVE, path=[Hex(col, 2) for col in range(3, 13)])
+    assert mover.moved_this_turn == 10
+    mover.current_option = Option.CHARGE_ATTACK   # what _ensure_attack_option does
+    with pytest.raises(IllegalAction, match="too far to attack"):
+        state.queue_attack(mover, foe)
+
+
+def test_half_move_then_stamped_charge_attack_is_legal() -> None:
+    # The legitimate flow _ensure_attack_option exists for: a MOVE of at most
+    # half MA is charge-legal, so the combat-phase attack declaration stands.
+    arena = Arena(cols=16, rows=8)
+    mover = create_human("Runner", 12, 12, "red",
+                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe = create_human("Foe", 12, 12, "blue",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    mover.position, foe.position = Hex(2, 2), Hex(8, 2)
+    _aim(mover, foe)
+    state = GameState(arena, [mover, foe], dice=Dice(scripted=[3] * 8))
+    state.move(mover, Option.MOVE, path=[Hex(col, 2) for col in range(3, 8)])
+    assert mover.moved_this_turn == 5             # exactly half of MA 10
+    mover.current_option = Option.CHARGE_ATTACK
+    state.queue_attack(mover, foe)                # accepted
+    assert len(state._pending) == 1
+
+
+def test_dodge_then_stamped_attack_is_rejected() -> None:
+    # #413: "Neither of these options permits the casting of a spell or any sort
+    # of attack" (wizard-rules lines 1010-1011) — the dodging flag outlives an
+    # option overwrite, so the stamped attack is still rejected.
+    arena = Arena(cols=16, rows=8)
+    dodger = create_human("Dodger", 12, 12, "red",
+                          weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe = create_human("Foe", 12, 12, "blue",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    dodger.position, foe.position = Hex(2, 2), Hex(4, 2)
+    _aim(dodger, foe)
+    state = GameState(arena, [dodger, foe])
+    state.move(dodger, Option.DODGE)              # sets the dodging flag
+    dodger.current_option = Option.SHIFT_ATTACK   # what _ensure_attack_option does
+    with pytest.raises(IllegalAction, match="dodging"):
+        state.queue_attack(dodger, foe)
+
+
+def test_attack_candidates_honor_the_movement_already_taken() -> None:
+    # #413: attack_candidates feeds the UI's target rows (#362), so it must apply
+    # the same movement rule the queue enforces — otherwise the client is offered
+    # a "⚔ Attack"/"🏹 Shoot" row that can only be rejected. A full-MA mover gets
+    # no melee/ranged candidates; a half-MA (charge-legal) mover keeps them.
+    arena = Arena(cols=16, rows=8)
+    mover = create_human("Runner", 12, 12, "red",
+                         weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe = create_human("Foe", 12, 12, "blue",
+                       weapons=[SHORTSWORD], ready_weapon=SHORTSWORD)
+    mover.position, foe.position = Hex(2, 2), Hex(13, 2)
+    _aim(mover, foe)
+    state = GameState(arena, [mover, foe])
+    state.move(mover, Option.MOVE, path=[Hex(col, 2) for col in range(3, 13)])
+    candidates = state.attack_candidates(mover)     # moved 10: no attack left
+    assert candidates.melee == [] and candidates.ranged == []
+
+    mover.moved_this_turn = 5                       # exactly half its MA of 10
+    candidates = state.attack_candidates(mover)     # charge-legal: foe offered
+    assert foe in candidates.melee

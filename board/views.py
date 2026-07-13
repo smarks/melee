@@ -494,19 +494,34 @@ def _aim(state: GameState, attacker, target) -> None:
 
 def _ensure_attack_option(state: GameState, figure) -> None:
     """Give a figure declaring its attack in the combat phase a fitting attack
-    option, if it didn't already choose one during movement (e.g. a charge)."""
+    option, if it didn't already choose one during movement (e.g. a charge).
+
+    The replacement must be legal for what the figure already did this turn
+    (#413): a dodger/defender may neither attack nor cast (wizard-rules lines
+    1010-1011), and the movement already taken must fit the new option's own cap
+    (options.py movement_cap) — "a figure can never attack if it moved more than
+    half its MA". An illegal flip raises WITHOUT mutating the option, so the
+    figure's committed choice (and the Resolve gate) stays intact.
+    """
     option = figure.current_option
     if option is not None and spec(option).is_attack:
         return
     if option == Option.DISENGAGE:
         return                       # a disengaging figure moves, never attacks
-    weapon = figure.ready_weapon
-    if weapon is not None and weapon.kind == WeaponKind.MISSILE:
-        figure.current_option = (Option.ONE_LAST_SHOT if state.engaged(figure)
-                                 else Option.MISSILE_ATTACK)
-    else:
-        figure.current_option = (Option.SHIFT_ATTACK if state.engaged(figure)
-                                 else Option.CHARGE_ATTACK)
+    if option is not None and (spec(option).sets_dodge or spec(option).sets_defend):
+        raise IllegalAction(
+            f"{figure.name} chose {option.value} this turn and cannot attack")
+    # The one definition of "which attack option would this declaration run
+    # under" is the engine's (#413): attack_candidates gates the offered targets
+    # on the same answer, so the two can never diverge.
+    new_option = state.declarable_attack_option(figure)
+    budget = state.rules.movement_budget(
+        figure.movement_allowance, spec(new_option).movement_cap)
+    if figure.moved_this_turn > budget:
+        raise IllegalAction(
+            f"{figure.name} moved {figure.moved_this_turn} hex(es) this turn — "
+            f"too far to attack (at most {budget} for {new_option.value})")
+    figure.current_option = new_option
 
 
 def _human_has_attack_left(game: dict) -> bool:
@@ -1873,6 +1888,7 @@ def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False, owner_s
         distance = state.arena.distance(attacker.position, target.position)
         if weapon.kind == WeaponKind.MISSILE or (weapon.throwable and distance > 1):
             _aim(state, attacker, target)      # turn to aim the shot (#117)
+    prior_option = attacker.current_option
     _ensure_attack_option(state, attacker)
     # A two-shot bow "may fire at two different targets" (p.5, p.10): thread an
     # optional second_target through so a split shot is reachable from the web
@@ -1881,9 +1897,16 @@ def _act_queue_attack(game: dict, body: dict, *, is_admin: bool = False, owner_s
     # front arc, each a clean 400 as well.
     second_uid = body.get("second_target")
     second_target = _figure(state, second_uid) if second_uid else None
-    state.queue_attack(attacker, target,
-                       with_main_gauche=bool(body.get("main_gauche")),
-                       second_target=second_target)
+    try:
+        state.queue_attack(attacker, target,
+                           with_main_gauche=bool(body.get("main_gauche")),
+                           second_target=second_target)
+    except IllegalAction:
+        # A rejected declaration must not leave the stamped attack option behind
+        # (#413/#414): the figure keeps what it actually committed to, so the
+        # must_attack Resolve gate isn't stranded on an attack it can't take.
+        attacker.current_option = prior_option
+        raise
     return None
 
 
@@ -1904,12 +1927,20 @@ def _act_cast_spell(game: dict, body: dict, *, is_admin: bool = False, owner_sid
     spell = SPELLS.get(body.get("spell", ""))
     if spell is None:
         raise IllegalAction(f"unknown spell {body.get('spell')!r}")
+    prior_option = caster.current_option
     caster.current_option = Option.CAST
     try:
-        st_used = int(body.get("st") or spell.st_cost)
-    except (TypeError, ValueError):
-        raise IllegalAction("the ST for a cast must be a whole number")
-    state.queue_spell(caster, spell, target, st_used)
+        try:
+            st_used = int(body.get("st") or spell.st_cost)
+        except (TypeError, ValueError):
+            raise IllegalAction("the ST for a cast must be a whole number")
+        state.queue_spell(caster, spell, target, st_used)
+    except IllegalAction:
+        # A rejected cast must not leave CAST stamped over the option the figure
+        # actually took (#413) — that would both fake a legal cast declaration
+        # and strand the #409 must_cast Resolve gate on a cast that can't happen.
+        caster.current_option = prior_option
+        raise
     return None
 
 
