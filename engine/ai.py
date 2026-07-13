@@ -41,7 +41,60 @@ from .facing import facing_toward as _facing_toward
 from .figure import Figure, Posture
 from .options import Option, spec
 from .rules_data import WeaponKind
-from .state import GameState
+from .spells import SPELLS, spell_cost_for
+from .state import GameState, cast_block_reason
+
+# The simple wizard policy's ST floor (#431): a cast is only taken when it
+# leaves the caster at least this much ST — the pool is also its hit points
+# and casting to 0 is self-knockout (p.3-4), so the AI keeps a fighting margin
+# rather than spending itself unconscious. A tactic knob, not a rulebook
+# number.
+CAST_RESERVE_ST = 4
+
+# The debuffs the simple policy will throw, in fixed preference order — each an
+# obviously good effect with no judgment needed (#431: "no clever spell
+# selection"): fell the foe, disarm it, shatter its blade. Anything subtler
+# (Clumsiness/Slow/Stop trade-offs) is left to human players.
+_OBVIOUS_DEBUFFS = ("trip", "drop_weapon", "break_weapon")
+
+
+def _cast_plan(state: GameState, figure: Figure):
+    """The simple AI cast for ``figure``: ``(spell, target, st)`` or ``None``.
+
+    Deterministic (no dice) and derived from the engine's own legality
+    (:meth:`GameState.spell_targets` — the #362 single source), so select and
+    combat phases re-derive the same way and a queued cast is always legal:
+
+    * prefer the strongest known **missile spell** (highest damage per die) at
+      the focus-fire target, investing the most ST the reserve allows (1..3);
+    * else the first **obvious debuff** (trip/drop/break) it can afford at the
+      nearest offered target.
+    """
+    if not figure.spells_known or cast_block_reason(figure) is not None:
+        return None
+    missiles = sorted(
+        (SPELLS[spell_id] for spell_id in figure.spells_known
+         if spell_id in SPELLS and SPELLS[spell_id].is_missile),
+        key=lambda spell: -spell.damage_per_st)   # 1d > 1d-1 > 1d-2
+    for spell in missiles:
+        st_max = min(spell.max_st, figure.current_st - CAST_RESERVE_ST)
+        if st_max < spell.st_cost:
+            continue
+        targets = state.spell_targets(figure, spell)
+        if targets:
+            return spell, _best_target(state, figure, targets), st_max
+    for spell_id in _OBVIOUS_DEBUFFS:
+        if spell_id not in figure.spells_known or spell_id not in SPELLS:
+            continue
+        spell = SPELLS[spell_id]
+        layout = state.arena.layout
+        for target in sorted(
+                state.spell_targets(figure, spell),
+                key=lambda enemy: layout.distance(figure.position, enemy.position)):
+            cost = spell_cost_for(spell, target.strength)
+            if figure.current_st - cost >= CAST_RESERVE_ST:
+                return spell, target, cost
+    return None
 
 
 def _best_target(state: GameState, figure: Figure, candidates: list[Figure]) -> Figure:
@@ -258,6 +311,19 @@ def take_action(state: GameState, figure: Figure) -> None:
         state.set_do_nothing(figure)
         return
 
+    # A wizard with clear hands and a castable spell CASTS from where it stands
+    # (#431): the simple policy prefers magic to marching, standing its ground
+    # and facing the foe (a cast needs no closing — missiles fly, thrown spells
+    # reach any foe it can turn toward). An ENGAGED wizard keeps the old staff
+    # behaviour below; the spell itself is picked in queue_attacks, re-derived
+    # from the same _cast_plan so the two phases can never disagree.
+    if (not state.engaged(figure)
+            and _cast_plan(state, figure) is not None
+            and Option.CAST in state.legal_options(figure)):
+        state.move(figure, Option.CAST,
+                   facing=_turn_in_place_facing(state, figure, target))
+        return
+
     weapon = figure.ready_weapon
     if weapon is None:
         # Disarmed by a fumble: re-arm (or close bare-handed) instead of
@@ -408,6 +474,21 @@ def queue_attacks(state: GameState, side: str) -> None:
             if foes:
                 figure.current_option = Option.HTH_ATTACK
                 state.hth_attack(figure, min(foes, key=lambda e: e.current_st))
+            continue
+        if figure.current_option == Option.CAST:
+            # The wizard declared CAST in the select phase; pick the spell now,
+            # re-derived from the same _cast_plan (the board may have shifted —
+            # a target felled, ST lost to a blow). Nothing castable any more ->
+            # stand down (the #397/#398 pattern), never a wedged cast gate.
+            if figure.cast_this_turn or any(
+                    pending.caster is figure for pending in state._pending_casts):
+                continue                      # already queued/cast this turn
+            plan = _cast_plan(state, figure)
+            if plan is None:
+                state.stand_down(figure)
+            else:
+                spell, target, st_used = plan
+                state.queue_spell(figure, spell, target, st_used=st_used)
             continue
         option = figure.current_option
         weapon = figure.ready_weapon
