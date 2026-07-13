@@ -343,11 +343,20 @@ def _check_no_damage_to_downed_target(state, context: str) -> None:
             body_taken.get(event.target_uid, 0) + event.body_damage)
 
 
-def _check_spell_bounds(state, context: str) -> None:
+def _check_spell_bounds(state, context: str, phase: str | None = None) -> None:
     """Every wizard's magical state stays legal (TFT: Wizard).
 
-    * ``spell_protection`` is never negative (a protection spell only ever adds
-      hit-stopping; it cannot make a figure easier to hurt).
+    * ``spell_protection`` is never negative, and is EXACTLY the sum of the
+      active protection spells' stops (#431) — the derived pool can never drift
+      from the ``active_spells`` records that justify it.
+    * no active spell has an expired duration (#431): a stated-duration record
+      keeps ``remaining >= 1`` (end_turn removes it at 0), a continuing record
+      has ``remaining None`` — and, checked at a turn boundary (the select
+      phase), a live caster, since a continuing spell a felled caster can no
+      longer renew ends before the next turn's movement (rules lines 229-231).
+      Mid-combat a caster may fall after its spell landed, so the caster check
+      is select-phase only.
+    * every active spell id is a real, lasting catalog spell.
     * a figure knows no more spells than its IQ allows (``len(spells_known) <=
       intelligence``), and every known spell's tier is within its IQ — the
       chargen legality that must survive every edit/round-trip.
@@ -356,11 +365,49 @@ def _check_spell_bounds(state, context: str) -> None:
     cast that would drop ST below 0), not re-checked here — a weapon overkill can
     legitimately drive ST far below -1, so ST magnitude is not a state invariant.
     """
+    by_uid = {figure.uid: figure for figure in state.figures}
     for figure in state.figures:
         if figure.spell_protection < 0:
             _fail("negative-spell-protection",
                   f"{figure.name}({figure.side}) spell_protection="
                   f"{figure.spell_protection}", context)
+        expected_stops = sum(
+            SPELLS[spell_id].stops for spell_id in figure.active_spells
+            if spell_id in SPELLS)
+        if figure.spell_protection != expected_stops:
+            _fail("spell-protection-drift",
+                  f"{figure.name}({figure.side}) spell_protection="
+                  f"{figure.spell_protection} but active protection spells "
+                  f"stop {expected_stops} "
+                  f"(active: {sorted(figure.active_spells)})", context)
+        for spell_id, record in figure.active_spells.items():
+            spell = SPELLS.get(spell_id)
+            if spell is None or not spell.has_lasting_effect:
+                _fail("active-spell-not-lasting",
+                      f"{figure.name}({figure.side}) carries active spell "
+                      f"{spell_id!r} which is not a lasting catalog spell",
+                      context)
+            remaining = record.get("remaining")
+            if spell.continuing:
+                if remaining is not None:
+                    _fail("continuing-spell-with-countdown",
+                          f"{figure.name}({figure.side}) continuing {spell.name} "
+                          f"carries remaining={remaining}", context)
+                if phase == "select":
+                    caster = by_uid.get(record.get("caster", ""))
+                    if caster is None or not caster.can_act():
+                        _fail("expired-spell-active",
+                              f"{figure.name}({figure.side}) still carries "
+                              f"{spell.name} though its caster "
+                              f"({record.get('caster')!r}) is felled — an "
+                              f"unrenewable continuing spell outlived the turn",
+                              context)
+            else:
+                if not isinstance(remaining, int) or remaining < 1:
+                    _fail("expired-spell-active",
+                          f"{figure.name}({figure.side}) carries {spell.name} "
+                          f"with remaining={remaining!r} — an expired duration "
+                          f"survived end_turn", context)
         if len(figure.spells_known) > figure.intelligence:
             _fail("too-many-spells",
                   f"{figure.name}({figure.side}) knows {len(figure.spells_known)} "
@@ -411,7 +458,7 @@ def assert_state_invariants(
     _check_weapon_kit(state, context)
     _check_no_posthumous_damage(state, context)
     _check_no_damage_to_downed_target(state, context)
-    _check_spell_bounds(state, context)
+    _check_spell_bounds(state, context, phase)
 
 
 # ---- combat-log truthfulness -----------------------------------------------

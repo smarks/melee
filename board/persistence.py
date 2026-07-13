@@ -331,6 +331,16 @@ def _figure_from_json(data: dict) -> Figure:
         elif isinstance(stored, dict):
             stored = dict(stored)
         setattr(figure, name, stored)
+    # Pre-#431 snapshots stored ``active_spells`` as {spell_id: ST invested};
+    # the duration bookkeeping made each value a record dict. Normalize a
+    # legacy int value into the record shape — no countdown was stored (only
+    # Stone Flesh existed, a continuing spell), so a legacy entry reloads as a
+    # continuing spell cast by its own wearer, its pre-#431 behaviour.
+    figure.active_spells = {
+        spell_id: (dict(value) if isinstance(value, dict)
+                   else {"st": value, "remaining": None, "caster": data["uid"]})
+        for spell_id, value in figure.active_spells.items()
+    }
     option = data["current_option"]
     figure.current_option = Option(option) if option is not None else None
     figure.hth_opponents = list(data["hth_opponents"])

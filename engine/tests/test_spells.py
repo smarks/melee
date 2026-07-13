@@ -287,7 +287,7 @@ def test_chargen_wizard_iq_gates_spell_tier() -> None:
 
 def test_chargen_wizard_unknown_spell_id_rejected() -> None:
     problems = chargen.validate(
-        "Classic Melee", _wizard_spec(spells=["fireball"]))
+        "Classic Melee", _wizard_spec(spells=["meteor_swarm"]))
     assert any("unknown spell" in problem for problem in problems)
 
 
@@ -303,7 +303,63 @@ def test_spell_reference_numbers() -> None:
     # Staff (spell-reference lines 25-26): IQ 8, Special, 5 ST if cast in-game.
     assert STAFF_SPELL.type == "S" and STAFF_SPELL.iq_tier == 8
     assert STAFF_SPELL.st_cost == 5 and not STAFF_SPELL.continuing
-    assert set(SPELLS) == {"magic_fist", "staff", "stone_flesh"}
+    assert set(SPELLS) == {
+        "magic_fist", "staff", "stone_flesh",
+        # the #431 Classic batch
+        "blur", "drop_weapon", "slow_movement", "clumsiness", "speed_movement",
+        "trip", "break_weapon", "fireball", "stop", "lightning", "iron_flesh",
+    }
+
+
+def test_spell_reference_numbers_431_batch() -> None:
+    """Pin the exact reference values for the #431 spells, each against its line
+    in docs/reference/the-fantasy-trip-wizard-spell-reference.txt."""
+    from engine.spells import (
+        BLUR, BREAK_WEAPON, CLUMSINESS, DROP_WEAPON, FIREBALL, IRON_FLESH,
+        LIGHTNING, SLOW_MOVEMENT, SPEED_MOVEMENT, STOP, TRIP,
+    )
+
+    # Blur (lines 8-10): IQ 8, -4 vs subject, 1 ST + 1/turn, continuing.
+    assert BLUR.iq_tier == 8 and BLUR.type == "T" and BLUR.st_cost == 1
+    assert BLUR.defense_dx_penalty == -4
+    assert BLUR.continuing and BLUR.renew_cost == 1 and BLUR.targets_self
+    # Drop Weapon (lines 11-13): IQ 8, 1 ST (2 vs basic ST 20+), instant.
+    assert DROP_WEAPON.iq_tier == 8 and DROP_WEAPON.st_cost == 1
+    assert DROP_WEAPON.st_cost_heavy == 2 and DROP_WEAPON.heavy_st == 20
+    assert DROP_WEAPON.drops_weapon and not DROP_WEAPON.has_lasting_effect
+    # Slow Movement (lines 22-24): IQ 8, 2 ST, halves MA 4 turns, adds.
+    assert SLOW_MOVEMENT.iq_tier == 8 and SLOW_MOVEMENT.st_cost == 2
+    assert SLOW_MOVEMENT.ma_percent == 50 and SLOW_MOVEMENT.duration == 4
+    assert SLOW_MOVEMENT.durations_add
+    # Clumsiness (lines 38-39): IQ 9, -2 DX/ST, 3 turns (1 vs basic ST 30+).
+    assert CLUMSINESS.iq_tier == 9 and CLUMSINESS.dx_penalty_per_st == -2
+    assert CLUMSINESS.duration == 3 and CLUMSINESS.duration_heavy == 1
+    assert CLUMSINESS.heavy_st == 30 and CLUMSINESS.variable_st
+    # Speed Movement (lines 82-84): IQ 10, 2 ST, doubles MA 4 turns, adds.
+    assert SPEED_MOVEMENT.iq_tier == 10 and SPEED_MOVEMENT.st_cost == 2
+    assert SPEED_MOVEMENT.ma_percent == 200 and SPEED_MOVEMENT.duration == 4
+    assert SPEED_MOVEMENT.durations_add and SPEED_MOVEMENT.targets_self
+    # Trip (lines 88-91): IQ 10, 2 ST (4 vs ST 30+), knocks down, instant.
+    assert TRIP.iq_tier == 10 and TRIP.st_cost == 2
+    assert TRIP.st_cost_heavy == 4 and TRIP.heavy_st == 30 and TRIP.knocks_down
+    # Break Weapon (lines 153-155): IQ 12, 3 ST, instant.
+    assert BREAK_WEAPON.iq_tier == 12 and BREAK_WEAPON.st_cost == 3
+    assert BREAK_WEAPON.breaks_weapon
+    # Fireball (lines 156-157): IQ 12, missile, 1d-1 per ST, max 3 (rules l.620).
+    assert FIREBALL.iq_tier == 12 and FIREBALL.type == "M"
+    assert FIREBALL.damage_per_st == -1 and FIREBALL.max_st == 3
+    # Stop (lines 209-211): IQ 13, 3 ST, MA 0 for 4 turns.
+    assert STOP.iq_tier == 13 and STOP.st_cost == 3
+    assert STOP.ma_percent == 0 and STOP.duration == 4
+    # Lightning (lines 221-224): IQ 14, missile, a full 1d per ST, max 3.
+    assert LIGHTNING.iq_tier == 14 and LIGHTNING.type == "M"
+    assert LIGHTNING.damage_per_st == 0 and LIGHTNING.max_st == 3
+    # Iron Flesh (lines 255-256): IQ 15, stops 6, 3 ST + 1/turn, continuing;
+    # mutually exclusive with Stone Flesh (lines 204-206).
+    assert IRON_FLESH.iq_tier == 15 and IRON_FLESH.stops == 6
+    assert IRON_FLESH.st_cost == 3 and IRON_FLESH.continuing
+    assert IRON_FLESH.exclusive_with == ("stone_flesh",)
+    assert STONE_FLESH.exclusive_with == ("iron_flesh",)
 
 
 # ---- missile-spell line-of-flight (#417) -------------------------------------
@@ -565,7 +621,8 @@ def test_stone_flesh_recast_refreshes_and_never_stacks() -> None:
     state.queue_spell(wizard, STONE_FLESH, wizard, st_used=2)
     state.resolve_combat()
     assert wizard.spell_protection == 4          # refreshed, not 8
-    assert wizard.active_spells == {"stone_flesh": 2}
+    assert wizard.active_spells == {
+        "stone_flesh": {"st": 2, "remaining": None, "caster": wizard.uid}}
     assert wizard.damage_taken == 4              # both casts' ST was still paid
     assert_state_invariants(state, CLASSIC, phase="combat")
 

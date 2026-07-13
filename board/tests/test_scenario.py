@@ -56,7 +56,8 @@ def test_wizards_mode_seats_one_fighter_and_one_wizard_per_side():
         assert wizard.char_class == "Wizard"
         assert wizard.name != "Wizard"                    # got a creative name
         assert wizard.intelligence == 13
-        assert set(wizard.spells_known) == {"magic_fist", "staff", "stone_flesh"}
+        assert set(wizard.spells_known) == set(
+            scenario.WIZARD_PRESET["spells_known"])
         # Knowing Staff starts it with a staff in hand (#406, Wizard p.19) — the
         # ONE weapon a wizard may hold and still cast.
         assert wizard.has_staff
@@ -72,7 +73,8 @@ def test_wizards_mode_pins_classic_even_if_asked_for_tarmar():
     _, figures = scenario.build_game("Tarmar", 2, 2, wizards=True)
     wizard = next(f for f in figures if f.spells_known)
     assert wizard.intelligence == 13
-    assert set(wizard.spells_known) == {"magic_fist", "staff", "stone_flesh"}
+    assert set(wizard.spells_known) == set(
+            scenario.WIZARD_PRESET["spells_known"])
 
 
 def test_wizards_mode_single_seat_is_a_wizard():

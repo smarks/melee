@@ -2873,3 +2873,23 @@ def test_rejected_attack_after_a_full_move_keeps_the_taken_option(client: Client
         assert not GAMES["duel-test"]["state"]._pending
     finally:
         del GAMES["duel-test"]
+
+
+def test_spell_options_serve_variable_st_and_per_target_costs(client: Client) -> None:
+    # #431: the cast menu payload carries what the catalog drives — the
+    # variable-ST flag (Clumsiness's open-ended slider, max_st 0 = no catalog
+    # cap) and the per-target flat costs, so a heavy target's Trip shows its
+    # real 4-ST charge instead of the base 2.
+    from board.views import GAMES, _spell_options
+
+    wizard, blue = _wizard_duel(spells=["trip", "clumsiness"])
+    blue.strength = 30                          # a heavy target (basic ST 30+)
+    state = GAMES["duel-test"]["state"]
+    castable, targets_by_spell = _spell_options(state, wizard)
+    by_id = {spell["id"]: spell for spell in castable}
+    assert by_id["clumsiness"]["variable_st"] is True
+    assert by_id["clumsiness"]["max_st"] == 0   # no catalog cap: pool-bounded
+    assert by_id["trip"]["variable_st"] is False
+    assert by_id["trip"]["st_cost"] == 2
+    assert by_id["trip"]["target_costs"] == {blue.uid: 4}   # spell-ref lines 90-91
+    assert targets_by_spell["trip"] == [blue.uid]

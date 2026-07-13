@@ -375,12 +375,12 @@ def test_variety_soak_exercises_evasive_maneuvers() -> None:
         f"resolver and of assert_log_truthful went unaudited (dice_counts={dice_counts})")
 
 
-# ---- wizard-casting soak (Gate 2): a fraction of games field a caster ---------
-# The AI does not yet field wizards (Gate 3), so the casting engine is exercised
-# under the SAME invariant net by a deterministic, scripted wizard game here — a
-# wizard hurls Magic Fists and weaves Stone Flesh across several turns, every roll
-# injected (no random), with assert_state_invariants after every step and
-# assert_log_truthful over the SpellResults after every combat phase.
+# ---- wizard-casting soak ------------------------------------------------------
+# The randomized soak's Wizards-mode games (kind 2, above) now cast for real —
+# the AI wizard hurls missiles and throws debuffs (#431) under the invariant
+# net. This scripted game keeps a fully DETERMINISTIC casting path alongside it:
+# every roll injected (no random), with assert_state_invariants after every step
+# and assert_log_truthful over the SpellResults after every combat phase.
 
 def _wizard_vs_fighter() -> tuple[Arena, list[Figure]]:
     """A durable wizard-vs-fighter board: the wizard is free-handed to cast."""

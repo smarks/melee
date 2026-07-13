@@ -641,3 +641,91 @@ def test_barehanded_ai_grapples_in_combat_when_the_rules_allow() -> None:
     assert state.hth_targets(fighter), "precondition: a legal grapple exists"
     ai.queue_attacks(state, "red")
     assert fighter.current_option == Option.HTH_ATTACK
+
+
+# ---- the simple wizard cast policy (#431) -------------------------------------
+
+def _ai_wizard(side: str = "red", strength: int = 14,
+               spells: list[str] | None = None):
+    from engine.figure import create_wizard
+
+    wizard = create_wizard(
+        "Circe", strength=strength, dexterity=11, intelligence=13, side=side,
+        spells_known=spells if spells is not None
+        else ["magic_fist", "fireball", "trip", "drop_weapon",
+              "break_weapon", "staff", "stone_flesh"])
+    wizard.uid = "circe"
+    return wizard
+
+
+def test_ai_wizard_declares_cast_and_hurls_its_best_missile() -> None:
+    """A disengaged AI wizard prefers casting to marching: it declares CAST in
+    the select phase and queues its strongest missile (Fireball beats Magic
+    Fist at 1d-1 vs 1d-2 per ST) at the focus-fire target, investing the most
+    ST the reserve allows."""
+    arena = Arena(cols=9, rows=9)
+    wizard = _ai_wizard()
+    foe = _fighter("Foe", "blue")
+    wizard.position, wizard.facing = Hex(2, 4), 0
+    foe.position, foe.facing = Hex(6, 4), 3
+    state = GameState(arena, [wizard, foe], dice=Dice(seed=5))
+
+    ai.take_action(state, wizard)
+    assert wizard.current_option == Option.CAST
+    ai.queue_attacks(state, "red")
+    pending = state._pending_casts
+    assert len(pending) == 1
+    assert pending[0].spell.id == "fireball"
+    assert pending[0].target is foe
+    # ST 14 - reserve 4 = 10, capped by the 3-ST missile ceiling.
+    assert pending[0].st_used == 3
+
+
+def test_ai_wizard_falls_back_to_an_obvious_debuff() -> None:
+    """With no missile spell known, the policy throws the first obvious debuff
+    (Trip) at the nearest legal target."""
+    arena = Arena(cols=9, rows=9)
+    wizard = _ai_wizard(spells=["trip", "drop_weapon", "staff"])
+    foe = _fighter("Foe", "blue")
+    wizard.position, wizard.facing = Hex(2, 4), 0
+    foe.position, foe.facing = Hex(6, 4), 3
+    state = GameState(arena, [wizard, foe], dice=Dice(seed=5))
+
+    ai.take_action(state, wizard)
+    assert wizard.current_option == Option.CAST
+    ai.queue_attacks(state, "red")
+    assert state._pending_casts and state._pending_casts[0].spell.id == "trip"
+    assert state._pending_casts[0].st_used == 2
+
+
+def test_ai_wizard_keeps_a_st_reserve_and_fights_instead_when_spent() -> None:
+    """At or below the reserve the wizard casts nothing — it falls through to
+    the ordinary staff-fighter behaviour rather than knocking itself out."""
+    arena = Arena(cols=9, rows=9)
+    wizard = _ai_wizard(strength=14, spells=["magic_fist", "staff"])
+    wizard.damage_taken = 10                        # 4 ST left == the reserve
+    foe = _fighter("Foe", "blue")
+    wizard.position, wizard.facing = Hex(2, 4), 0
+    foe.position, foe.facing = Hex(6, 4), 3
+    state = GameState(arena, [wizard, foe], dice=Dice(seed=5))
+
+    ai.take_action(state, wizard)
+    assert wizard.current_option != Option.CAST     # it closes with the staff
+
+
+def test_ai_wizard_stands_down_when_its_cast_evaporates() -> None:
+    """A declared CAST whose every plan died between phases (the lone foe was
+    felled) stands down instead of wedging the cast gate (#397/#398 pattern)."""
+    arena = Arena(cols=9, rows=9)
+    wizard = _ai_wizard()
+    foe = _fighter("Foe", "blue")
+    wizard.position, wizard.facing = Hex(2, 4), 0
+    foe.position, foe.facing = Hex(6, 4), 3
+    state = GameState(arena, [wizard, foe], dice=Dice(seed=5))
+
+    ai.take_action(state, wizard)
+    assert wizard.current_option == Option.CAST
+    foe.damage_taken = foe.strength                 # felled before combat
+    ai.queue_attacks(state, "red")
+    assert not state._pending_casts
+    assert wizard.current_option == Option.DO_NOTHING
