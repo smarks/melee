@@ -137,7 +137,8 @@ def catalog() -> dict:
         "spells": [
             {"id": spell.id, "name": spell.name, "type": spell.type,
              "iq_tier": spell.iq_tier, "st_cost": spell.st_cost,
-             "max_st": spell.max_st, "continuing": spell.continuing}
+             "max_st": spell.max_st, "variable_st": spell.variable_st,
+             "continuing": spell.continuing}
             for spell in SPELLS.values()
         ],
     }

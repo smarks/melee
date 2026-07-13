@@ -40,7 +40,7 @@ from engine.options import Option, spec
 from engine.profile import PROFILES
 from engine.rules_data import WEAPONS, WeaponKind, max_missile_shots
 from engine.ruleset import has_offhand_main_gauche
-from engine.spells import SPELLS
+from engine.spells import SPELLS, spell_cost_for
 from engine.state import GameState, IllegalAction, cast_block_reason
 from engine.tarmar import WEAPON_CLASS, TarmarFigure
 
@@ -449,15 +449,25 @@ def _spell_options(state: GameState, figure) -> tuple[list, dict]:
         spell = SPELLS.get(spell_id)
         if spell is None or spell.st_cost > figure.current_st:
             continue                       # unknown, or can't afford even the minimum
-        targets = [target.uid for target in state.spell_targets(figure, spell)]
+        targets = state.spell_targets(figure, spell)
         if not targets:
             continue                       # no legal target -> nothing to offer
         castable.append({
             "id": spell.id, "name": spell.name,
             "is_missile": spell.is_missile, "is_protection": spell.is_protection,
             "st_cost": spell.st_cost, "max_st": spell.max_st,
+            # A variable-ST spell gets the mana slider (missiles 1..3;
+            # Clumsiness 1..the caster's pool — max_st 0 means "no catalog cap").
+            "variable_st": spell.variable_st,
+            # Per-target flat costs, so the menu row shows the REAL charge: the
+            # heavy-target variants (Drop Weapon 2 ST vs basic ST 20+, Trip 4 ST
+            # vs 30+) diverge from st_cost (#431 — no fabricated numbers).
+            "target_costs": {
+                target.uid: spell_cost_for(spell, target.strength)
+                for target in targets
+            },
         })
-        targets_by_spell[spell.id] = targets
+        targets_by_spell[spell.id] = [target.uid for target in targets]
     return castable, targets_by_spell
 
 
@@ -1935,7 +1945,11 @@ def _act_cast_spell(game: dict, body: dict, *, is_admin: bool = False, owner_sid
     caster.current_option = Option.CAST
     try:
         try:
-            st_used = int(body.get("st") or spell.st_cost)
+            # Default to the spell's flat cost for THIS target (the heavy-target
+            # variants — Drop Weapon vs basic ST 20+, Trip vs 30+ — diverge from
+            # the base st_cost), so an omitted ``st`` never queues an
+            # under-powered cast the engine must reject.
+            st_used = int(body.get("st") or spell_cost_for(spell, target.strength))
         except (TypeError, ValueError):
             raise IllegalAction("the ST for a cast must be a whole number")
         state.queue_spell(caster, spell, target, st_used)

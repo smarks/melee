@@ -1050,14 +1050,15 @@ function warnLine(c, text) {
   return w;
 }
 
-// The ST (mana) slider for each queued missile cast (Magic Fist): a wizard invests
-// 1..max_st ST for a missile spell (1 die/ST, p.12). State-driven — it renders from
-// PLAN on every pass, so it stays until the cast is cleared or resolved (no transient
-// UI). Dragging updates PLAN[uid].stUsed in place (no re-render, so the drag holds).
+// The ST (mana) slider for each queued variable-ST cast (a missile spell's
+// 1..3, Clumsiness's 1..pool — #431): a wizard invests ST per cast (p.12).
+// State-driven — it renders from PLAN on every pass, so it stays until the cast
+// is cleared or resolved (no transient UI). Dragging updates PLAN[uid].stUsed
+// in place (no re-render, so the drag holds).
 function drawCastSliders(c, actors) {
   const mine = new Set(actors.map(f => f.uid));
   for (const plan of Object.values(PLAN)) {
-    if (plan.phase !== "combat" || !plan.cast || !plan.isMissile) continue;
+    if (plan.phase !== "combat" || !plan.cast || !plan.variable) continue;
     if (!mine.has(plan.uid) || plan.stMax <= plan.stMin) continue;   // nothing to adjust
     const figure = figByUid(plan.uid);
     const wrap = document.createElement("div");
@@ -1167,14 +1168,17 @@ function openMenu(f) {
     // single source of legal targets, mirroring the attack targeting plumbing.
     for (const spell of (optInfo.castable_spells || [])) {
       // #409: each spell row is readable on its own — the ST/mana cost (a range
-      // for a missile spell that can invest 1..max_st) and the wizard's current
-      // mana pool ride the row, so the pick is an informed, explicit choice.
-      const affordableMax = Math.min(spell.max_st, f.st);
-      const cost = spell.is_missile && affordableMax > spell.st_cost
-        ? `${spell.st_cost}–${affordableMax}` : `${spell.st_cost}`;
+      // for a variable-ST spell that can invest st_cost..max_st, the per-target
+      // flat cost otherwise so heavy-target variants show their REAL charge,
+      // #431) and the wizard's current mana pool ride the row, so the pick is
+      // an informed, explicit choice.
+      const affordableMax = Math.min(spell.max_st || f.st, f.st);
       for (const uid of ((optInfo.spell_targets || {})[spell.id] || [])) {
         const e = figByUid(uid);
-        const who = spell.is_protection && uid === f.uid ? "self" : (e ? e.name : uid);
+        const flat = (spell.target_costs || {})[uid] ?? spell.st_cost;
+        const cost = spell.variable_st && affordableMax > spell.st_cost
+          ? `${spell.st_cost}–${affordableMax}` : `${flat}`;
+        const who = uid === f.uid ? "self" : (e ? e.name : uid);
         rows.push({label: `🔮 Cast ${escapeHtml(spell.name)} → ${escapeHtml(who)}`
                      + ` <span class="why">ST ${cost} · mana ${f.st}</span>`,
                    act: () => setCast(f, spell, uid)});
@@ -1345,8 +1349,10 @@ function setAttack(f, target, {mainGauche = false, secondTarget = null} = {}) {
                  label: `Attack ${e ? e.name : target}${jab}${split}`};
   render();
 }
-function castLabel(name, who, isMissile, st) {
-  return `🔮 Cast ${name} → ${who}` + (isMissile ? ` (ST ${st})` : "");
+function castLabel(name, who, variable, st) {
+  // A variable-ST cast (missiles, Clumsiness) shows the invested ST; a flat
+  // cast's cost is fixed and already shown on the menu row.
+  return `🔮 Cast ${name} → ${who}` + (variable ? ` (ST ${st})` : "");
 }
 // Queue a wizard's cast (the magic mirror of setAttack). A missile spell invests
 // 1..max_st ST (mana) — default to the most it can afford for a strong shot, then
@@ -1355,16 +1361,21 @@ function castLabel(name, who, isMissile, st) {
 // never forced to attack); it satisfies the resolve gate like any set action.
 function setCast(f, spell, target) {
   const e = figByUid(target);
-  const who = spell.is_protection && target === f.uid ? "self" : (e ? e.name : target);
-  const stMin = spell.st_cost;
-  const stMax = spell.is_missile ? Math.min(spell.max_st, f.st) : spell.st_cost;
+  const who = target === f.uid ? "self" : (e ? e.name : target);
+  const variable = !!spell.variable_st;
+  // A fixed-cost spell charges its per-target flat cost (heavy-target variants,
+  // #431); a variable-ST spell offers st_cost..max_st — max_st 0 means "no
+  // catalog cap", bounded only by the caster's pool.
+  const flat = (spell.target_costs || {})[target] ?? spell.st_cost;
+  const stMin = variable ? spell.st_cost : flat;
+  const stMax = variable ? Math.min(spell.max_st || f.st, f.st) : flat;
   const stUsed = stMax;
   dbg("INTERACT", `queue cast ${f.name}: ${spell.name} → ${who}`,
       {caster: f.uid, spell: spell.id, target, stUsed});
   PLAN[f.uid] = {uid: f.uid, phase: "combat", cast: true, spell: spell.id,
                  spellName: spell.name, isMissile: !!spell.is_missile,
-                 target, castWho: who, stMin, stMax, stUsed,
-                 label: castLabel(spell.name, who, spell.is_missile, stUsed)};
+                 variable, target, castWho: who, stMin, stMax, stUsed,
+                 label: castLabel(spell.name, who, variable, stUsed)};
   render();
 }
 // ---- selection phase: immediate submission (#192) ---------------------------
@@ -2212,15 +2223,19 @@ const ARCHETYPES = {
 };
 
 // The default fielded wizard. ST + DX + IQ = 32, each >= 8 (the 3-attribute
-// wizard spread, TFT: Wizard p.3-4). IQ 13 is chosen deliberately so the preset can
-// field all three starter spells: Magic Fist and Staff are IQ 8, Stone Flesh is
-// IQ 13. Knowing Staff starts it with a staff in hand (p.19) — the one weapon
-// that does not block casting — so `cast_block_reason` clears it to cast from
-// turn 1 and it can still strike/parry/engage. Mirrors board.scenario.WIZARD_PRESET.
+// wizard spread, TFT: Wizard p.3-4). IQ 13 fields every IQ<=13 spell of the
+// catalog — 12 spells, within the at-most-IQ count cap (#431). Knowing Staff
+// starts it with a staff in hand (p.19) — the one weapon that does not block
+// casting — so `cast_block_reason` clears it to cast from turn 1 and it can
+// still strike/parry/engage. Mirrors board.scenario.WIZARD_PRESET.
 const WIZARD_ARCHETYPE = {
   name: "Wizard", char_class: "Wizard",
   strength: 9, dexterity: 10, intelligence: 13,
-  armor: "None", spells: ["magic_fist", "staff", "stone_flesh"],
+  armor: "None", spells: [
+    "magic_fist", "blur", "drop_weapon", "slow_movement", "staff",
+    "clumsiness", "speed_movement", "trip", "break_weapon", "fireball",
+    "stop", "stone_flesh",
+  ],
 };
 let CAT = null, RULES = null;
 const isWizardCard = card => !!card.querySelector("[data-spells]");
@@ -2235,8 +2250,12 @@ function spellDisplayName(id) {
 // missile spell can be powered up, 1..max_st), the spell analogue of a weapon's
 // damage/str_req shown next to each weapon option.
 function spellCostText(spell) {
-  const cost = (spell.max_st && spell.max_st > spell.st_cost)
-    ? `${spell.st_cost}–${spell.max_st} ST` : `${spell.st_cost} ST`;
+  // A variable-ST spell shows its range; max_st 0 means "no catalog cap" (the
+  // caster's own pool is the ceiling), shown as "N+ ST" (#431).
+  const cost = spell.variable_st
+    ? (spell.max_st ? `${spell.st_cost}–${spell.max_st} ST`
+                    : `${spell.st_cost}+ ST`)
+    : `${spell.st_cost} ST`;
   return `${spell.type}, ${cost}`;
 }
 
