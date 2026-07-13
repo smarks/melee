@@ -306,18 +306,427 @@ def test_spell_reference_numbers() -> None:
     assert set(SPELLS) == {"magic_fist", "staff", "stone_flesh"}
 
 
+# ---- missile-spell line-of-flight (#417) -------------------------------------
+# Geometry used throughout: same-row hexes are a straight line ((2,2) -> (6,2)
+# passes (3,2), (4,2), (5,2)), and every hex out to (7,2) is within 1 MH of the
+# wizard, so the range penalty is 0 and needed == DX 12 for every roll.
+
+def _blocker(position: Hex, side: str = "blue", **overrides) -> Figure:
+    fig = Figure(name="Bystander", strength=30, dexterity=10, side=side,
+                 **overrides)
+    fig.position = position
+    fig.uid = f"by-{position.col}-{position.row}"
+    return fig
+
+
+def test_lane_blocker_is_rolled_to_miss_and_slipped_past() -> None:
+    """An enemy in the lane draws a roll-to-miss; adjDX or less slips the spell
+    past to strike the aimed target (rules lines 639-646)."""
+    wizard = _wizard()
+    blocker = _blocker(Hex(4, 2))
+    dummy = _target()
+    dummy.position = Hex(6, 2)
+    # roll-to-miss 6 (<= 12: slipped past), aimed to-hit 7 (hit), damage 6.
+    dice = Dice(scripted=[2, 2, 2, 2, 2, 3, 6])
+    state = _game(wizard, blocker, dummy, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    state.resolve_combat()
+    assert blocker.damage_taken == 0
+    assert dummy.damage_taken == 4               # 6 - 2, past the blocker
+    assert len(state.spell_results) == 1         # only the aimed cast recorded
+    assert len(dice._scripted) == 0              # the blocker's roll WAS drawn
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+@pytest.mark.parametrize(
+    "miss_roll, multiplier",
+    [
+        ([6, 6, 2], 1),   # 14: an automatic hit on a roll to miss
+        ([6, 6, 3], 2),   # 15: a double-damage hit
+        ([6, 6, 6], 3),   # 18: a triple-damage hit
+    ],
+)
+def test_lane_blocker_struck_by_the_roll_to_miss_special_table(
+    miss_roll, multiplier
+) -> None:
+    """On a roll to miss, 14 is an automatic hit, 15-16 double damage, 17-18
+    triple (rules lines 646-648) — the blocker is struck, the aimed target never
+    rolled, and the full invested ST is charged (a hit)."""
+    wizard = _wizard()
+    blocker = _blocker(Hex(4, 2))
+    dummy = _target()
+    dummy.position = Hex(6, 2)
+    dice = Dice(scripted=[*miss_roll, 6])        # then 1 damage die (1 ST)
+    state = _game(wizard, blocker, dummy, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    state.resolve_combat()
+    assert blocker.damage_taken == 4 * multiplier   # (6-2) x multiplier
+    assert dummy.damage_taken == 0
+    result = state.spell_results[0]
+    assert result.hit and result.note == "struck_in_lane"
+    assert result.target_uid == blocker.uid
+    assert result.st_spent == 1 and wizard.damage_taken == 1
+    assert len(dice._scripted) == 0
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_failed_roll_to_miss_an_enemy_fizzles_in_that_hex() -> None:
+    """A missed roll-to-miss an enemy "is not a hit... just fizzles in that hex"
+    (rules lines 650-652): nobody is harmed, the aimed target is never rolled,
+    and only the plain-miss 1 ST is lost."""
+    wizard = _wizard()
+    blocker = _blocker(Hex(4, 2))
+    dummy = _target()
+    dummy.position = Hex(6, 2)
+    # 13 > DX 12 and not a special: the roll to miss failed. Sentinel dice after
+    # prove nothing further was drawn (no aimed roll, no damage).
+    dice = Dice(scripted=[4, 4, 5, 6, 6, 6])
+    state = _game(wizard, blocker, dummy, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=3)
+    state.resolve_combat()
+    assert blocker.damage_taken == 0 and dummy.damage_taken == 0
+    result = state.spell_results[0]
+    assert not result.hit and result.note == "fizzled_in_lane"
+    assert wizard.damage_taken == 1              # the plain-miss charge
+    assert wizard.posture == Posture.STANDING    # not a 17/18 casting fizzle
+    assert len(dice._scripted) == 3              # the sentinels went undrawn
+    assert any("fizzles out against" in line for line in state.log)
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_missed_spell_flies_on_and_strikes_the_figure_behind() -> None:
+    """A missed missile spell continues along the caster-target line, making a
+    fresh to-hit roll at each enemy hex it enters (rules lines 624-628) — and a
+    fly-on hit charges the FULL invested ST (it is a hit)."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.position = Hex(4, 2)
+    behind = _blocker(Hex(6, 2))                 # two hexes past the target
+    # aimed 15 (> 12: a plain miss), fly-on 6 (<= 12: strikes), 2d damage 6+6.
+    dice = Dice(scripted=[5, 5, 5, 2, 2, 2, 6, 6])
+    state = _game(wizard, dummy, behind, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=2)
+    state.resolve_combat()
+    assert dummy.damage_taken == 0
+    assert behind.damage_taken == 8              # 12 - 4
+    aimed, flown = state.spell_results
+    assert not aimed.hit and flown.hit and flown.note == "flew_on"
+    assert flown.target_uid == behind.uid
+    assert wizard.damage_taken == 2              # full ST: the spell HIT someone
+    assert len(dice._scripted) == 0
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_missed_spell_that_misses_the_fly_on_figure_too_costs_one_st() -> None:
+    """A spell that misses its target AND everyone on the fly-on line spends
+    itself unhit — the plain-miss 1 ST charge stands."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.position = Hex(4, 2)
+    behind = _blocker(Hex(6, 2))
+    # aimed 15 (miss), fly-on 15 (misses the figure behind too); nothing more.
+    dice = Dice(scripted=[5, 5, 5, 5, 5, 5])
+    state = _game(wizard, dummy, behind, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=2)
+    state.resolve_combat()
+    assert dummy.damage_taken == 0 and behind.damage_taken == 0
+    assert wizard.damage_taken == 1
+    assert len(dice._scripted) == 0
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_friendly_figure_in_the_lane_is_never_rolled_and_never_harmed() -> None:
+    """A friend standing in the lane keeps the weapon flight's friendly-fire
+    guard (#229): no roll-to-miss dice are drawn for it and it cannot be
+    struck — the spell resolves against the aimed target as if the lane were
+    clear."""
+    wizard = _wizard()
+    friend = _blocker(Hex(4, 2), side="red")     # the wizard's own side
+    dummy = _target()
+    dummy.position = Hex(6, 2)
+    # ONLY the aimed to-hit (7: hit) and damage (6) — a sentinel proves no
+    # roll-to-miss was drawn for the friend.
+    dice = Dice(scripted=[2, 2, 3, 6, 1, 1, 1])
+    state = _game(wizard, friend, dummy, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    state.resolve_combat()
+    assert friend.damage_taken == 0
+    assert dummy.damage_taken == 4
+    assert len(dice._scripted) == 3              # sentinels undrawn
+    assert_state_invariants(state, CLASSIC, phase="combat")  # no same-side harm
+
+
+def test_fly_on_stops_at_the_casters_basic_st_in_megahexes() -> None:
+    """The fly-on travels at most a number of megahexes equal to the caster's
+    basic ST (rules lines 628-630): a figure beyond that is never rolled."""
+    wizard = _wizard(strength=2)                 # a 2-MH flight cap
+    dummy = _target()
+    dummy.position = Hex(4, 2)
+    far = _blocker(Hex(11, 2))                   # 3 MH out: past the cap
+    # aimed 15 (miss); sentinels prove the far figure drew no fly-on roll.
+    dice = Dice(scripted=[5, 5, 5, 6, 6, 6])
+    state = _game(wizard, dummy, far, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    state.resolve_combat()
+    assert far.damage_taken == 0 and dummy.damage_taken == 0
+    assert len(dice._scripted) == 3
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_aimed_fizzle_does_not_fly_on() -> None:
+    """A 17/18 on the aimed roll dies in the caster's hands — nothing flies on
+    to threaten the figure behind (the weapon-flight fumble parallel)."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.position = Hex(4, 2)
+    behind = _blocker(Hex(6, 2))
+    dice = Dice(scripted=[6, 6, 5, 1, 1, 1])     # 17: fizzle; sentinels after
+    state = _game(wizard, dummy, behind, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=2)
+    state.resolve_combat()
+    assert behind.damage_taken == 0
+    assert wizard.damage_taken == 2              # the fizzle's full-ST charge
+    assert len(dice._scripted) == 3
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+# ---- dodging forces four dice against a missile spell (#418) -----------------
+
+def test_dodging_target_forces_four_dice_on_a_missile_spell() -> None:
+    """"To hit a figure who is dodging... four dice instead of three... Dodging
+    is effective only against missile spells (and thrown and missile weapons)"
+    (wizard-rules lines 996-1004)."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.dodging = True
+    # Four dice drawn: 2+2+2+2 = 8 (a hit under 12 — but on FOUR dice), then 6.
+    dice = Dice(scripted=[2, 2, 2, 2, 6])
+    state = _game(wizard, dummy, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    state.resolve_combat()
+    result = state.spell_results[0]
+    assert result.dice_count == 4
+    assert result.hit and dummy.damage_taken == 4
+    assert len(dice._scripted) == 0              # the 4th die really was drawn
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+@pytest.mark.parametrize(
+    "rolls, fizzle, knockdown",
+    [
+        ([6, 6, 4, 4], False, False),   # 20: an automatic miss
+        ([6, 6, 6, 3], True, False),    # 21: fizzle (the drop analogue)
+        ([6, 6, 6, 6], True, True),     # 24: fizzle + knockdown (break analogue)
+    ],
+)
+def test_four_dice_spell_specials_shift_with_the_dodge(rolls, fizzle, knockdown) -> None:
+    """The four-dice special bands (20+ miss, 21-22 drop, 23-24 break; rules
+    lines 998-1001) map onto a spell's fizzle tiers, as 17/18 do on three."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.dodging = True
+    state = _game(wizard, dummy, dice=Dice(scripted=rolls))
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=2)
+    state.resolve_combat()
+    result = state.spell_results[0]
+    assert not result.hit
+    assert result.fizzled is fizzle and result.knockdown is knockdown
+    assert wizard.damage_taken == (2 if fizzle else 1)
+    assert (wizard.posture == Posture.PRONE) is knockdown
+
+
+def test_non_dodging_target_still_rolls_three_dice() -> None:
+    """The dodge is the only thing that shifts the count — a plain target keeps
+    the three-dice table (16 is still the automatic miss)."""
+    wizard = _wizard()
+    dummy = _target()
+    dice = Dice(scripted=[6, 6, 4, 1, 1])        # 16 on three dice: auto miss
+    state = _game(wizard, dummy, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    state.resolve_combat()
+    result = state.spell_results[0]
+    assert result.dice_count == 3 and not result.hit and not result.fizzled
+    assert len(dice._scripted) == 2
+
+
+# ---- Stone Flesh does not stack (#419) ----------------------------------------
+
+def test_stone_flesh_recast_refreshes_and_never_stacks() -> None:
+    """"Only one Blur, one Stone Flesh, one Shock Shield, etc., can be cast on
+    any given figure at a time. These spells are not cumulative." (rules lines
+    683-684.) A recast replaces the running spell: protection stays 4."""
+    wizard = _wizard(spells=["stone_flesh"])
+    state = _game(wizard, dice=Dice(scripted=[2, 2, 2, 2, 2, 2]))
+    state.queue_spell(wizard, STONE_FLESH, wizard, st_used=2)
+    state.resolve_combat()
+    assert wizard.spell_protection == 4
+    state.end_turn()
+    wizard.current_option = Option.CAST
+    state.queue_spell(wizard, STONE_FLESH, wizard, st_used=2)
+    state.resolve_combat()
+    assert wizard.spell_protection == 4          # refreshed, not 8
+    assert wizard.active_spells == {"stone_flesh": 2}
+    assert wizard.damage_taken == 4              # both casts' ST was still paid
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+# ---- Magic Fist's trip effect (#421) ------------------------------------------
+
+def _trippable(strength: int = 10, **overrides) -> Figure:
+    """A low-ST, low-DX foe whose trip save is max(current ST, adjDX) = 8."""
+    fig = Figure(name="Wobbly", strength=strength, dexterity=8, side="blue",
+                 **overrides)
+    fig.position = Hex(4, 2)
+    fig.uid = "wobbly"
+    return fig
+
+
+def test_magic_fist_six_pre_armor_hits_trips_on_a_failed_save() -> None:
+    """"A Magic Fist that does 6 or more hits before armor/shield protection
+    will also trip its target... unless he/she makes a 3-die roll on ST or DX,
+    whichever is higher" (spell-ref lines 18-21). 6 hits is below the generic
+    8-hit knockdown, so only the trip can floor this target."""
+    wizard = _wizard()
+    foe = _trippable()
+    # to-hit 6 (hit), 3d damage 4+4+4 = 12-6 = 6 raw; save 11 > 8: falls.
+    dice = Dice(scripted=[2, 2, 2, 4, 4, 4, 4, 4, 3])
+    state = _game(wizard, foe, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, foe, st_used=3)
+    state.resolve_combat()
+    assert foe.damage_taken == 6                 # unarmoured: raw == taken < 8
+    assert foe.posture == Posture.PRONE and foe.knocked_down_this_turn
+    assert any("off its feet" in line for line in state.log)
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_magic_fist_trip_save_keeps_the_target_standing() -> None:
+    """The save made — 3 dice at or under max(ST, DX) — keeps its feet."""
+    wizard = _wizard()
+    foe = _trippable()
+    dice = Dice(scripted=[2, 2, 2, 4, 4, 4, 2, 2, 2])   # save 6 <= 8: stands
+    state = _game(wizard, foe, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, foe, st_used=3)
+    state.resolve_combat()
+    assert foe.damage_taken == 6
+    assert foe.posture == Posture.STANDING and not foe.knocked_down_this_turn
+    assert any("keeps its feet" in line for line in state.log)
+
+
+def test_magic_fist_trip_keys_on_pre_armor_damage() -> None:
+    """The 6-hit threshold is BEFORE armour: leather (stops 2) cuts the damage
+    to 4 — far below the 8-hit knockdown — yet the trip still fires."""
+    wizard = _wizard()
+    foe = _trippable(armor=LEATHER)
+    dice = Dice(scripted=[2, 2, 2, 4, 4, 4, 4, 4, 3])   # raw 6, taken 4; save 11
+    state = _game(wizard, foe, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, foe, st_used=3)
+    state.resolve_combat()
+    assert foe.damage_taken == 4                 # armour stopped 2
+    assert foe.posture == Posture.PRONE          # tripped on the PRE-armour 6
+
+
+def test_magic_fist_below_six_pre_armor_hits_draws_no_save() -> None:
+    """Five pre-armour hits trip nothing — and draw no save dice."""
+    wizard = _wizard()
+    foe = _trippable()
+    dice = Dice(scripted=[2, 2, 2, 4, 4, 3, 6, 6, 6])   # raw 11-6 = 5; sentinels
+    state = _game(wizard, foe, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, foe, st_used=3)
+    state.resolve_combat()
+    assert foe.damage_taken == 5
+    assert foe.posture == Posture.STANDING
+    assert len(dice._scripted) == 3              # no save was rolled
+
+
+def test_magic_fist_eight_hit_knockdown_masks_the_trip_save() -> None:
+    """When the generic 8-hit knockdown already floored the target, no trip
+    save is drawn — the figure is down either way, and pre-#421 dice streams
+    stay byte-identical."""
+    wizard = _wizard()
+    foe = _trippable(strength=20)                # survives 12 hits, still falls
+    dice = Dice(scripted=[2, 2, 2, 6, 6, 6, 6, 6, 6])   # raw 12 >= 8; sentinels
+    state = _game(wizard, foe, dice=dice)
+    state.queue_spell(wizard, MAGIC_FIST, foe, st_used=3)
+    state.resolve_combat()
+    assert foe.posture == Posture.PRONE          # the generic knockdown
+    assert len(dice._scripted) == 3              # no save on top of it
+
+
+# ---- the CAST option's one-hex move / shift (#422) ----------------------------
+
+def test_cast_option_permits_a_one_hex_move_and_the_cast() -> None:
+    """Option (h): "Move one hex or stand still, and attempt any spell"
+    (wizard-rules line 286) — the step and the cast happen on one turn."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.position = Hex(8, 2)
+    dice = Dice(scripted=[2, 2, 3, 6])
+    state = _game(wizard, dummy, dice=dice)
+    wizard.current_option = None
+    state.move(wizard, Option.CAST, path=[Hex(3, 2)])
+    assert wizard.position == Hex(3, 2)
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    state.resolve_combat()
+    assert dummy.damage_taken == 4               # the stepped cast landed
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_cast_option_rejects_a_two_hex_move() -> None:
+    """One hex is the cap — two is a different option."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.position = Hex(8, 2)
+    state = _game(wizard, dummy, dice=Dice(scripted=[2, 2, 2]))
+    wizard.current_option = None
+    with pytest.raises(IllegalAction, match="at most 1 MA"):
+        state.move(wizard, Option.CAST, path=[Hex(3, 2), Hex(4, 2)])
+
+
+def test_engaged_cast_hex_is_a_shift_that_keeps_adjacency() -> None:
+    """Option (r): "Shift one hex or stand still, and attempt any spell" (line
+    312) — the engaged caster's hex may not break away from its engager."""
+    wizard = _wizard()
+    foe = _target(weapons=[BROADSWORD], ready_weapon=BROADSWORD)
+    foe.position = Hex(3, 2)
+    state = _game(wizard, foe, dice=Dice(scripted=[2, 2, 2]))
+    foe.facing = state.arena.layout.direction_to(foe.position, wizard.position)
+    wizard.current_option = None
+    with pytest.raises(IllegalAction, match="stay adjacent"):
+        state.move(wizard, Option.CAST, path=[Hex(1, 2)])   # 2 hexes from the foe
+    state.move(wizard, Option.CAST, path=[Hex(2, 1)])       # a true shift: legal
+    assert wizard.position == Hex(2, 1)
+
+
+def test_one_hex_mover_may_still_be_stamped_into_a_cast() -> None:
+    """The #413 queue-time gate now keys on the ONE-hex cap: a figure that
+    stepped a single hex under another option may still have its option
+    overwritten into a legal cast (it did nothing CAST forbids)."""
+    wizard = _wizard()
+    dummy = _target()
+    dummy.position = Hex(8, 2)
+    dice = Dice(scripted=[2, 2, 3, 6])
+    state = _game(wizard, dummy, dice=dice)
+    wizard.current_option = None
+    state.move(wizard, Option.MOVE, path=[Hex(3, 2)])   # one hex, option (a)
+    wizard.current_option = Option.CAST                 # what _act_cast_spell stamps
+    state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
+    state.resolve_combat()
+    assert dummy.damage_taken == 4
+
+
 # ---- one action per turn / option integrity (#413, #414) --------------------
 
-def test_cast_after_moving_is_rejected() -> None:
-    """#413: the CAST option moves nothing (options.py movement_cap), so a figure
-    that already spent movement this turn cannot have its option overwritten into
-    a cast (wizard-rules lines 271-274, 286)."""
+def test_cast_after_moving_two_hexes_is_rejected() -> None:
+    """#413/#422: the CAST option moves at most ONE hex (wizard-rules line 286
+    "Move one hex or stand still"), so a figure that spent MORE movement this
+    turn took a different option and cannot have it overwritten into a cast
+    (wizard-rules lines 271-274)."""
     wizard = _wizard()
     dummy = _target()
     dummy.position = Hex(8, 2)                  # far enough not to engage
     state = _game(wizard, dummy, dice=Dice(scripted=[2, 2, 2]))
     wizard.current_option = None
-    state.move(wizard, Option.MOVE, path=[Hex(3, 2)])   # a real one-hex move
+    state.move(wizard, Option.MOVE, path=[Hex(3, 2), Hex(4, 2)])  # two hexes
     wizard.current_option = Option.CAST         # what _act_cast_spell stamps
     with pytest.raises(IllegalAction, match="moved"):
         state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)
