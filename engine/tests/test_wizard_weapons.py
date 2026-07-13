@@ -21,7 +21,8 @@ from engine.invariants import assert_state_invariants
 from engine.options import Option
 from engine.profile import CLASSIC
 from engine.rules_data import CLUB, MAIN_GAUCHE, SHORTSWORD
-from engine.state import GameState, IllegalAction, cast_block_reason
+from engine.state import (
+    BARE_HANDS_CHOICE, GameState, IllegalAction, cast_block_reason)
 from engine.spells import MAGIC_FIST
 
 
@@ -258,3 +259,65 @@ def test_wizard_can_ready_the_sword_back() -> None:
     assert wizard.ready_weapon.name == "Shortsword"
     assert "Staff" in [w.name for w in wizard.weapons]
     assert cast_block_reason(wizard) == "cannot cast with a weapon ready"
+
+
+# ---- #425: a STAFFLESS wizard re-slings to bare hands and casts -------------
+
+def test_staffless_wizard_readies_bare_hands_then_casts() -> None:
+    """The #425 flow: a staffless wizard fielded sword-in-hand has no staff to
+    swap to — readying BARE_HANDS_CHOICE re-slings the sword (still carried,
+    nothing hits the ground), the cast gate clears, and next turn it casts."""
+    wizard = chargen.build(
+        "Classic Melee", _wizard_spec(spells=["magic_fist"], weapon="Shortsword"))
+    assert not wizard.has_staff
+    foe = _fighter()
+    # Cast to-hit [3,3,3]=9 (hit vs adjDX 12), then Magic Fist's damage die.
+    state = _face_off(wizard, foe, dice=Dice(scripted=[3, 3, 3, 6]))
+
+    # Sword in hand — blocked; and the only carried swap targets are no help.
+    assert cast_block_reason(wizard) == "cannot cast with a weapon ready"
+    # Bare hands is offered exactly because something is in hand to re-sling.
+    assert BARE_HANDS_CHOICE in state.ready_choices(wizard)
+
+    state.move(wizard, Option.CHANGE_WEAPONS, ready=BARE_HANDS_CHOICE)
+    assert wizard.ready_weapon is None
+    assert "Shortsword" in [w.name for w in wizard.weapons]   # re-slung, kept
+    assert state.dropped == []                                # nothing dropped
+    assert cast_block_reason(wizard) is None
+    assert any("re-slings" in line for line in state.log)     # narrated clearly
+
+    # Next turn: hands free — the cast queues and resolves.
+    state.end_turn()
+    wizard.current_option = Option.CAST
+    state.queue_spell(wizard, MAGIC_FIST, foe, st_used=1)
+    state.resolve_combat()
+    result = state.spell_results[0]
+    assert result.hit and foe.damage_taken > 0
+    assert_state_invariants(state, CLASSIC, phase="combat")
+
+
+def test_ready_choices_offers_bare_hands_only_with_a_weapon_in_hand() -> None:
+    """ready_choices lists every carried weapon, plus bare hands only when
+    something is readied to re-sling — never a phantom no-op (#425)."""
+    fighter = _fighter()
+    arena = Arena(cols=9, rows=15)
+    fighter.position = Hex(5, 5)
+    state = GameState(arena, [fighter])
+    assert state.ready_choices(fighter) == ["Shortsword", BARE_HANDS_CHOICE]
+    fighter.ready_weapon = None                # e.g. disarmed on a fumbled 17
+    assert state.ready_choices(fighter) == ["Shortsword"]
+    with pytest.raises(IllegalAction, match="nothing readied"):
+        state.move(fighter, Option.READY_WEAPON, ready=BARE_HANDS_CHOICE)
+
+
+def test_any_figure_may_ready_bare_hands() -> None:
+    """No class gate (#425): the rulebook's re-sling has no wizard-only clause,
+    so a plain fighter may clear its hands too (it has no reason, no bar)."""
+    fighter = _fighter()
+    arena = Arena(cols=9, rows=15)
+    fighter.position = Hex(5, 5)
+    state = GameState(arena, [fighter])
+    state.move(fighter, Option.READY_WEAPON, ready=BARE_HANDS_CHOICE)
+    assert fighter.ready_weapon is None
+    assert "Shortsword" in [w.name for w in fighter.weapons]  # slung, not dropped
+    assert state.dropped == []

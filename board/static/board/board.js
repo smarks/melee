@@ -437,12 +437,14 @@ const DEST_OPTIONAL = new Set(["missile_attack"]);
 const WEAPON_CHANGE = new Set(["ready_weapon", "change_weapons"]);
 // The set of weapon names a "which weapon?" selector should offer for an option,
 // or null when there's no real choice (0 or 1). A weapon change picks from the
-// figure's carried weapons; Pick up weapon picks from the dropped weapons in
-// reach (#269 — previously it silently grabbed pickups[0]).
+// server's ready_choices — the carried weapons plus "(bare hands)" when
+// something is in hand to re-sling (#425) — with the carried list as a fallback
+// until the options payload arrives; Pick up weapon picks from the dropped
+// weapons in reach (#269 — previously it silently grabbed pickups[0]).
 function readyChoices(f, option) {
   if (WEAPON_CHANGE.has(option)) {
-    const carried = f.weapons || [];
-    return carried.length > 1 ? carried : null;
+    const choices = (optInfo && optInfo.ready_choices) || f.weapons || [];
+    return choices.length > 1 ? choices : null;
   }
   if (option === "pick_up") {
     const pickups = (optInfo && optInfo.pickups) || [];

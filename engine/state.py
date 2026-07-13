@@ -162,6 +162,15 @@ class PendingCast:
 # ready weapon still blocks a cast.
 STAFF_WEAPON_NAME = "Staff"
 
+# The explicit "ready nothing" choice for a weapon switch (#425): the figure
+# re-slings its ready weapon — it stays carried, nothing drops to the ground —
+# and stands bare-handed. This wires the rules' "the weapon must be dropped or
+# re-slung" alternative (Wizard p.23, rules lines 1159-1162) for the STAFFLESS
+# wizard whose readied weapon blocks its casting with no staff to swap to.
+# Offered to ANY figure with a weapon in hand: the rulebook puts no class gate
+# on re-slinging; a fighter simply has no reason to use it.
+BARE_HANDS_CHOICE = "(bare hands)"
+
 
 def cast_block_reason(figure: Figure) -> str | None:
     """Why ``figure`` may not cast a spell right now, or ``None`` if it may (p.23).
@@ -818,13 +827,16 @@ class _MovementMixin:
     ) -> None:
         """Phase 3: a clean miss flies on up to ten hexes (p.15), striking the
         first figure it does not miss; otherwise it spends itself and lands by the
-        target."""
+        target.
+
+        The stray follows the exact attacker->target line continued past the
+        target (:meth:`Arena.ray_past` — the cube-space ray shared with the
+        missile-spell fly-on), not a fixed neighbor direction stepped from the
+        lane's last hex, which bends at the target with column parity on this
+        offset grid (#429)."""
         attacker = pending.attacker
         layout = self.arena.layout
-        direction = layout.direction_to(*layout.line(attacker.position, target.position)[-2:])
-        current = target.position
-        for _ in range(10):
-            current = layout.neighbor(current, direction)
+        for current in self.arena.ray_past(attacker.position, target.position)[:10]:
             if not self.arena.contains(current):
                 break
             figure = held.get(current)
@@ -1567,9 +1579,29 @@ class _ShieldRushMixin:
                 f"the arena or hit another figure"
             )
 
+    def ready_choices(self, figure: Figure) -> list[str]:
+        """What a Ready Weapon / Change Weapons switch may ready: every carried
+        weapon, plus :data:`BARE_HANDS_CHOICE` when something is in hand to
+        re-sling (#425). The single source for the client's weapon selector, so
+        the menu and :meth:`_validate_ready` can never drift."""
+        choices = [carried.name for carried in figure.weapons]
+        if figure.ready_weapon is not None:
+            choices.append(BARE_HANDS_CHOICE)
+        return choices
+
     def _validate_ready(self, figure: Figure, option: Option, weapon_name: str) -> None:
         """Check a weapon switch is legal, mutating nothing. Called both up front
         (before the board is touched, #77) and again inside :meth:`_ready_weapon`."""
+        if weapon_name == BARE_HANDS_CHOICE:
+            # Readying bare hands (#425): re-sling whatever is in hand. Legal on
+            # the same two switch options as any weapon change; meaningless — so
+            # rejected — when nothing is readied.
+            if option not in (Option.READY_WEAPON, Option.CHANGE_WEAPONS):
+                raise IllegalAction(f"{option.value} cannot change weapons")
+            if figure.ready_weapon is None:
+                raise IllegalAction(
+                    f"{figure.name} has nothing readied to re-sling")
+            return
         weapon = next((w for w in figure.weapons if w.name == weapon_name), None)
         # A Halfling "may throw any weapon on the same turn he readies it" (p.22):
         # readying ordinarily ends the action, but a halfling may ready a
@@ -1587,8 +1619,14 @@ class _ShieldRushMixin:
             raise IllegalAction("cannot ready a missile weapon while engaged")
 
     def _ready_weapon(self, figure: Figure, option: Option, weapon_name: str) -> None:
-        """Switch ``figure``'s ready weapon to a carried one (Section IV e/m)."""
+        """Switch ``figure``'s ready weapon to a carried one (Section IV e/m) —
+        or, for :data:`BARE_HANDS_CHOICE`, re-sling it and ready bare hands
+        (#425): the weapon stays carried, nothing drops to the ground."""
         self._validate_ready(figure, option, weapon_name)
+        if weapon_name == BARE_HANDS_CHOICE:
+            figure.ready_weapon = None
+            self.log.append(narrate_ready(figure, None))
+            return
         weapon = next(w for w in figure.weapons if w.name == weapon_name)
         figure.ready_weapon = weapon
         if weapon.two_handed and figure.shield_ready:
@@ -2443,20 +2481,10 @@ class _CombatMixin:
         """
         caster, target = pending.caster, pending.target
         layout = self.arena.layout
-        # Extend the caster->target ray far past the field in CUBE space and
-        # walk the exact straight line. (Repeatedly stepping one neighbor
-        # direction index is NOT straight on this offset grid — the same index
-        # zigzags rows with column parity — so the rulebook's "continues along
-        # the straight line" is the scaled cube ray.) The lerp fractions of the
-        # extended line reproduce the original caster->target hexes exactly, so
-        # the continuation agrees with the phase-1 lane.
-        span = layout.distance(caster.position, target.position)
-        scale = (self.arena.cols + self.arena.rows) // span + 2
-        cube_start = layout.to_cube(caster.position)
-        cube_end = layout.to_cube(target.position)
-        far = layout.from_cube(*(start + (end - start) * scale
-                                 for start, end in zip(cube_start, cube_end)))
-        for current in layout.line(caster.position, far)[span + 1:]:
+        # The rulebook's "continues along the straight line" is the exact
+        # cube-space ray past the target — :meth:`Arena.ray_past`, the one
+        # line-of-flight geometry shared with the weapon fly-on (#417, #429).
+        for current in self.arena.ray_past(caster.position, target.position):
             if not self.arena.contains(current):
                 return None                     # out over the edge of the field
             megahexes = megahex_distance(layout, caster.position, current)

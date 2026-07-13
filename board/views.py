@@ -1507,6 +1507,10 @@ def _options_payload(request, game: dict, gid: str) -> JsonResponse:
         "disengage_dests": [label_of(h.col, h.row)
                             for h in state.disengage_destinations(figure)],
         "pickups": [w.name for w in state.dropped_in_reach(figure)],
+        # What a Ready Weapon / Change Weapons switch may ready: the carried
+        # weapons plus "(bare hands)" when something is in hand to re-sling
+        # (#425) — the engine's list, so the selector and the validator agree.
+        "ready_choices": state.ready_choices(figure),
         "castable_spells": castable_spells,
         "spell_targets": spell_targets,
     })

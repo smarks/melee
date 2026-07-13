@@ -329,3 +329,65 @@ def test_pick_up_offers_a_choice_of_several_dropped_weapons(live_server, page: P
     expect(page.locator("#phaseBanner")).to_be_visible()
     page.wait_for_timeout(500)
     assert _readied_weapon() == second_drop, "pick-up did not honour the chosen weapon"
+
+
+# --------------------------------------------------------------------------- #
+# #425 — Ready Weapon offers "(bare hands)" so a staffless wizard can re-sling  #
+# --------------------------------------------------------------------------- #
+@pytest.mark.django_db
+def test_ready_weapon_offers_bare_hands_and_clears_the_hand(
+        live_server, page: Page) -> None:
+    from engine import chargen
+    from engine.arena import Arena
+    from engine.figure import create_human
+    from engine.rules_data import BROADSWORD, DAGGER
+    from engine.state import BARE_HANDS_CHOICE
+    from hexarena.hex import Hex
+
+    arena = Arena(cols=13, rows=13)
+    # A STAFFLESS wizard fielded sword-in-hand — the #425 subject: no staff to
+    # swap to, so only the bare-hands re-sling can clear its cast gate.
+    wizard = chargen.build("Classic Melee", {
+        "name": "Grix", "side": "red", "strength": 12, "dexterity": 12,
+        "intelligence": 8, "spells": ["magic_fist"], "weapon": "Shortsword",
+        "armor": "None", "shield": "None",
+    })
+    blue = create_human("Blue Guard", 12, 12, "blue",
+                        weapons=[BROADSWORD, DAGGER], ready_weapon=BROADSWORD)
+    wizard.position, wizard.facing = Hex(7, 7), 3
+    blue.position, blue.facing = Hex(3, 3), 0          # far off; disengaged
+    _register_game("uibatch425", phase="select", figures=[wizard, blue],
+                   arena=arena, active_figure=wizard)
+
+    page.goto(f"{live_server.url}/game/uibatch425")
+    expect(page.locator("#phaseBanner")).to_contain_text("Action selection", timeout=20_000)
+
+    ready = page.locator(
+        f'#controls .charctl[data-ctl="{wizard.uid}"] button[data-opt="ready_weapon"]')
+    expect(ready).to_be_enabled(timeout=10_000)
+    ready.click()
+
+    # The chooser lists the carried weapons (Shortsword + the free Dagger) plus
+    # the server-offered "(bare hands)" row (#425).
+    placing = page.locator(f'#controls .charctl.placing[data-ctl="{wizard.uid}"]')
+    expect(placing).to_be_visible()
+    selector = placing.locator("select[data-ready]")
+    expect(selector).to_be_visible()
+    expect(selector.locator("option")).to_have_count(3)
+    expect(selector.locator("option").last).to_have_text(BARE_HANDS_CHOICE)
+
+    selector.select_option(label=BARE_HANDS_CHOICE)
+    placing.get_by_role("button", name="Set action").click()
+
+    # The sword is re-slung: nothing in hand, still carried, nothing dropped.
+    def _wizard_wire() -> dict:
+        state = page.evaluate(
+            "async (g) => (await (await fetch(`/api/game/${g}`)).json()).state",
+            "uibatch425")
+        return next(f for f in state["figures"] if f["uid"] == wizard.uid)
+
+    expect(page.locator("#phaseBanner")).to_be_visible()
+    page.wait_for_timeout(500)
+    wire = _wizard_wire()
+    assert wire["weapon"] is None, "the hand was not cleared"
+    assert "Shortsword" in wire["weapons"], "the re-slung sword must stay carried"
