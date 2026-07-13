@@ -249,8 +249,8 @@ def test_field_a_wizard_from_the_setup_editor(live_server, page: Page) -> None:
 
 def test_wizard_spell_picker_drops_an_unchecked_spell(live_server, page: Page) -> None:
     # Spells are picked like weapons: unchecking a spell in the editor's picker
-    # removes it from the wizard that starts the match. Here the preset knows Magic
-    # Fist + Stone Flesh; unchecking Stone Flesh leaves a Magic-Fist-only wizard.
+    # removes it from the wizard that starts the match. The preset knows the full
+    # IQ<=13 dozen (#431); unchecking Stone Flesh leaves the other eleven.
     page.goto(live_server.url)
     page.get_by_role("button", name="Add AI player").click()
     page.locator("#editCharBtn").click()
@@ -269,8 +269,12 @@ def test_wizard_spell_picker_drops_an_unchecked_spell(live_server, page: Page) -
     state = page.evaluate(
         "async (g) => (await (await fetch(`/api/game/${g}`)).json()).state", gid)
     wizard = next(f for f in state["figures"] if f["name"] == "Radagast")
-    # Stone Flesh dropped; the preset's other picks (Magic Fist + Staff) remain.
-    assert wizard.get("spells_known") == ["magic_fist", "staff"]
+    # Stone Flesh dropped; every other preset pick remains, order preserved.
+    from board.scenario import WIZARD_PRESET
+
+    expected = [spell for spell in WIZARD_PRESET["spells_known"]
+                if spell != "stone_flesh"]
+    assert wizard.get("spells_known") == expected
 
 
 def test_wizard_spell_picker_gates_spells_above_iq(live_server, page: Page) -> None:
