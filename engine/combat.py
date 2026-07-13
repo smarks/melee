@@ -182,6 +182,7 @@ class SpellResult:
     knockdown: bool = False  # an 18: the shock knocked the CASTER down
     spell_id: str = ""
     target_uid: str = ""
+    caster_uid: str = ""     # who cast it (a continuing spell dies with its caster)
     stops_granted: int = 0   # protection added to the target (Stone Flesh)
     save_made: bool = False  # a control spell's victim saved (unused this gate)
     to_hit_breakdown: str = ""

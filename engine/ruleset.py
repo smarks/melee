@@ -43,7 +43,7 @@ from .facing import FRONT, REAR, facing_bonus, format_situational_parts
 from .figure import Figure
 from .movement import movement_budget as _movement_budget
 from .rules_data import THREE_DICE, Weapon, WeaponKind
-from .spells import Spell, spell_by_id
+from .spells import SPELLS, Spell, spell_by_id, spell_duration_for
 
 # Status outcomes returned by :meth:`Ruleset.status_after_hit`.
 DEAD = "dead"
@@ -98,8 +98,13 @@ class Ruleset:
         range_penalty: int = 0,
         situational: int = 0,
     ) -> int:
-        """adjDX to roll at or under (armor, wounds, facing, range, situation)."""
-        needed = attacker.base_adj_dx + self.wound_penalty(attacker)
+        """adjDX to roll at or under (armor, wounds, spells, facing, range,
+        situation). ``spell_dx_penalty`` is the figure's own active-spell drag
+        (Clumsiness, "-2 for every ST in the spell" — spell-ref lines 353-354);
+        like the wound penalty it rides every to-hit and every cast, and the
+        attack ordering, through this one chokepoint."""
+        needed = (attacker.base_adj_dx + self.wound_penalty(attacker)
+                  + attacker.spell_dx_penalty())
         if not ignore_facing:
             needed += facing_bonus(zone)
         return needed + range_penalty + situational
@@ -113,6 +118,9 @@ class Ruleset:
         wound = self.wound_penalty(attacker)
         if wound:
             parts.append(f"{wound:+d} wounded")
+        bespelled = attacker.spell_dx_penalty()
+        if bespelled:
+            parts.append(f"{bespelled:+d} bespelled")
         parts.extend(format_situational_parts(
             zone, ignore_facing=ignore_facing,
             range_penalty=range_penalty, situational_note=situational_note))
@@ -426,6 +434,7 @@ class Ruleset:
             knockdown=knockdown,
             spell_id=spell.id,
             target_uid=target.uid,
+            caster_uid=caster.uid,
             stops_granted=stops_granted,
             to_hit_breakdown=self.spell_to_hit_breakdown(
                 caster, range_penalty=range_penalty),
@@ -445,25 +454,73 @@ class Ruleset:
         """
         caster.damage_taken += st_used
 
+    def record_active_spell(
+        self, target: Figure, spell: Spell, result: SpellResult
+    ) -> None:
+        """Record a landed lasting spell on ``target`` (#419/#431 bookkeeping).
+
+        The one write path for every spell that persists (protection, buff, or
+        debuff), so the refresh/stack/expiry rules live in a single place:
+
+        * **Refresh, not stack** (#419): "Only one Blur, one Stone Flesh, one
+          Shock Shield, etc., can be cast on any given figure at a time. These
+          spells are not cumulative." (wizard-rules lines 683-684.) A recast
+          REPLACES the running casting — magnitude and duration reset to the new
+          cast's values, never climbing.
+        * **Durations add** for the Slow/Speed pair only: "Slow spells do not
+          multiply, but do add... they keep him at half speed twice as long"
+          (spell-ref lines 22-24, 82-84) — a recast extends ``remaining``.
+        * **Exclusivity**: landing a spell removes each ``exclusive_with`` rival
+          (Stone Flesh is "not [cumulative] with Iron Flesh", spell-ref lines
+          204-206).
+        * A **stated-duration** spell records its (heavy-aware) turn count
+          (spell-ref line 39: Clumsiness is 1 turn against basic ST 30+); a
+          **continuing** spell records ``remaining: None`` and instead expires
+          when its caster is felled (wizard-rules lines 229-231) — the Renew
+          stage stays deferred.
+
+        ``spell_protection`` is then re-synced from the records, so the stops
+        pool can never drift from the active set (invariant-checked).
+        """
+        for rival_id in spell.exclusive_with:
+            target.active_spells.pop(rival_id, None)
+        remaining: int | None = None
+        if spell.duration:
+            remaining = spell_duration_for(spell, target.strength)
+            existing = target.active_spells.get(spell.id)
+            if (spell.durations_add and existing is not None
+                    and existing.get("remaining") is not None):
+                remaining += existing["remaining"]
+        target.active_spells[spell.id] = {
+            "st": result.st_spent,
+            "remaining": remaining,
+            "caster": result.caster_uid,
+        }
+        self.sync_spell_protection(target)
+
+    def sync_spell_protection(self, target: Figure) -> None:
+        """Recompute ``spell_protection`` from the active protection spells.
+
+        ``spell_protection`` (read by :meth:`absorbed`) is derived state: the sum
+        of each active protection spell's ``stops`` (Stone Flesh 4, Iron Flesh 6
+        — p.19-20). Recomputing after every record/expiry keeps it exactly equal
+        to the active set (the #431 invariant) instead of drifting through
+        increments and decrements.
+        """
+        target.spell_protection = sum(
+            SPELLS[spell_id].stops
+            for spell_id in target.active_spells if spell_id in SPELLS
+        )
+
     def apply_spell_protection(self, target: Figure, result: SpellResult) -> None:
         """Fold a landed protection spell's hit-stopping onto ``target`` (p.19).
 
-        Called after a successful protection cast: it raises ``spell_protection``
-        (read by :meth:`absorbed`) and records the spell as active so the Renew
-        stage (Gate 3) can re-energize it. Applying it as a mutation hook keeps
-        :meth:`resolve_spell` pure over the figures.
-
-        "Only one Blur, one Stone Flesh, one Shock Shield, etc., can be cast on
-        any given figure at a time. These spells are not cumulative."
-        (wizard-rules lines 683-684, #419.) A recast of a spell already active on
-        the target therefore REPLACES the running one — the old casting's stops
-        come off before the new casting's go on, so protection refreshes at the
-        spell's flat value and never climbs. Different protection spells still
-        compose (each is "cumulative with any other... hit-stopping ability").
+        Called after a successful protection cast: records the spell as active
+        (:meth:`record_active_spell` — which applies the #419 refresh-not-stack
+        rule and the Stone/Iron Flesh exclusivity) and re-syncs
+        ``spell_protection`` (read by :meth:`absorbed`). Applying it as a
+        mutation hook keeps :meth:`resolve_spell` pure over the figures.
         """
         if result.stops_granted <= 0:
             return
-        if result.spell_id in target.active_spells:
-            target.spell_protection -= spell_by_id(result.spell_id).stops
-        target.spell_protection += result.stops_granted
-        target.active_spells[result.spell_id] = result.st_spent
+        self.record_active_spell(target, spell_by_id(result.spell_id), result)

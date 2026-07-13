@@ -62,6 +62,10 @@ from .narrative import (
     narrate_retreat,
     narrate_shield_rush,
     narrate_spell,
+    narrate_spell_applied,
+    narrate_spell_disarm,
+    narrate_spell_expired,
+    narrate_spell_trip,
     narrate_status,
     narrate_trip,
     narrate_turn,
@@ -69,6 +73,7 @@ from .narrative import (
 )
 from .options import Option, OptionSpec, options_for, spec
 from .ruleset import DEAD, KNOCKDOWN, UNCONSCIOUS, Ruleset, has_offhand_main_gauche
+from .spells import SPELLS, THROWN, spell_cost_for
 from .rules_data import (
     DAGGER,
     MAIN_GAUCHE,
@@ -383,6 +388,10 @@ class _TurnMixin:
                     figure.ready_weapon = dagger
                     self.log.append(narrate_ready(figure, dagger))
                 figure.hth_drew_dagger = False
+        # Spell durations tick at the turn's end (#431): stated-duration spells
+        # count down (the cast turn was their first), continuing spells end with
+        # a felled caster (rules lines 229-232).
+        self._expire_active_spells()
         self._pending.clear()
         self._pending_casts.clear()
         self.spell_results.clear()
@@ -1419,6 +1428,13 @@ class _ShieldRushMixin:
         # The giant snake is "very hard to hit": -3 off the attacker's DX (p.21).
         if target.hard_to_hit:
             mods -= target.hard_to_hit; notes.append(f"-{target.hard_to_hit} hard to hit")
+        # A Blurred target subtracts 4 "from DX of all attacks/spells against
+        # subject" (spell-ref lines 8-10; DX table lines 322-323). Weapon attacks
+        # take it here; casts take it in queue_spell (the cast path never calls
+        # _situational_mods).
+        blur = target.spell_defense_dx_penalty()
+        if blur:
+            mods += blur; notes.append(f"{blur:+d} blurred")
         # A prone crossbowman fires steadied: +1 (p.16).
         if (attacker.posture == Posture.PRONE and is_missile
                 and weapon is not None and weapon.reload > 0):
@@ -1877,12 +1893,21 @@ class _CombatMixin:
         """Which figures ``caster`` may cast ``spell`` at (TFT: Wizard).
 
         The single authority for legal spell targets, the magic mirror of
-        :meth:`attack_candidates`. A **missile** spell (Magic Fist) reuses the
-        exact #362 ranged-target computation — every foe with a position, the front
-        arc satisfied by turning to aim (:meth:`aim`), missiles taking no facing
-        bonus (p.16). A **protection** spell (Stone Flesh) is cast on the caster
-        itself this gate (allies deferred to Gate 3). Other spell types return no
-        targets until their gate.
+        :meth:`attack_candidates`.
+
+        * A **missile** spell (Magic Fist/Fireball/Lightning) reuses the exact
+          #362 ranged-target computation — every foe with a position, the front
+          arc satisfied by turning to aim (:meth:`aim`), missiles taking no
+          facing bonus (p.16).
+        * A **self-cast** buff/protection (Stone Flesh, Iron Flesh, Blur, Speed
+          Movement) is cast on the caster itself this batch (allies deferred).
+        * A **thrown debuff** targets any foe with a position — "a thrown spell
+          can be cast on the wizard's own hex, on any adjacent hex, or on any
+          hex in front of the wizard" (wizard-rules lines 664-666), the front
+          arc satisfied by the same free turn-to-aim missiles get — filtered by
+          the spell's effect having something to act on (Drop Weapon needs a
+          held weapon/shield, Break Weapon a held weapon, Trip a figure on its
+          feet) and by the caster affording the target's (heavy-aware) cost.
         """
         if not caster.can_act() or caster.position is None:
             return []
@@ -1893,9 +1918,33 @@ class _CombatMixin:
         if spell.is_missile:
             return [enemy for enemy in self.enemies_of(caster)
                     if enemy.position is not None]
-        if spell.is_protection:
+        if spell.targets_self or spell.is_protection:
             return [caster]
+        if spell.type == THROWN:
+            return [enemy for enemy in self.enemies_of(caster)
+                    if enemy.position is not None
+                    and self._thrown_spell_applies(spell, enemy)
+                    and spell_cost_for(spell, enemy.strength) <= caster.current_st]
         return []
+
+    def _thrown_spell_applies(self, spell, target: Figure) -> bool:
+        """Whether ``spell``'s effect has anything to act on for ``target``.
+
+        Filters the offered target list so the UI/AI never queue a cast that
+        could only fizzle into nothing: Drop Weapon needs something held in a
+        hand ("a weapon, shield, or whatever", spell-ref lines 11-12), Break
+        Weapon a weapon in hand ("in target's hand", line 153-154), Trip a
+        victim not already down. A lasting debuff (Clumsiness/Slow/Stop)
+        applies to anyone.
+        """
+        if spell.drops_weapon:
+            return (target.ready_weapon is not None
+                    or (target.shield_ready and target.shield.name != "None"))
+        if spell.breaks_weapon:
+            return target.ready_weapon is not None
+        if spell.knocks_down:
+            return target.posture != Posture.PRONE
+        return True
 
     def queue_spell(self, caster: Figure, spell, target: Figure,
                     st_used: int) -> None:
@@ -1906,20 +1955,35 @@ class _CombatMixin:
         know the spell, afford the ST (a cast may bring ST to 0 but not below), not
         have already cast this turn, and ``target`` must be legal for the spell's
         type. A missile cast turns to face its target (:meth:`aim`) and takes the
-        megahex range penalty; a self-protection cast has neither.
+        megahex range penalty; a thrown cast at another figure also aims and takes
+        the thrown-spell range penalty of -1 DX per hex ("subtract 1 from DX for
+        every hex from the wizard to his target", wizard-rules lines 668-670); a
+        self-cast has neither ("A wizard casting a thrown spell on himself...
+        has no DX penalty for distance", lines 670-671). A blurred target drags
+        the cast a further -4 ("Target is Blurred", spell-ref lines 322-323 —
+        the table applies "for either casting of spells or physical attacks").
         """
         self._validate_cast(caster, spell, target, st_used)
-        if spell.is_missile:
+        zone, range_penalty, situational, situational_note = None, 0, 0, ""
+        if target is not caster:
             self.aim(caster, target)               # free turn-to-face (p.16)
             zone = attack_zone(self.arena.layout, caster, target)
-            megahexes = megahex_distance(
-                self.arena.layout, caster.position, target.position)
-            range_penalty = self.rules.missile_range_penalty(megahexes)
-        else:
-            zone, range_penalty = None, 0
+            if spell.is_missile:
+                megahexes = megahex_distance(
+                    self.arena.layout, caster.position, target.position)
+                range_penalty = self.rules.missile_range_penalty(megahexes)
+            else:
+                # Thrown spell: -1 DX per hex of distance (rules lines 668-670).
+                range_penalty = -self.arena.distance(
+                    caster.position, target.position)
+            blur = target.spell_defense_dx_penalty()
+            if blur:
+                situational += blur
+                situational_note = f"{blur:+d} blurred target"
         self._pending_casts.append(PendingCast(
             caster=caster, spell=spell, target=target, st_used=st_used,
-            zone=zone, range_penalty=range_penalty))
+            zone=zone, range_penalty=range_penalty,
+            situational=situational, situational_note=situational_note))
 
     def _validate_cast(self, caster: Figure, spell, target: Figure,
                        st_used: int) -> None:
@@ -1940,11 +2004,19 @@ class _CombatMixin:
             pending.caster is caster for pending in self._pending_casts
         ):
             raise IllegalAction(f"{caster.name} has already cast this turn")
-        # ST bounds: a missile spell may invest 1..max_st; any other spell costs
-        # its flat st_cost exactly. A cast may reduce ST to exactly 0 but never
-        # below (p.3-4) — casting below 0 ST is rejected here.
-        floor = spell.st_cost
-        ceiling = spell.max_st if spell.is_missile else spell.st_cost
+        # ST bounds: a variable-ST spell may invest floor..ceiling — a missile
+        # spell 1..3 (rules line 620), Clumsiness 1..the caster's own pool (the
+        # reference caps it nowhere). Any other spell costs its flat st_cost
+        # exactly, heavy-target variant applied (Drop Weapon is 2 ST against
+        # basic ST 20+, Trip 4 ST against 30+ — spell-ref lines 12-13, 90-91).
+        # A cast may reduce ST to exactly 0 but never below (p.3-4) — casting
+        # below 0 ST is rejected here.
+        floor = spell_cost_for(spell, target.strength)
+        if spell.variable_st:
+            ceiling = spell.max_st if spell.max_st else caster.current_st
+            floor = min(floor, ceiling)
+        else:
+            ceiling = floor
         if not (floor <= st_used <= ceiling):
             raise IllegalAction(
                 f"{spell.name} takes {floor}..{ceiling} ST (got {st_used})")
@@ -2340,9 +2412,10 @@ class _CombatMixin:
             caster.attacked_this_turn = True
             self.log.append(narrate_cast_lost(caster, spell, "too_weak"))
             return
-        # A missile spell needs a live target: a foe already felled this phase is
-        # not struck (the #310 rule). A self-protection cast always has its caster.
-        if spell.is_missile and target.out_of_play:
+        # A spell aimed at another figure needs a live target: a foe already
+        # felled this phase is not struck (the #310 rule) — true for a missile
+        # spell and a thrown debuff alike. A self-cast always has its caster.
+        if target is not caster and target.out_of_play:
             return
         if spell.is_missile:
             # A missile spell traces a line-of-flight like a hurled/fired weapon
@@ -2357,8 +2430,8 @@ class _CombatMixin:
                 situational=pending.situational)
             self.log.append(narrate_spell(caster, target, result))
             self.spell_results.append(result)
-            if result.hit and spell.is_protection:
-                self.rules.apply_spell_protection(target, result)
+            if result.hit:
+                self._apply_thrown_spell_effect(pending, result)
         self.rules.apply_spell_cost(
             caster, spell, result.st_spent, fizzled=result.fizzled)
         caster.cast_this_turn = True
@@ -2459,7 +2532,7 @@ class _CombatMixin:
         result = SpellResult(
             hit=False, rolled=rolled, needed=needed, dice_count=THREE_DICE,
             multiplier=0, st_spent=1, damage=0, spell_id=spell.id,
-            target_uid=blocker.uid, note="fizzled_in_lane",
+            target_uid=blocker.uid, caster_uid=caster.uid, note="fizzled_in_lane",
             to_hit_breakdown=self.rules.spell_to_hit_breakdown(
                 caster, range_penalty=range_penalty))
         self.log.append(narrate_spell(caster, blocker, result))
@@ -2522,7 +2595,7 @@ class _CombatMixin:
             hit=True, rolled=rolled, needed=needed, dice_count=THREE_DICE,
             multiplier=multiplier, st_spent=pending.st_used, damage=damage,
             raw_damage=raw_damage, spell_id=spell.id, target_uid=victim.uid,
-            note=note,
+            caster_uid=caster.uid, note=note,
             to_hit_breakdown=self.rules.spell_to_hit_breakdown(
                 caster, range_penalty=range_penalty))
         self.log.append(narrate_spell(caster, victim, result))
@@ -2566,9 +2639,13 @@ class _CombatMixin:
             return
         if not victim.can_act() or victim.posture == Posture.PRONE:
             return
+        # adjDX for the save carries every cumulative adjustment ("All applicable
+        # DX adjustments are cumulative", spell-ref line 294) — armour, wounds,
+        # and an active Clumsiness (#431).
         needed = max(
             victim.current_st,
-            victim.base_adj_dx + self.rules.wound_penalty(victim))
+            victim.base_adj_dx + self.rules.wound_penalty(victim)
+            + victim.spell_dx_penalty())
         rolled = self.dice.total(THREE_DICE)
         if rolled <= needed:
             self.log.append(narrate_trip(
@@ -2578,6 +2655,140 @@ class _CombatMixin:
         victim.knocked_down_this_turn = True
         self.log.append(narrate_trip(
             victim, fell=True, rolled=rolled, needed=needed))
+
+    def _apply_thrown_spell_effect(self, pending: PendingCast,
+                                   result: SpellResult) -> None:
+        """Land a HIT thrown spell's effect on its target (#431).
+
+        The one dispatch for every thrown-spell payload, mirror of
+        :meth:`_apply_missile_spell_hit`:
+
+        * a **protection** spell folds its stops in via
+          :meth:`Ruleset.apply_spell_protection` (#419 refresh-not-stack);
+        * a **lasting** buff/debuff (Blur, Clumsiness, Slow/Speed Movement,
+          Stop) is recorded in the target's ``active_spells``
+          (:meth:`Ruleset.record_active_spell`) and narrated with its real
+          magnitude and duration;
+        * an **instant** effect (Drop Weapon, Break Weapon, Trip) acts through
+          the same machinery its non-magical twin uses (the 17-fumble drop, the
+          18-fumble break, the knockdown posture change).
+        """
+        caster, spell, target = pending.caster, pending.spell, pending.target
+        if spell.is_protection:
+            self.rules.apply_spell_protection(target, result)
+            return
+        if spell.has_lasting_effect:
+            self.rules.record_active_spell(target, spell, result)
+            record = target.active_spells[spell.id]
+            self.log.append(narrate_spell_applied(target, spell, record))
+            return
+        if spell.drops_weapon:
+            self._apply_spell_drop(target)
+        elif spell.breaks_weapon:
+            self._apply_spell_break(target)
+        elif spell.knocks_down:
+            self._apply_spell_knockdown(target)
+
+    def _apply_spell_drop(self, target: Figure) -> None:
+        """Drop Weapon's effect: "Makes victim drop whatever is in one hand – a
+        weapon, shield, or whatever" (spell-ref lines 11-12).
+
+        The ready weapon falls to the ground in the victim's own hex, exactly
+        as a 17-fumble drop lands it (:meth:`_apply`) — recoverable with PICK
+        UP, and a wizard's dropped staff keeps its owner-only guard. With no
+        weapon in hand, a ready shield is shed instead (the engine's one
+        shield-shedding model, as :meth:`_grapple_bare` sheds it): off the arm
+        and out of play. With neither, the spell clutches at nothing — narrated
+        truthfully.
+        """
+        weapon = target.ready_weapon
+        if weapon is not None:
+            if weapon in target.weapons:
+                target.weapons.remove(weapon)
+            self._drop_to_ground(weapon, target.position)
+            target.ready_weapon = None
+            self.log.append(narrate_spell_disarm(target, weapon.name, broke=False))
+        elif target.shield_ready and target.shield.name != "None":
+            shield_name = target.shield.name
+            target.shield_ready = False
+            target.shield = NO_SHIELD
+            self.log.append(narrate_spell_disarm(target, shield_name, broke=False))
+        else:
+            self.log.append(narrate_spell_disarm(target, None, broke=False))
+
+    def _apply_spell_break(self, target: Figure) -> None:
+        """Break Weapon's effect: "Shatters one weapon, shield, staff, etc., in
+        target's hand" (spell-ref lines 153-155).
+
+        Maps onto the engine's ONE broken-weapon model — the 18-fumble
+        (:meth:`_apply`: "dropped lands intact; broken is gone"): the ready
+        weapon is destroyed outright, leaving nothing to recover. (The
+        reference's half-damage broken state is not modelled for the fumble
+        either, so both break paths stay consistent; a broken staff being
+        "useless" matches removal exactly.)
+        """
+        weapon = target.ready_weapon
+        if weapon is not None:
+            if weapon in target.weapons:
+                target.weapons.remove(weapon)
+            target.ready_weapon = None
+            self.log.append(narrate_spell_disarm(target, weapon.name, broke=True))
+        else:
+            self.log.append(narrate_spell_disarm(target, None, broke=True))
+
+    def _apply_spell_knockdown(self, target: Figure) -> None:
+        """Trip's effect: "Knocks victim down. Does no damage" (spell-ref lines
+        88-91). No saving roll — the reference's 4-die adjDX save applies only
+        at a chasm/pit/river edge, and this arena has none. A victim already
+        down (or felled this phase) has nothing left to knock over."""
+        if not target.can_act() or target.posture == Posture.PRONE:
+            self.log.append(narrate_spell_trip(target, already_down=True))
+            return
+        target.posture = Posture.PRONE
+        target.knocked_down_this_turn = True
+        self.log.append(narrate_spell_trip(target, already_down=False))
+
+    def _expire_active_spells(self) -> None:
+        """End-of-turn spell expiry (#431) — the duration rules made real.
+
+        * A **stated-duration** spell ticks down one turn, the cast turn counted
+          as the first ("Some spells are not renewable, but last a stated number
+          of turns after casting. The turn such a spell is cast is always
+          counted as the first turn." — wizard-rules lines 231-232) and is
+          removed when its count runs out.
+        * A **continuing** spell (Stone/Iron Flesh, Blur) ends when its caster
+          can no longer renew it — dead or unconscious ("All spells that are
+          renewed last until the turn ends (or the wizard dies or goes
+          unconscious)... Only the caster can re-energize them.", rules lines
+          229-231, 803). The Renew stage itself (and its per-turn ST charge)
+          stays deferred: a conscious caster's continuing spells are treated as
+          renewed at no cost.
+
+        Every removal re-syncs ``spell_protection`` so the stops pool stays
+        equal to the active protection set (the #431 invariant).
+        """
+        by_uid = {figure.uid: figure for figure in self.figures}
+        for figure in self.figures:
+            if not figure.active_spells:
+                continue
+            expired: list[str] = []
+            for spell_id, record in figure.active_spells.items():
+                remaining = record.get("remaining")
+                if remaining is None:
+                    caster = by_uid.get(record.get("caster", ""))
+                    if caster is None or not caster.can_act():
+                        expired.append(spell_id)
+                else:
+                    record["remaining"] = remaining - 1
+                    if record["remaining"] <= 0:
+                        expired.append(spell_id)
+            for spell_id in expired:
+                figure.active_spells.pop(spell_id, None)
+                spell = SPELLS.get(spell_id)
+                if spell is not None and not figure.out_of_play:
+                    self.log.append(narrate_spell_expired(figure, spell))
+            if expired:
+                self.rules.sync_spell_protection(figure)
 
     def _apply_cast_status(self, figure: Figure, status: str | None) -> None:
         """Apply a post-cast status (DEAD/UNCONSCIOUS/KNOCKDOWN) and narrate it."""

@@ -175,11 +175,17 @@ class Figure:
     hth_drew_dagger: bool = False    # readied a dagger mid-grapple (usable next turn)
 
     # ---- wizard per-fight state (Classic magic) ----
-    # ``active_spells`` maps the id of each continuing spell in effect to the ST
-    # invested (so the Renew stage — Gate 3 — knows the upkeep). ``spell_protection``
-    # is the running hit-stopping from protection spells (Stone Flesh), read by
-    # ``Ruleset.absorbed``. Both persist for the fight (CARRY_OVER_STATE).
-    active_spells: dict[str, int] = field(default_factory=dict)
+    # ``active_spells`` maps the id of each lasting spell in effect ON THIS FIGURE
+    # to its record: ``{"st": ST invested (drives Clumsiness's -2/ST magnitude and
+    # the deferred Renew stage's upkeep), "remaining": turns left for a
+    # stated-duration spell / None for a continuing one, "caster": uid of the
+    # wizard who cast it (a continuing spell ends when its caster is felled,
+    # wizard-rules lines 229-231)}``. ``spell_protection`` is the running
+    # hit-stopping from protection spells (Stone/Iron Flesh), read by
+    # ``Ruleset.absorbed`` and kept equal to the active protection spells' stops
+    # by ``Ruleset.sync_spell_protection`` (invariant-checked, #431). Both persist
+    # for the fight (CARRY_OVER_STATE).
+    active_spells: dict[str, dict] = field(default_factory=dict)
     spell_protection: int = 0
     cast_this_turn: bool = False     # cast a new spell this turn (one/turn, p.11)
 
@@ -249,10 +255,29 @@ class Figure:
         heavier armor an elf "moves the same as a man".
         """
         if self.flying and self.fly_movement_allowance:
-            return self.fly_movement_allowance
-        base = self.armor.movement_allowance
-        if self.race == Race.ELF and self.armor in (NO_ARMOR, CLOTH, LEATHER):
-            base += 2
+            base = self.fly_movement_allowance
+        else:
+            base = self.armor.movement_allowance
+            if self.race == Race.ELF and self.armor in (NO_ARMOR, CLOTH, LEATHER):
+                base += 2
+        return self._spell_scaled_ma(base)
+
+    def _spell_scaled_ma(self, base: int) -> int:
+        """``base`` MA scaled by active movement spells (TFT: Wizard, #431).
+
+        Slow Movement halves the subject's MA (spell-ref lines 22-24), Speed
+        Movement doubles it (lines 82-84), Stop zeroes it (lines 209-211) —
+        each spell's ``ma_percent`` applied in turn. Same-spell recasts never
+        stack (a recast only extends the duration, #419/spell-ref lines 22-24),
+        so at most one of each factor is ever in play.
+        """
+        if not self.active_spells:
+            return base
+        from .spells import SPELLS  # local import: spells is pure data, no cycle
+        for spell_id in self.active_spells:
+            spell = SPELLS.get(spell_id)
+            if spell is not None and spell.ma_percent != 100:
+                base = base * spell.ma_percent // 100
         return base
 
     @property
@@ -303,6 +328,42 @@ class Figure:
             penalty += WOUND_DX_PENALTY
         if self.current_st <= LOW_ST_THRESHOLD:
             penalty += LOW_ST_DX_PENALTY
+        return penalty
+
+    def spell_dx_penalty(self) -> int:
+        """Situational DX penalty on this figure's OWN rolls from spells on it.
+
+        Clumsiness: "-2 for every ST in the spell" (spell-ref lines 38-39; DX
+        Adjustment Table lines 353-354). Cumulative with every other adjustment
+        ("All applicable DX adjustments are cumulative", spell-ref line 294),
+        so it folds into ``Ruleset.to_hit_number`` beside the wound penalty.
+        Returns 0 or a negative number.
+        """
+        if not self.active_spells:
+            return 0
+        from .spells import SPELLS  # local import: spells is pure data, no cycle
+        penalty = 0
+        for spell_id, record in self.active_spells.items():
+            spell = SPELLS.get(spell_id)
+            if spell is not None and spell.dx_penalty_per_st:
+                penalty += spell.dx_penalty_per_st * record.get("st", 0)
+        return penalty
+
+    def spell_defense_dx_penalty(self) -> int:
+        """DX penalty imposed on anyone attacking or casting AT this figure.
+
+        Blur: "Subtracts 4 from DX of all attacks/spells against subject"
+        (spell-ref lines 8-10; DX table lines 322-323 "Target is Blurred -4").
+        Returns 0 or a negative number.
+        """
+        if not self.active_spells:
+            return 0
+        from .spells import SPELLS  # local import: spells is pure data, no cycle
+        penalty = 0
+        for spell_id in self.active_spells:
+            spell = SPELLS.get(spell_id)
+            if spell is not None and spell.defense_dx_penalty:
+                penalty += spell.defense_dx_penalty
         return penalty
 
     def hits_stopped(self, *, from_front: bool, from_rear: bool = False) -> int:
