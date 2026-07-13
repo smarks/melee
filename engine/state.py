@@ -2443,11 +2443,20 @@ class _CombatMixin:
         """
         caster, target = pending.caster, pending.target
         layout = self.arena.layout
-        direction = layout.direction_to(
-            *layout.line(caster.position, target.position)[-2:])
-        current = target.position
-        while True:
-            current = layout.neighbor(current, direction)
+        # Extend the caster->target ray far past the field in CUBE space and
+        # walk the exact straight line. (Repeatedly stepping one neighbor
+        # direction index is NOT straight on this offset grid — the same index
+        # zigzags rows with column parity — so the rulebook's "continues along
+        # the straight line" is the scaled cube ray.) The lerp fractions of the
+        # extended line reproduce the original caster->target hexes exactly, so
+        # the continuation agrees with the phase-1 lane.
+        span = layout.distance(caster.position, target.position)
+        scale = (self.arena.cols + self.arena.rows) // span + 2
+        cube_start = layout.to_cube(caster.position)
+        cube_end = layout.to_cube(target.position)
+        far = layout.from_cube(*(start + (end - start) * scale
+                                 for start, end in zip(cube_start, cube_end)))
+        for current in layout.line(caster.position, far)[span + 1:]:
             if not self.arena.contains(current):
                 return None                     # out over the edge of the field
             megahexes = megahex_distance(layout, caster.position, current)
@@ -2467,6 +2476,7 @@ class _CombatMixin:
                     pending, figure, multiplier, rolled=rolled, needed=needed,
                     range_penalty=range_penalty, note="flew_on")
             # missed this one too — the spell keeps flying
+        return None                             # ran out of extended ray
 
     def _spell_strike(
         self, pending: PendingCast, victim: Figure, multiplier: int, *,
