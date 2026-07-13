@@ -92,13 +92,16 @@ _SPECS: dict[Option, OptionSpec] = {
         Option.DISENGAGE, ENGAGED, "one", False, False, False),
     Option.HTH_ATTACK: OptionSpec(
         Option.HTH_ATTACK, ANY, "one", True, False, False),
-    # Casting is a stand-still action available whether engaged or disengaged
-    # (context ANY): a wizard stays put and casts. It is not an attack (no weapon
-    # blow), moves nothing, and dodges/defends nothing; ``casts_spell`` tags it so
-    # availability can gate it to wizards (and forbid a shield/non-staff weapon in
-    # hand, Wizard p.23).
+    # Casting is available whether engaged or disengaged (context ANY), and each
+    # form grants ONE hex of movement (#422): disengaged option (h) is "Move one
+    # hex or stand still, and attempt any spell" (wizard-rules line 286), engaged
+    # option (r) "Shift one hex or stand still, and attempt any spell" (line 312)
+    # — state._SHIFT_OPTIONS makes the engaged hex a true shift (adjacency kept).
+    # It is not an attack (no weapon blow) and dodges/defends nothing;
+    # ``casts_spell`` tags it so availability can gate it to wizards (and forbid
+    # a shield/non-staff weapon in hand, Wizard p.23).
     Option.CAST: OptionSpec(
-        Option.CAST, ANY, "none", False, False, False, casts_spell=True),
+        Option.CAST, ANY, "one", False, False, False, casts_spell=True),
     Option.PICK_UP: OptionSpec(
         Option.PICK_UP, ANY, "none", False, False, False),
     Option.GO_PRONE: OptionSpec(

@@ -308,16 +308,17 @@ def test_spell_reference_numbers() -> None:
 
 # ---- one action per turn / option integrity (#413, #414) --------------------
 
-def test_cast_after_moving_is_rejected() -> None:
-    """#413: the CAST option moves nothing (options.py movement_cap), so a figure
-    that already spent movement this turn cannot have its option overwritten into
-    a cast (wizard-rules lines 271-274, 286)."""
+def test_cast_after_moving_two_hexes_is_rejected() -> None:
+    """#413/#422: the CAST option moves at most ONE hex (wizard-rules line 286
+    "Move one hex or stand still"), so a figure that spent MORE movement this
+    turn took a different option and cannot have it overwritten into a cast
+    (wizard-rules lines 271-274)."""
     wizard = _wizard()
     dummy = _target()
     dummy.position = Hex(8, 2)                  # far enough not to engage
     state = _game(wizard, dummy, dice=Dice(scripted=[2, 2, 2]))
     wizard.current_option = None
-    state.move(wizard, Option.MOVE, path=[Hex(3, 2)])   # a real one-hex move
+    state.move(wizard, Option.MOVE, path=[Hex(3, 2), Hex(4, 2)])  # two hexes
     wizard.current_option = Option.CAST         # what _act_cast_spell stamps
     with pytest.raises(IllegalAction, match="moved"):
         state.queue_spell(wizard, MAGIC_FIST, dummy, st_used=1)

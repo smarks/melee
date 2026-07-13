@@ -64,6 +64,10 @@ class Spell:
         renew_cost: ST paid each turn a continuing spell is maintained (0 for a
             fire-and-forget spell). Recorded now; the Renew turn-stage that spends
             it arrives in Gate 3.
+        trips_at: For a missile spell that also trips, the PRE-armour damage at
+            which the target must save (3 dice vs ST or DX, whichever is higher)
+            or fall down — Magic Fist trips at 6 (spell-ref lines 18-21, #421);
+            0 for a spell with no trip effect.
     """
 
     id: str
@@ -76,6 +80,7 @@ class Spell:
     stops: int = 0
     continuing: bool = False
     renew_cost: int = 0
+    trips_at: int = 0
 
     @property
     def is_missile(self) -> bool:
@@ -98,6 +103,10 @@ class Spell:
 #   used" floor is applied by the damage roll in the ruleset.
 # Rules line 620: "the amount of ST (maximum 3) he is using for the spell."
 #   -> max_st 3. st_cost is the 1-ST minimum a cast must spend.
+# Spell-reference lines 18-21: "A Magic Fist that does 6 or more hits before
+#   armor/shield protection will also trip its target, making him/her fall down,
+#   unless he/she makes a 3-die roll on ST or DX, whichever is higher."
+#   -> trips_at 6 (the save itself is rolled in GameState._magic_fist_trip, #421).
 MAGIC_FIST = Spell(
     id="magic_fist",
     name="Magic Fist",
@@ -106,6 +115,7 @@ MAGIC_FIST = Spell(
     st_cost=1,
     max_st=3,
     damage_per_st=-2,
+    trips_at=6,
 )
 
 # --- Staff ------------------------------------------------------------------

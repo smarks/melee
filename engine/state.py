@@ -24,7 +24,16 @@ from hexarena.hex import Hex
 from hexarena.pathfinding import Reach
 
 from .arena import BODY_COST, CLEAR_COST, Arena
-from .combat import AttackResult, DamageEvent, SpellResult
+from .combat import (
+    SPELL_LANE_HIT,
+    SPELL_MISSED_PAST,
+    AttackResult,
+    DamageEvent,
+    SpellResult,
+    classify_spell_roll,
+    classify_spell_roll_to_miss,
+    roll_missile_spell_damage,
+)
 from .facing import (
     FRONT,
     REAR,
@@ -54,6 +63,7 @@ from .narrative import (
     narrate_shield_rush,
     narrate_spell,
     narrate_status,
+    narrate_trip,
     narrate_turn,
     narrate_victory,
 )
@@ -63,6 +73,7 @@ from .rules_data import (
     DAGGER,
     MAIN_GAUCHE,
     NO_SHIELD,
+    THREE_DICE,
     DamageDice,
     WeaponKind,
     max_missile_shots,
@@ -72,8 +83,12 @@ from .rules_data import (
 # Engaged moves that are a "shift": they keep the figure engaged, so the
 # destination must stay adjacent to every foe engaging it (p.8, #120). DISENGAGE
 # is excluded -- it is the one engaged move allowed to break away.
+# CAST belongs here for its ENGAGED form — option (r) "Shift one hex or stand
+# still" (wizard-rules line 312, #422): the hex must keep engager adjacency. A
+# disengaged caster has no engagers, so the same membership leaves its option
+# (h) one-hex move (line 286) unrestricted.
 _SHIFT_OPTIONS = frozenset({
-    Option.SHIFT_ATTACK, Option.SHIFT_DEFEND, Option.CHANGE_WEAPONS,
+    Option.SHIFT_ATTACK, Option.SHIFT_DEFEND, Option.CHANGE_WEAPONS, Option.CAST,
 })
 
 
@@ -1798,9 +1813,11 @@ class _CombatMixin:
         declaration) and :meth:`spell_targets` (so the UI never offers a cast the
         queue would reject):
 
-        * the CAST option moves nothing (options.py movement_cap), so a figure
-          that already spent movement took a different option and cannot have it
-          overwritten into a cast (wizard-rules lines 271-274, 286) (#413);
+        * the CAST option moves at most ONE hex (options.py movement_cap;
+          wizard-rules line 286 "Move one hex or stand still", line 312 "Shift
+          one hex or stand still", #422), so a figure that spent more movement
+          took a different option and cannot have it overwritten into a cast
+          (wizard-rules lines 271-274) (#413);
         * dodge/defend permits "the casting of a spell or any sort of attack"
           to neither (wizard-rules lines 1010-1011) (#413);
         * one option per turn (wizard-rules lines 262-263): a figure that struck,
@@ -2289,35 +2306,240 @@ class _CombatMixin:
         # not struck (the #310 rule). A self-protection cast always has its caster.
         if spell.is_missile and target.out_of_play:
             return
-        result = self.rules.resolve_spell(
-            self.dice, caster, spell, target=target, st_used=pending.st_used,
-            range_penalty=pending.range_penalty, situational=pending.situational)
+        if spell.is_missile:
+            # A missile spell traces a line-of-flight like a hurled/fired weapon
+            # (#417): blockers rolled to miss, the aimed target, then a miss
+            # flying on. Each event narrates and records as it happens; the
+            # FINAL SpellResult carries the cast's overall ST charge.
+            result = self._resolve_spell_flight(pending)
+        else:
+            result = self.rules.resolve_spell(
+                self.dice, caster, spell, target=target, st_used=pending.st_used,
+                range_penalty=pending.range_penalty,
+                situational=pending.situational)
+            self.log.append(narrate_spell(caster, target, result))
+            self.spell_results.append(result)
+            if result.hit and spell.is_protection:
+                self.rules.apply_spell_protection(target, result)
         self.rules.apply_spell_cost(
             caster, spell, result.st_spent, fizzled=result.fizzled)
         caster.cast_this_turn = True
         caster.attacked_this_turn = True        # a cast is the figure's action
-        self.log.append(narrate_spell(caster, target, result))
-        self.spell_results.append(result)
         # An 18 fizzle: the shock knocks the caster down (p.11).
         if result.knockdown:
             caster.posture = Posture.PRONE
             caster.knocked_down_this_turn = True
-        if result.hit and spell.is_missile:
-            self.rules.apply_damage(target, result.damage)
-            if result.damage > 0:
-                # Audit the hit with both sides (a missile spell only ever targets
-                # an enemy — queue_spell forbids a same-side missile target).
-                self.damage_events.append(DamageEvent(
-                    attacker_side=caster.side, target_side=target.side,
-                    attacker_uid=caster.uid, target_uid=target.uid,
-                    damage=result.damage))
-            self._apply_cast_status(target, self.rules.status_after_hit(target))
-        elif result.hit and spell.is_protection:
-            self.rules.apply_spell_protection(target, result)
         # Paying the ST cost may have dropped the caster to 0 (unconscious) — a
         # legal cast that spends its last ST (p.3-4). It can never go below 0
         # (queue_spell rejects that), so it is never a self-kill.
         self._apply_cast_status(caster, self.rules.status_after_hit(caster))
+
+    def _resolve_spell_flight(self, pending: PendingCast) -> SpellResult:
+        """A missile spell's line-of-flight (Wizard p.12, rules lines 624-652) —
+        the spell mirror of :meth:`_resolve_flight` (#417).
+
+        Three sequential phases, each able to end the flight, exactly as for a
+        flying weapon:
+
+        1. **Blockers** — every ENEMY figure standing in the lane between caster
+           and target is "rolled to miss" (adjDX re-figured for the range to that
+           figure): success slips the spell past; the 14/15-16/17-18 special
+           table strikes it anyway (auto/double/triple); any other failure
+           "just fizzles in that hex" (lines 650-652). A FRIENDLY figure in the
+           lane is never rolled and never struck — the same friendly-fire guard
+           the weapon flight applies (#229), the stand-in for the rulebook's
+           always-taken option of rolling to miss a friend.
+        2. **The aimed target** — the normal cast to-hit (four dice against a
+           dodging target, #418). A hit lands; a 17/18 fizzle dies in the
+           caster's hands (nothing flies anywhere); a plain miss flies on.
+        3. **Fly-on** — the missed spell continues along the caster→target line,
+           making a fresh to-hit roll (range re-figured) against each enemy
+           whose hex it enters, until it hits, leaves the field, or has
+           travelled a number of MEGAHEXES equal to the caster's basic ST
+           (lines 628-630).
+
+        Returns the FINAL SpellResult of the flight — the one whose ``st_spent``
+        (full invested ST on any hit or fizzle, 1 on a clean total miss) and
+        ``fizzled``/``knockdown`` flags settle the caster's books. Every event
+        result is narrated and appended to ``spell_results`` as it happens.
+        """
+        caster, spell, target = pending.caster, pending.spell, pending.target
+        layout = self.arena.layout
+        held = self.occupied(exclude=caster)
+        # Phase 1: figures standing in the lane, caster -> target.
+        for hex_position in layout.line(caster.position, target.position)[1:-1]:
+            blocker = held.get(hex_position)
+            if blocker is None or blocker is target:
+                continue
+            if blocker.side == caster.side:
+                continue            # a friend is never harmed by its side (#229)
+            outcome, result = self._spell_roll_to_miss(pending, blocker)
+            if outcome != SPELL_MISSED_PAST:
+                return result       # struck it, or fizzled in its hex
+        # Phase 2: the aimed target (resolve_spell rolls four dice vs a dodging
+        # target, #418, and draws the damage dice on a hit).
+        aimed = self.rules.resolve_spell(
+            self.dice, caster, spell, target=target, st_used=pending.st_used,
+            range_penalty=pending.range_penalty, situational=pending.situational)
+        self.log.append(narrate_spell(caster, target, aimed))
+        self.spell_results.append(aimed)
+        if aimed.hit:
+            self._apply_missile_spell_hit(pending, target, aimed)
+            return aimed
+        if aimed.fizzled:
+            return aimed            # a 17/18 dies uncast — nothing flies on
+        # Phase 3: a clean miss flies on.
+        flown = self._spell_fly_on(pending, held)
+        return flown if flown is not None else aimed
+
+    def _spell_roll_to_miss(
+        self, pending: PendingCast, blocker: Figure
+    ) -> tuple[str, SpellResult | None]:
+        """Roll the missile spell past ``blocker`` standing in its lane (#417).
+
+        The caster rolls its adjDX or less, range re-figured for the blocker's
+        distance (rules lines 643-646); :func:`classify_spell_roll_to_miss`
+        applies the special table. Returns the outcome and, when the flight ends
+        here, the recorded SpellResult (``None`` when the spell slipped past).
+        """
+        caster, spell = pending.caster, pending.spell
+        range_penalty = self.rules.missile_range_penalty(megahex_distance(
+            self.arena.layout, caster.position, blocker.position))
+        needed = self.rules.spell_to_hit_number(caster, range_penalty=range_penalty)
+        rolled = self.dice.total(THREE_DICE)
+        outcome, multiplier = classify_spell_roll_to_miss(rolled, needed)
+        if outcome == SPELL_MISSED_PAST:
+            return outcome, None
+        if outcome == SPELL_LANE_HIT:
+            return outcome, self._spell_strike(
+                pending, blocker, multiplier, rolled=rolled, needed=needed,
+                range_penalty=range_penalty, note="struck_in_lane")
+        # A failed roll-to-miss an enemy is NOT a hit — "a missed 'roll to miss'
+        # an enemy just fizzles in that hex" (lines 650-652). Not a 17/18 casting
+        # fizzle either: the plain-miss ST charge (1) applies, and the caster
+        # suffers no knockdown.
+        result = SpellResult(
+            hit=False, rolled=rolled, needed=needed, dice_count=THREE_DICE,
+            multiplier=0, st_spent=1, damage=0, spell_id=spell.id,
+            target_uid=blocker.uid, note="fizzled_in_lane",
+            to_hit_breakdown=self.rules.spell_to_hit_breakdown(
+                caster, range_penalty=range_penalty))
+        self.log.append(narrate_spell(caster, blocker, result))
+        self.spell_results.append(result)
+        return outcome, result
+
+    def _spell_fly_on(
+        self, pending: PendingCast, held: dict
+    ) -> SpellResult | None:
+        """Phase 3 (rules lines 624-631): the missed spell "continues along the
+        straight line drawn between the center of the wizard's hex and the
+        center of the target hex", making a fresh to-hit roll (DX re-figured for
+        the new range) against each enemy whose hex it enters, until it (a) hits
+        a figure, (b) misses everyone and leaves the field, or (c) has travelled
+        a number of megahexes equal to the caster's basic ST. Friends along the
+        way are never rolled or struck (the #229 guard, as in phase 1). A 16-18
+        total here is a plain miss — the cast's own fizzle band applied only to
+        the aimed roll; mid-flight there is no spell left to fizzle.
+        """
+        caster, target = pending.caster, pending.target
+        layout = self.arena.layout
+        direction = layout.direction_to(
+            *layout.line(caster.position, target.position)[-2:])
+        current = target.position
+        while True:
+            current = layout.neighbor(current, direction)
+            if not self.arena.contains(current):
+                return None                     # out over the edge of the field
+            megahexes = megahex_distance(layout, caster.position, current)
+            if megahexes > caster.strength:
+                return None                     # spent: the basic-ST megahex cap
+            figure = held.get(current)
+            if figure is None or figure.side == caster.side:
+                continue
+            range_penalty = self.rules.missile_range_penalty(megahexes)
+            needed = self.rules.spell_to_hit_number(
+                caster, range_penalty=range_penalty)
+            rolled = self.dice.total(THREE_DICE)
+            hit, multiplier, _fizzle, _knockdown = classify_spell_roll(
+                rolled, needed)
+            if hit:
+                return self._spell_strike(
+                    pending, figure, multiplier, rolled=rolled, needed=needed,
+                    range_penalty=range_penalty, note="flew_on")
+            # missed this one too — the spell keeps flying
+
+    def _spell_strike(
+        self, pending: PendingCast, victim: Figure, multiplier: int, *,
+        rolled: int, needed: int, range_penalty: int, note: str
+    ) -> SpellResult:
+        """A missile spell that connected mid-flight (lane or fly-on): roll its
+        damage against ``victim``, record, narrate, and apply — the spell mirror
+        of :meth:`_flight_strike`. A mid-flight hit is a real hit, so the full
+        invested ST is charged (``st_spent``)."""
+        caster, spell = pending.caster, pending.spell
+        raw_damage = roll_missile_spell_damage(
+            self.dice, spell, pending.st_used, multiplier)
+        damage = max(0, raw_damage - self.rules.absorbed(victim, zone=None))
+        result = SpellResult(
+            hit=True, rolled=rolled, needed=needed, dice_count=THREE_DICE,
+            multiplier=multiplier, st_spent=pending.st_used, damage=damage,
+            raw_damage=raw_damage, spell_id=spell.id, target_uid=victim.uid,
+            note=note,
+            to_hit_breakdown=self.rules.spell_to_hit_breakdown(
+                caster, range_penalty=range_penalty))
+        self.log.append(narrate_spell(caster, victim, result))
+        self.spell_results.append(result)
+        self._apply_missile_spell_hit(pending, victim, result)
+        return result
+
+    def _apply_missile_spell_hit(
+        self, pending: PendingCast, victim: Figure, result: SpellResult
+    ) -> None:
+        """Land a missile spell's hit on ``victim``: damage, the audited
+        DamageEvent, post-hit status, and Magic Fist's trip save (#421). The one
+        apply path for the aimed target, a lane blocker, and a fly-on victim —
+        every one an enemy (the friendly-fire guard upstream), so the event is
+        never same-side."""
+        caster = pending.caster
+        self.rules.apply_damage(victim, result.damage)
+        if result.damage > 0:
+            self.damage_events.append(DamageEvent(
+                attacker_side=caster.side, target_side=victim.side,
+                attacker_uid=caster.uid, target_uid=victim.uid,
+                damage=result.damage))
+        self._apply_cast_status(victim, self.rules.status_after_hit(victim))
+        self._magic_fist_trip(pending.spell, victim, result)
+
+    def _magic_fist_trip(self, spell, victim: Figure, result: SpellResult) -> None:
+        """Magic Fist's trip effect (spell-ref lines 18-21, #421): "A Magic Fist
+        that does 6 or more hits before armor/shield protection will also trip
+        its target, making him/her fall down, unless he/she makes a 3-die roll
+        on ST or DX, whichever is higher."
+
+        The threshold is the spell's ``trips_at`` read against PRE-armour
+        ``raw_damage``. The save is 3d6 at or under the higher of the victim's
+        CURRENT ST and its adjDX (armour + wounds — the Trip spell's own chasm
+        save is "against adjDX", spell-ref lines 88-90, so DX saves use the
+        adjusted value), rolled after the blow's damage lands. No dice are drawn
+        for a victim the blow already felled or floored — there is nothing left
+        to trip, and the stream stays byte-identical for every pre-#421 script
+        that ends prone."""
+        if spell.trips_at <= 0 or result.raw_damage < spell.trips_at:
+            return
+        if not victim.can_act() or victim.posture == Posture.PRONE:
+            return
+        needed = max(
+            victim.current_st,
+            victim.base_adj_dx + self.rules.wound_penalty(victim))
+        rolled = self.dice.total(THREE_DICE)
+        if rolled <= needed:
+            self.log.append(narrate_trip(
+                victim, fell=False, rolled=rolled, needed=needed))
+            return
+        victim.posture = Posture.PRONE
+        victim.knocked_down_this_turn = True
+        self.log.append(narrate_trip(
+            victim, fell=True, rolled=rolled, needed=needed))
 
     def _apply_cast_status(self, figure: Figure, status: str | None) -> None:
         """Apply a post-cast status (DEAD/UNCONSCIOUS/KNOCKDOWN) and narrate it."""

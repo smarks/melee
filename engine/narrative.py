@@ -184,6 +184,31 @@ def narrate_spell(caster: Figure, target: Figure, result: SpellResult) -> str:
     spell_name = spell.name if spell is not None else result.spell_id
     caster_name = _name(caster)
     target_name = _name(target)
+    # Line-of-flight beats (#417): a spell that never reached its aimed target.
+    # Each is a pure function of the result's own fields (plus the passed
+    # figures), so the truthfulness audit can re-render it faithfully.
+    if result.note == "struck_in_lane":
+        if result.damage == 0:
+            return _cap(
+                f"{caster_name}'s {spell_name} catches {target_name} square in "
+                f"its path — but the armour turns it aside.")
+        crushing = "a crushing " if result.multiplier >= 2 else ""
+        return _cap(
+            f"{caster_name}'s {spell_name} catches {target_name} square in its "
+            f"path — {crushing}blow connects for {result.damage}!")
+    if result.note == "fizzled_in_lane":
+        return _cap(
+            f"{caster_name}'s {spell_name} fizzles out against {target_name}, "
+            f"standing square in its path.")
+    if result.note == "flew_on":
+        if result.damage == 0:
+            return _cap(
+                f"the stray {spell_name} flies on and catches {target_name} — "
+                f"but the armour turns it aside.")
+        crushing = "a crushing " if result.multiplier >= 2 else ""
+        return _cap(
+            f"the stray {spell_name} flies on and catches {target_name} — "
+            f"{crushing}blow connects for {result.damage}!")
     if result.fizzled:
         line = f"{caster_name} invokes {spell_name}, but the spell fizzles"
         if result.knockdown:
@@ -206,6 +231,19 @@ def narrate_spell(caster: Figure, target: Figure, result: SpellResult) -> str:
     return _cap(
         f"{caster_name} hurls {spell_name} at {target_name} — {crushing}"
         f"telekinetic blow connects for {result.damage}!")
+
+
+def narrate_trip(target: Figure, *, fell: bool, rolled: int, needed: int) -> str:
+    """Magic Fist's trip save (spell-ref lines 18-21, #421): a 6+-hit fist
+    sweeps its target off its feet unless it saves — 3 dice at or under the
+    higher of ST and DX. Reports the real roll either way."""
+    if fell:
+        return _cap(
+            f"the blow sweeps {_name(target)} off its feet — down it goes "
+            f"(needed {needed} or less to keep footing, rolled {rolled})!")
+    return _cap(
+        f"{_name(target)} staggers under the blow but keeps its feet "
+        f"(needed {needed} or less, rolled {rolled}).")
 
 
 # ---- non-combat operations -------------------------------------------------

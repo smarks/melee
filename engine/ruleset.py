@@ -36,13 +36,14 @@ from .combat import (
     classify_roll,
     classify_spell_roll,
     roll_damage,
+    roll_missile_spell_damage,
     roll_weapon_damage,
 )
 from .facing import FRONT, REAR, facing_bonus, format_situational_parts
 from .figure import Figure
 from .movement import movement_budget as _movement_budget
 from .rules_data import THREE_DICE, Weapon, WeaponKind
-from .spells import Spell
+from .spells import Spell, spell_by_id
 
 # Status outcomes returned by :meth:`Ruleset.status_after_hit`.
 DEAD = "dead"
@@ -356,7 +357,13 @@ class Ruleset:
 
         1. **The to-hit roll** — one ``dice.total(3)`` (three d6), always drawn
            (even a ``force_hit`` cast still draws it, so the stream position does
-           not shift between a forced and an unforced cast).
+           not shift between a forced and an unforced cast). Against a DODGING
+           target a missile spell rolls FOUR dice with the four-dice special
+           table, exactly like a missile weapon — "Dodging is effective only
+           against missile spells (and thrown and missile weapons)"
+           (wizard-rules lines 996-1004, #418); a non-missile spell rolls four
+           against a DEFENDING target ("Defending is effective only against
+           non-missile spells and attacks", lines 1005-1007).
         2. **The damage roll** — for a *missile* spell that HIT, one
            ``dice.total(st_used)`` (one d6 per ST invested). Not drawn for a miss,
            a fizzle, or a non-missile spell.
@@ -377,11 +384,16 @@ class Ruleset:
         """
         needed = self.spell_to_hit_number(
             caster, range_penalty=range_penalty, situational=situational)
-        rolled = dice.total(THREE_DICE)                 # draw 1: the 3-dice to-hit
+        # A dodging target forces a missile spell to four dice; a defending one a
+        # non-missile spell (wizard-rules lines 996-1007, #418) — the same
+        # dodge-vs-ranged / defend-vs-melee split weapons get.
+        dice_count = self.attack_dice_count(target, ranged=spell.is_missile)
+        rolled = dice.total(dice_count)                 # draw 1: the to-hit
         if force_hit:
             hit, multiplier, fizzled, knockdown = True, 1, False, False
         else:
-            hit, multiplier, fizzled, knockdown = classify_spell_roll(rolled, needed)
+            hit, multiplier, fizzled, knockdown = classify_spell_roll(
+                rolled, needed, dice_count)
 
         raw_damage = 0
         damage = 0
@@ -389,9 +401,8 @@ class Ruleset:
         if hit and spell.is_missile:
             # 1d + damage_per_st PER ST, floored at the ST invested ("never less
             # damage than the ST used", spell-ref line 16), then the crit multiplier.
-            base = dice.total(st_used) + spell.damage_per_st * st_used  # draw 2
-            base = max(st_used, base)
-            raw_damage = base * multiplier
+            raw_damage = roll_missile_spell_damage(
+                dice, spell, st_used, multiplier)       # draw 2
             damage = max(0, raw_damage - self.absorbed(target, zone=None))
         elif hit and spell.is_protection:
             # Stone Flesh/Iron Flesh grant flat hit-stopping (p.19); the triple/
@@ -406,7 +417,7 @@ class Ruleset:
             hit=hit,
             rolled=rolled,
             needed=needed,
-            dice_count=THREE_DICE,
+            dice_count=dice_count,
             multiplier=multiplier,
             st_spent=st_spent,
             damage=damage,
@@ -441,8 +452,18 @@ class Ruleset:
         (read by :meth:`absorbed`) and records the spell as active so the Renew
         stage (Gate 3) can re-energize it. Applying it as a mutation hook keeps
         :meth:`resolve_spell` pure over the figures.
+
+        "Only one Blur, one Stone Flesh, one Shock Shield, etc., can be cast on
+        any given figure at a time. These spells are not cumulative."
+        (wizard-rules lines 683-684, #419.) A recast of a spell already active on
+        the target therefore REPLACES the running one — the old casting's stops
+        come off before the new casting's go on, so protection refreshes at the
+        spell's flat value and never climbs. Different protection spells still
+        compose (each is "cumulative with any other... hit-stopping ability").
         """
         if result.stops_granted <= 0:
             return
+        if result.spell_id in target.active_spells:
+            target.spell_protection -= spell_by_id(result.spell_id).stops
         target.spell_protection += result.stops_granted
         target.active_spells[result.spell_id] = result.st_spent
