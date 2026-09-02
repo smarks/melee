@@ -116,9 +116,9 @@ def test_fatigue_and_body_pools() -> None:
 
 def test_normal_hit_reduces_fatigue_only() -> None:
     rules = TarmarRuleset()
-    atk = _attacker(BROADSWORD)          # Striking, skill 3 -> +6; DEX 12 -> +1
+    atk = _attacker(BROADSWORD)          # Striking, skill 3 -> +3; DEX 12 -> +1
     tgt = _target(armor=NO_ARMOR)        # tier None -> TN 13
-    dice = Dice(scripted=[10, 4, 3])     # d20=10 (+7=17 >= 13 hit); damage 4+3=7
+    dice = Dice(scripted=[10, 4, 3])     # d20=10 (+4=14 >= 13 hit); damage 4+3=7
     result = rules.resolve_attack(dice, atk, tgt, zone=FRONT)
     rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
     assert result.hit and result.needed == 13 and result.damage == 7
@@ -130,9 +130,9 @@ def test_crit_confirmed_is_severe_triple_damage_into_body() -> None:
     # §7: a nat 20 rolls a confirm d20 vs the same TN; hitting upgrades to the
     # severe crit — triple dice, and the blow reaches Body as well as Fatigue.
     rules = TarmarRuleset()
-    atk = _attacker(BROADSWORD)          # bonus +7; Striking vs None -> TN 13
+    atk = _attacker(BROADSWORD)          # bonus +4; Striking vs None -> TN 13
     tgt = _target(armor=NO_ARMOR)
-    # d20=20 crit; confirm 15 (+7 = 22 >= 13) -> severe; damage (5+4)*3 = 27
+    # d20=20 crit; confirm 15 (+4 = 19 >= 13) -> severe; damage (5+4)*3 = 27
     dice = Dice(scripted=[20, 15, 5, 4])
     result = rules.resolve_attack(dice, atk, tgt, zone=FRONT)
     rules.apply_damage(tgt, result.damage, body_hit=result.body_hit)
@@ -143,7 +143,7 @@ def test_crit_confirmed_is_severe_triple_damage_into_body() -> None:
 
 
 def test_crit_not_confirmed_stays_double_and_spares_body() -> None:
-    # The confirm misses (5 + 7 = 12 < 13): a plain crit — double dice,
+    # The confirm misses (5 + 4 = 9 < 13): a plain crit — double dice,
     # Fatigue only. Body is reached ONLY by the confirmed severe crit.
     rules = TarmarRuleset()
     atk = _attacker(BROADSWORD)
@@ -161,7 +161,7 @@ def test_hybrid_armour_heavy_weapon_halves_plate_stops() -> None:
     rules = TarmarRuleset()
     atk = _attacker(BATTLEAXE, st=16)    # Heavy Striking, meets str_req 15
     tgt = _target(armor=PLATE)           # Heavy tier, stops 5
-    # Heavy Striking vs Heavy -> TN 16; bonus +7; d20=12 -> 19 >= 16 hit.
+    # Heavy Striking vs Heavy -> TN 16; bonus +4; d20=12 -> 16 >= 16 hit.
     dice = Dice(scripted=[12, 4, 4, 4])  # damage 3d6 = 12
     result = rules.resolve_attack(dice, atk, tgt, zone=FRONT)
     # Hybrid: plate's 5 stops halved to 2 -> 12 - 2 = 10.
@@ -172,7 +172,7 @@ def test_non_heavy_weapon_eats_full_plate_stops() -> None:
     rules = TarmarRuleset()
     atk = _attacker(BROADSWORD)          # Striking, NOT a heavy class
     tgt = _target(armor=PLATE)           # Striking vs Heavy -> TN 18
-    dice = Dice(scripted=[14, 6, 6])     # d20=14 (+7=21 >= 18 hit); 2d6 = 12
+    dice = Dice(scripted=[14, 6, 6])     # d20=14 (+4=18 >= 18 hit); 2d6 = 12
     result = rules.resolve_attack(dice, atk, tgt, zone=FRONT)
     assert result.hit and result.damage == 7   # full 5 stops: 12 - 5
 
@@ -346,7 +346,7 @@ def test_natural_one_fumble_drops_the_weapon() -> None:
 def test_natural_one_fumble_off_balance_penalises_the_next_attack() -> None:
     # Fumble d6 of 1-3 -> -2 on the fumbler's next attack, then the flag clears.
     rules = TarmarRuleset()
-    atk = _attacker(BROADSWORD)          # bonus +7; TN 13
+    atk = _attacker(BROADSWORD)          # bonus +4; TN 13
     tgt = _target(armor=NO_ARMOR)
     fumbled = rules.resolve_attack(Dice(scripted=[1, 2]), atk, tgt, zone=FRONT)
     assert fumbled.fumble_effect == tarmar_rules.FUMBLE_OFF_BALANCE
@@ -354,14 +354,14 @@ def test_natural_one_fumble_off_balance_penalises_the_next_attack() -> None:
     rules.apply_attack_side_effects(atk, fumbled)
     assert atk.off_balance
 
-    # d20=7 would hit (7+7=14 >= 13) but off-balance drags it to 12 -> miss.
-    hampered = rules.resolve_attack(Dice(scripted=[7]), atk, tgt, zone=FRONT)
+    # d20=9 would hit (9+4=13 >= 13) but off-balance drags it to 11 -> miss.
+    hampered = rules.resolve_attack(Dice(scripted=[9]), atk, tgt, zone=FRONT)
     assert not hampered.hit
     assert "-2 off-balance" in hampered.to_hit_breakdown
     rules.apply_attack_side_effects(atk, hampered)
     assert not atk.off_balance           # the penalty is spent by that attack
 
-    recovered = rules.resolve_attack(Dice(scripted=[7, 3, 3]), atk, tgt, zone=FRONT)
+    recovered = rules.resolve_attack(Dice(scripted=[9, 3, 3]), atk, tgt, zone=FRONT)
     assert recovered.hit                 # same die, no penalty
 
 
