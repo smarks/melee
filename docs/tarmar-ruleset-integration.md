@@ -146,7 +146,7 @@ order-DX so the turn sequence can still sort attacks.
 - **Mana:** `3d6` (secret; only relevant if you ever add Tarmar magic — Melee
   proper has none, so you can stub it).
 - **Weapon skill (0–5):** *Melee has no concept of this, and it is the single
-  biggest swing in Tarmar to-hit (+2 per level, up to +10).* The Tarmar profile
+  biggest swing in Tarmar to-hit (+1 per level, uncapped — tarmar-rules v0.3.0, per tarmar-studio #119).* The Tarmar profile
   **must introduce a skill input at char-gen** — e.g. a per-fighter "training"
   value, or a points pool spent on weapon skills. Don't default everyone to 0:
   per the balance grids, untrained fighters hit armored foes only 5–35% of the
@@ -278,7 +278,7 @@ tower/spike shields aren't in your table.)
 | Flexible / Snare | 13 | 16 | 19 | 22 |
 
 **Constants:** DEX mod `floor((DEX−10)/2)`; dodge `max(0, floor((DEX−10)/2))`;
-skill `+2` per level (0–5); STR-fit `min(0, STR − min_strength)`; shields
+skill `+1` per level, uncapped (fighters here carry 0–5); STR-fit `min(0, STR − min_strength)`; shields
 `+1/+2/+3`; crit nat 20 (confirm for severe), fumble nat 1.
 
 A TN of 21–22 can't be met on a bare d20 — a dagger vs plate (22) needs skill, a
