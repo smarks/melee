@@ -1,130 +1,18 @@
-"""
-The option catalog (Section IV).
+"""The option catalog (Section IV).
 
-Each turn a figure executes exactly one option, which bundles movement with an
-attack/defense/other action. The options available depend on whether the figure
-is engaged, disengaged, or (later) in hand-to-hand combat.
+As of the battle/melee unification's milestone 4 (tarmar-studio#240) the implementation lives in the shared ``tarmar-engine`` package; this module re-exports it so melee's own import surface (``engine.options``) is unchanged."""
+from tarmar_engine.classic.options import (
+    CATALOG,
+    Option,
+    OptionSpec,
+    options_for,
+    spec,
+)
 
-This module models the core subset needed for melee, missile, and movement play.
-Thrown/pole specifics, hand-to-hand, disengaging rolls, and spells are layered on
-in later passes; the unimplemented lettered options from the booklet are noted
-where they belong.
-"""
-from __future__ import annotations
-
-from dataclasses import dataclass
-from enum import Enum
-
-DISENGAGED = "disengaged"
-ENGAGED = "engaged"
-ANY = "any"
-# Turn-flow options that are not part of the engaged/disengaged movement menu:
-# they are injected by option_availability during the selection pass, never by
-# options_for, so they don't pollute the normal legal-move set.
-SPECIAL = "special"
-
-
-class Option(str, Enum):
-    # disengaged options (a, b, c, e, f, g)
-    MOVE = "move"                    # (a) move up to full MA
-    HALF_MOVE = "half_move"          # (a') move up to half MA, no attack
-    CHARGE_ATTACK = "charge_attack"  # (b) move <= half MA, then attack (no missile)
-    DODGE = "dodge"                  # (c) move <= half MA while dodging
-    READY_WEAPON = "ready_weapon"    # (e) move <= 2, swap ready weapon/shield
-    MISSILE_ATTACK = "missile_attack"  # (f) move <= 1, fire a missile weapon
-    STAND_UP = "stand_up"            # (g) rise from prone/kneeling
-    CRAWL = "crawl"                  # (g) crawl <= 2 hexes instead of standing
-    # engaged options (j, k, l, m, n)
-    ATTACK = "attack"                # (j) stand still, strike an adjacent foe (no missile)
-    SHIFT_ATTACK = "shift_attack"    # (j) shift 1, attack (no missile)
-    SHIFT_DEFEND = "shift_defend"    # (k) shift 1, defend
-    ONE_LAST_SHOT = "one_last_shot"  # (l) one last missile shot if it was ready
-    CHANGE_WEAPONS = "change_weapons"  # (m) shift 1, swap to a non-missile weapon
-    DISENGAGE = "disengage"          # (n) move away from engaging enemies
-    HTH_ATTACK = "hth_attack"        # (b/o) enter an enemy's hex, grapple hand-to-hand
-    CAST = "cast"                    # a wizard casts a spell (TFT: Wizard, p.11)
-    PICK_UP = "pick_up"              # (q) bend over, take a dropped weapon in reach
-    GO_PRONE = "go_prone"            # (f) drop prone (a crossbow fires from prone at +1)
-    KNEEL = "kneel"                  # (f) drop to one knee (a bow may fire from kneeling)
-    # turn-flow (per-character initiative selection, #192)
-    DO_NOTHING = "do_nothing"        # hold: a real, legal no-op (the action IS set)
-    PASS = "pass"                    # defer: choose last, after everyone else commits
-
-
-@dataclass(frozen=True)
-class OptionSpec:
-    option: Option
-    context: str          # DISENGAGED, ENGAGED, or ANY
-    movement_cap: str     # "full" | "half" | "two" | "one" | "none"
-    is_attack: bool       # title includes the word "attack"
-    is_missile: bool      # the attack is a missile shot
-    sets_dodge: bool      # DODGE this turn (forces 4 dice to hit it with a missile/thrown)
-    sets_defend: bool = False  # SHIFT_DEFEND this turn (forces 4 dice to hit it in melee)
-    casts_spell: bool = False  # CAST a spell this turn (a wizard's action, not an attack)
-
-
-_SPECS: dict[Option, OptionSpec] = {
-    Option.MOVE: OptionSpec(Option.MOVE, DISENGAGED, "full", False, False, False),
-    Option.HALF_MOVE: OptionSpec(Option.HALF_MOVE, DISENGAGED, "half", False, False, False),
-    Option.CHARGE_ATTACK: OptionSpec(
-        Option.CHARGE_ATTACK, DISENGAGED, "half", True, False, False),
-    Option.DODGE: OptionSpec(Option.DODGE, DISENGAGED, "half", False, False, True),
-    Option.READY_WEAPON: OptionSpec(
-        Option.READY_WEAPON, DISENGAGED, "two", False, False, False),
-    Option.MISSILE_ATTACK: OptionSpec(
-        Option.MISSILE_ATTACK, DISENGAGED, "one", True, True, False),
-    Option.STAND_UP: OptionSpec(Option.STAND_UP, ANY, "none", False, False, False),
-    Option.CRAWL: OptionSpec(Option.CRAWL, ANY, "two", False, False, False),
-    # A plain stand-still strike: option (j) without the optional 1-hex shift.
-    # No movement cap ("none"), so it grants no shift positioning and — being a
-    # non-charge attack — no charge bonus either (those hang off CHARGE_ATTACK).
-    Option.ATTACK: OptionSpec(
-        Option.ATTACK, ENGAGED, "none", True, False, False),
-    Option.SHIFT_ATTACK: OptionSpec(
-        Option.SHIFT_ATTACK, ENGAGED, "one", True, False, False),
-    Option.SHIFT_DEFEND: OptionSpec(
-        Option.SHIFT_DEFEND, ENGAGED, "one", False, False, False, sets_defend=True),
-    Option.ONE_LAST_SHOT: OptionSpec(
-        Option.ONE_LAST_SHOT, ENGAGED, "none", True, True, False),
-    Option.CHANGE_WEAPONS: OptionSpec(
-        Option.CHANGE_WEAPONS, ENGAGED, "one", False, False, False),
-    Option.DISENGAGE: OptionSpec(
-        Option.DISENGAGE, ENGAGED, "one", False, False, False),
-    Option.HTH_ATTACK: OptionSpec(
-        Option.HTH_ATTACK, ANY, "one", True, False, False),
-    # Casting is available whether engaged or disengaged (context ANY), and each
-    # form grants ONE hex of movement (#422): disengaged option (h) is "Move one
-    # hex or stand still, and attempt any spell" (wizard-rules line 286), engaged
-    # option (r) "Shift one hex or stand still, and attempt any spell" (line 312)
-    # — state._SHIFT_OPTIONS makes the engaged hex a true shift (adjacency kept).
-    # It is not an attack (no weapon blow) and dodges/defends nothing;
-    # ``casts_spell`` tags it so availability can gate it to wizards (and forbid
-    # a shield/non-staff weapon in hand, Wizard p.23).
-    Option.CAST: OptionSpec(
-        Option.CAST, ANY, "one", False, False, False, casts_spell=True),
-    Option.PICK_UP: OptionSpec(
-        Option.PICK_UP, ANY, "none", False, False, False),
-    Option.GO_PRONE: OptionSpec(
-        Option.GO_PRONE, DISENGAGED, "none", False, False, False),
-    Option.KNEEL: OptionSpec(
-        Option.KNEEL, DISENGAGED, "none", False, False, False),
-    # A no-op hold and a deferral: neither moves, attacks, dodges, nor defends.
-    Option.DO_NOTHING: OptionSpec(
-        Option.DO_NOTHING, SPECIAL, "none", False, False, False),
-    Option.PASS: OptionSpec(
-        Option.PASS, SPECIAL, "none", False, False, False),
-}
-
-
-def spec(option: Option) -> OptionSpec:
-    return _SPECS[option]
-
-
-def options_for(*, engaged: bool) -> list[Option]:
-    """Legal options for a standing figure given whether it is engaged."""
-    wanted = ENGAGED if engaged else DISENGAGED
-    return [
-        option
-        for option, option_spec in _SPECS.items()
-        if option_spec.context in (wanted, ANY)
-    ]
+__all__ = [
+    "CATALOG",
+    "Option",
+    "OptionSpec",
+    "options_for",
+    "spec",
+]

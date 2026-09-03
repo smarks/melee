@@ -12,12 +12,22 @@ pytest-cov>=5.0
 # version must match the tag — each shared lib repo has a tag-version-guard workflow
 # that fails a mismatched tag push; hexarena's was added 2026-07-06, melee #342),
 # then update the @vX.Y.Z here in a melee commit that CI tests.
-hexarena @ git+https://github.com/smarks/hexarena.git@v0.1.0
+hexarena @ git+https://github.com/smarks/hexarena.git@v0.2.0
 
 # Shared Tarmar d20 combat core (matrix, modifiers, crit, Hybrid armour) — the
 # single source of truth for the "Tarmar rules" profile. Local dev:  pip install -e ../tarmar-rules
 # PINNED TO A RELEASE TAG (bump procedure as for hexarena above).
 tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@v0.3.0
+
+# Shared Tarmar/classic turn engine (tarmar-studio#240 milestone 4): melee's
+# engine/ modules are facades over tarmar_engine.classic — the classic turn
+# engine, figures, ruleset, narration, experience — with only the spell layer
+# (TFT: Wizard) still melee-local until milestone 5. Local dev:
+#   pip install -e ../tarmar-engine
+# PINNED TO A RELEASE TAG (bump procedure as for hexarena above). Its own
+# hexarena / tarmar-rules pins must match the two above — pip resolves ONE
+# version per package for the whole environment, so bump them in lockstep.
+tarmar-engine @ git+https://github.com/smarks/tarmar-engine.git@v0.4.0
 
 # Shared Django auth app (AbstractOrigamiUser: user model + register/login/
 # logout/profile/profile-edit/password-change/users-admin). PINNED TO A RELEASE
