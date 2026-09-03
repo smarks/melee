@@ -2,11 +2,10 @@
 
 As of the battle/melee unification's milestone 4 (tarmar-studio#240) the
 :class:`Figure` implementation lives in the shared ``tarmar-engine`` package
-and is re-exported here. The one melee-local piece is the spell-catalog
-binding: the package computes active-spell effects (Clumsiness DX drag, Blur,
-the Slow/Speed/Stop MA scaling) through the pluggable
-:attr:`Figure.SPELL_CATALOG`, inert until a consumer binds a catalog — melee
-binds its :data:`engine.spells.SPELLS` here, exactly once.
+and is re-exported here. Milestone 5 moved the spell catalog into the package
+too, where :attr:`Figure.SPELL_CATALOG` now binds it by default — so the
+melee-local binding this facade used to carry is gone; every Figure's
+active-spell computations read the classic Wizard data out of the box.
 """
 from tarmar_engine.classic.figure import (
     CARRY_OVER_STATE,
@@ -22,12 +21,6 @@ from tarmar_engine.classic.figure import (
     create_wizard,
     footprint_for,
 )
-
-from .spells import SPELLS
-
-# Bind melee's spell catalog: from here on, every Figure's active-spell
-# computations read melee's real spell data (TFT: Wizard).
-Figure.SPELL_CATALOG = SPELLS
 
 __all__ = [
     "CARRY_OVER_STATE",

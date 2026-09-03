@@ -19,15 +19,17 @@ hexarena @ git+https://github.com/smarks/hexarena.git@v0.2.0
 # PINNED TO A RELEASE TAG (bump procedure as for hexarena above).
 tarmar-rules @ git+https://github.com/smarks/tarmar-rules.git@v0.3.0
 
-# Shared Tarmar/classic turn engine (tarmar-studio#240 milestone 4): melee's
-# engine/ modules are facades over tarmar_engine.classic — the classic turn
-# engine, figures, ruleset, narration, experience — with only the spell layer
-# (TFT: Wizard) still melee-local until milestone 5. Local dev:
+# Shared Tarmar/classic turn engine (tarmar-studio#240 milestones 4-5):
+# melee's engine/ modules are facades over tarmar_engine.classic — the classic
+# turn engine, figures, ruleset, narration, experience, and (since v0.5.0,
+# milestone 5) the full spell layer: the 14-spell Wizard catalog, cast flow,
+# and spell narrations, classic-profile-only per the spell-canon ruling.
+# Local dev:
 #   pip install -e ../tarmar-engine
 # PINNED TO A RELEASE TAG (bump procedure as for hexarena above). Its own
 # hexarena / tarmar-rules pins must match the two above — pip resolves ONE
 # version per package for the whole environment, so bump them in lockstep.
-tarmar-engine @ git+https://github.com/smarks/tarmar-engine.git@v0.4.0
+tarmar-engine @ git+https://github.com/smarks/tarmar-engine.git@v0.5.0
 
 # Shared Django auth app (AbstractOrigamiUser: user model + register/login/
 # logout/profile/profile-edit/password-change/users-admin). PINNED TO A RELEASE
