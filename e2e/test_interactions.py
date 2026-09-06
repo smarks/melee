@@ -36,7 +36,7 @@ def _start_inline_game(page: Page, *, human: bool = False, practice: bool = Fals
     page.get_by_role("button", name=add).click()
     if practice:
         page.locator("#practiceMode").check()
-    page.get_by_role("button", name="New Game").click()
+    page.locator("#newGameBtn").click()
 
 
 @pytest.mark.django_db
@@ -49,7 +49,7 @@ def test_fresh_load_shows_editable_game_control(live_server, page: Page) -> None
     expect(page.locator("#gameControl")).to_be_visible()
     expect(page.locator("#phaseBanner")).to_contain_text("No game", timeout=20_000)
     expect(page.locator("#profile")).to_be_enabled()
-    expect(page.get_by_role("button", name="New Game")).to_be_disabled()
+    expect(page.locator("#newGameBtn")).to_be_disabled()
     expect(page.locator("#newGameReason")).to_contain_text("at least 2 players")
     expect(page.get_by_role("button", name="End Game")).to_be_disabled()
     expect(page.locator(".gc-lock")).to_be_hidden()            # the lock note is hidden
@@ -61,7 +61,7 @@ def test_game_control_is_inline_not_a_modal(live_server, page: Page) -> None:
     # #192: the former New-game *modal* is now an always-visible inline panel.
     page.goto(live_server.url)
     expect(page.locator("#gameControl")).to_be_visible()
-    expect(page.get_by_role("button", name="New Game")).to_be_visible()
+    expect(page.locator("#newGameBtn")).to_be_visible()
     expect(page.get_by_role("button", name="End Game")).to_be_visible()
     # The old setup modal no longer exists in the page at all.
     expect(page.locator("#setup")).to_have_count(0)
@@ -77,7 +77,7 @@ def test_new_game_locks_settings_and_enables_end_game(live_server, page: Page) -
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
     expect(page.locator("#profile")).to_be_disabled()
     expect(page.locator("#perTeam")).to_be_disabled()
-    expect(page.get_by_role("button", name="New Game")).to_be_disabled()
+    expect(page.locator("#newGameBtn")).to_be_disabled()
     expect(page.get_by_role("button", name="End Game")).to_be_enabled()
 
 
@@ -95,7 +95,7 @@ def test_end_game_returns_controls_to_editable(live_server, page: Page) -> None:
     # the roster reset to just the local human -> New Game gated off again.
     expect(page.locator("#profile")).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
     expect(page.locator("#playerCount")).to_have_text("1", timeout=POLL_SAFE_TIMEOUT_MS)
-    expect(page.get_by_role("button", name="New Game")).to_be_disabled(
+    expect(page.locator("#newGameBtn")).to_be_disabled(
         timeout=POLL_SAFE_TIMEOUT_MS)
     expect(page.get_by_role("button", name="End Game")).to_be_disabled(
         timeout=POLL_SAFE_TIMEOUT_MS)
@@ -187,7 +187,7 @@ def test_invite_link_shows_in_a_mixed_human_and_computer_game(live_server, page:
     page.goto(live_server.url)
     page.get_by_role("button", name="Add human player").click()   # a 2nd human seat
     page.get_by_role("button", name="Add AI player").click()       # + a computer
-    page.get_by_role("button", name="New Game").click()
+    page.locator("#newGameBtn").click()
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
     expect(page.get_by_role("button", name="Copy invite link")).to_have_count(1)
 
@@ -368,7 +368,7 @@ def test_new_game_is_disabled_until_two_players(live_server, page: Page) -> None
     # #192 follow-up: a fresh roster has just the local human, so New Game is
     # disabled with a reason; adding a second player enables it.
     page.goto(live_server.url)
-    new_game = page.get_by_role("button", name="New Game")
+    new_game = page.locator("#newGameBtn")
     expect(page.locator("#playerCount")).to_have_text("1")
     expect(new_game).to_be_disabled()
     expect(page.locator("#newGameReason")).to_contain_text("at least 2 players")
@@ -410,7 +410,7 @@ def test_mixed_roster_starts_and_runs(live_server, page: Page) -> None:
     page.get_by_role("button", name="Add human player").click()   # player 2 (blue) = human
     page.get_by_role("button", name="Add AI player").click()       # player 3 (green) = AI
     expect(page.locator("#playerCount")).to_have_text("3")
-    page.get_by_role("button", name="New Game").click()
+    page.locator("#newGameBtn").click()
 
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
     # Three sides on the board -> three tracker group headers.
@@ -887,7 +887,7 @@ def test_remove_player_button_shrinks_roster_and_new_game_still_starts(
 
     # New Game still works with the reduced two-player roster: it starts a match
     # whose board carries exactly the two remaining sides.
-    new_game = page.get_by_role("button", name="New Game")
+    new_game = page.locator("#newGameBtn")
     expect(new_game).to_be_enabled()
     new_game.click()
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)

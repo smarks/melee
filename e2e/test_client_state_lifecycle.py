@@ -180,7 +180,8 @@ def test_new_game_resets_combat_resolved_turn(live_server, page: Page) -> None:
         page.get_by_role("button", name="End Game").click()
         expect(page.locator("#profile")).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
         page.get_by_role("button", name="Add AI player").click()
-        page.get_by_role("button", name="New Game").click()
+        # Game Control's New Game, pinned by id -- see e2e/README.md (#436).
+        page.locator("#newGameBtn").click()
         expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
 
         snapshot = _debug_snapshot(page)
@@ -287,7 +288,8 @@ def test_new_game_rearms_polling_after_game_lost(live_server, page: Page) -> Non
         page.get_by_role("button", name="End Game").click()
         expect(page.locator("#profile")).to_be_enabled(timeout=POLL_SAFE_TIMEOUT_MS)
         page.get_by_role("button", name="Add AI player").click()
-        page.get_by_role("button", name="New Game").click()
+        # Game Control's New Game, pinned by id -- see e2e/README.md (#436).
+        page.locator("#newGameBtn").click()
         expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
 
         assert _debug_snapshot(page)["pollActive"] is True, (

@@ -36,6 +36,22 @@ run leaves a watchable artifact of the match.
   from the setup dialog (same screen), and rolling initiative through to the
   movement phase.
 
+## Locators: pin buttons by id when a name can be a substring of another
+
+Playwright matches an accessible name **case-insensitively, as a substring**, so
+`get_by_role("button", name="New Game")` matches Game Control's `#newGameBtn`
+*and* the victory panel's `New game →` (rendered by `drawControls` in
+`board.js` once a side wins). Both are on screen whenever a match is decided,
+and the locator then dies on a strict-mode violation, "resolved to 2 elements".
+
+That is the #436 flake: a seeded broadsword exchange sometimes downs a fighter,
+the match ends, the victory button renders, and a test that had passed a hundred
+times reddens `main`. It is timing-shaped only because the roll is random.
+
+So drive Game Control's button as `page.locator("#newGameBtn")`, and apply the
+same rule to any other label that is a prefix of a longer one. Reach for
+`exact=True` or an id whenever a role name could grow a suffix.
+
 ## Coverage
 
 Because `live_server` runs in the same process as the test, `coverage` captures

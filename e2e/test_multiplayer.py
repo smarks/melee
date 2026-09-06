@@ -41,7 +41,7 @@ def _create_two_human_game(host: Page, live_server) -> str:
     The host owns BOTH human sides until it opens one for a remote joiner."""
     host.goto(live_server.url)
     host.get_by_role("button", name="Add human player").click()   # 2 human sides
-    host.get_by_role("button", name="New Game").click()
+    host.locator("#newGameBtn").click()
     host.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
     return host.url.rstrip("/").rsplit("/", 1)[-1]
 
@@ -95,7 +95,7 @@ def _create_two_human_wizards_game(host: Page, live_server) -> str:
     host.goto(live_server.url)
     host.get_by_role("button", name="Add human player").click()
     host.locator("#profile").select_option("Wizards")
-    host.get_by_role("button", name="New Game").click()
+    host.locator("#newGameBtn").click()
     expect(host.locator("#editor")).to_be_visible(timeout=15_000)
     host.get_by_role("button", name="Start match").click()
     host.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)

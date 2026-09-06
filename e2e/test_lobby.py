@@ -24,7 +24,7 @@ def _create_lobby_game(host: Page, live_server) -> str:
     returns its gid. The remote side (blue) is born open; the game is a lobby."""
     host.goto(live_server.url)
     host.get_by_role("button", name="Add remote player").click()
-    host.get_by_role("button", name="New Game").click()
+    host.locator("#newGameBtn").click()
     host.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
     return host.url.rstrip("/").rsplit("/", 1)[-1]
 
@@ -131,7 +131,7 @@ def test_wizards_lobby_joiner_picks_its_wizards_spells(
         host.goto(live_server.url)
         host.get_by_role("button", name="Add remote player").click()
         host.locator("#profile").select_option("Wizards")
-        host.get_by_role("button", name="New Game").click()
+        host.locator("#newGameBtn").click()
         expect(host.locator("#editor")).to_be_visible(timeout=15_000)
         host.get_by_role("button", name="Start match").click()
         host.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)

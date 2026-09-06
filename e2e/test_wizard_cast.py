@@ -308,7 +308,7 @@ def test_wizards_game_mode_opens_editor_seeded_with_a_wizard_per_side(
     page.goto(live_server.url)
     page.get_by_role("button", name="Add AI player").click()   # a 2nd team so a game can start
     page.locator("#profile").select_option("Wizards")
-    page.get_by_role("button", name="New Game").click()
+    page.locator("#newGameBtn").click()
 
     # New Game opened the editor (no game yet), seeded with wizard cards.
     editor = page.locator("#editor")
