@@ -16,7 +16,7 @@ def _start_inline_game(page: Page, *, human: bool = False) -> None:
     expect(page.locator("#profile")).to_be_enabled()
     add = "Add human player" if human else "Add AI player"
     page.get_by_role("button", name=add).click()
-    page.get_by_role("button", name="New Game").click()
+    page.locator("#newGameBtn").click()
 
 
 def _active_uid(page: Page):

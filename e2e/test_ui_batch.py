@@ -101,7 +101,7 @@ def test_start_match_from_editor_locks_game_control(live_server, page: Page) -> 
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
     expect(page.locator("#profile")).to_be_disabled()
     expect(page.locator("#perTeam")).to_be_disabled()
-    expect(page.get_by_role("button", name="New Game")).to_be_disabled()
+    expect(page.locator("#newGameBtn")).to_be_disabled()
     expect(page.get_by_role("button", name="End Game")).to_be_enabled()
     expect(page.locator(".gc-lock")).to_be_visible()           # the 🔒 locked notice shows
 

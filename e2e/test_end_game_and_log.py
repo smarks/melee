@@ -26,7 +26,7 @@ def _start_pvc_game(page: Page, url: str) -> None:
     """Start a Player-vs-Computer match from the inline Game Control."""
     page.goto(url)
     page.get_by_role("button", name="Add AI player").click()
-    page.get_by_role("button", name="New Game").click()
+    page.locator("#newGameBtn").click()
     expect(page.locator("#phaseBanner")).to_contain_text("Turn", timeout=20_000)
 
 

@@ -101,7 +101,7 @@ def test_full_game_plays_out(live_server, page: Page) -> None:
     # No auto-boot any more (#192): start a Player-vs-Computer match from the
     # inline Game Control by adding one AI player (2 fighters per side).
     page.get_by_role("button", name="Add AI player").click()
-    page.get_by_role("button", name="New Game").click()
+    page.locator("#newGameBtn").click()
     banner = page.locator("#phaseBanner")
     expect(banner).to_contain_text("Turn", timeout=20_000)
 
@@ -187,7 +187,7 @@ def test_tarmar_full_game_plays_out(live_server, page: Page) -> None:
     # Select the Tarmar ruleset BEFORE starting, then add one AI player and begin.
     page.locator("#profile").select_option("Tarmar")
     page.get_by_role("button", name="Add AI player").click()
-    page.get_by_role("button", name="New Game").click()
+    page.locator("#newGameBtn").click()
     banner = page.locator("#phaseBanner")
     expect(banner).to_contain_text("Turn", timeout=20_000)
 

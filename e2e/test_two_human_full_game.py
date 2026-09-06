@@ -346,7 +346,7 @@ def test_two_humans_play_a_complete_game_over_the_invite_link(
         host.goto(live_server.url)
         host.locator("#perTeam").select_option("1")
         host.get_by_role("button", name="Add remote player").click()
-        host.get_by_role("button", name="New Game").click()
+        host.locator("#newGameBtn").click()
         host.wait_for_url(re.compile(r"/game/[^/]+$"), timeout=20_000)
         gid = host.url.rstrip("/").rsplit("/", 1)[-1]
         state = _state(host, gid)
