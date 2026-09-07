@@ -158,15 +158,11 @@ choose each wizard's spells before **Start match**. Header **Log in** link →
 
 ## Deploy & verify
 
-- **Push to `main` deploys automatically** — `.github/workflows/deploy.yml`
-  calls the shared `smarks/ops-workflows` blue-green workflow, which runs
-  `deploy.sh` on datahorde: build the inactive env, health-check it (curl with
-  `Host: melee.origamisoftware.com`), flip the nginx upstream. Ports **9072
-  (blue) / 9073 (green)**; systemd units `melee-blue` / `melee-green`.
-- **Manual control:** `gh workflow run Deploy` (blank = deploy), or with
-  `command=rollback` / `command=status`. Check runs: `gh run list --workflow Deploy`.
-- **Verify:** the workflow emails on failure (and on green-after-red);
-  `/usr/bin/curl -sI https://melee.origamisoftware.com/` should answer.
+- **Retired (tarmar-studio#307).** This repo no longer deploys. The `Deploy`
+  workflow was removed and the `melee-blue` / `melee-green` systemd units on
+  datahorde (ports 9072 / 9073) were stopped; `melee.origamisoftware.com` is
+  served by smarks/tarmar-studio. `deploy.sh` and the unit files stay in the
+  tree as a record of how it used to work.
 - **Known gotcha (#169):** a fresh DB must apply `origami_auth.0001` before
   `board.0001` or migrate fails with `InconsistentMigrationHistory` — fixed in
   the migration graph, but remember it if migrations are ever squashed.
