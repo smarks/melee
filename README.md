@@ -6,6 +6,18 @@ A digital implementation of **The Fantasy Trip: Melee** (Steve Jackson Games,
 Sibling project to [orge](../orge); both build on the shared
 [hexarena](../hexarena) hex-grid library.
 
+## Live game moved to tarmar-studio
+
+`melee.origamisoftware.com` no longer points here. As of the [smarks/melee ↔
+tarmar-studio unification](https://github.com/smarks/tarmar-studio/issues/251)
+and [DNS cutover](https://github.com/smarks/tarmar-studio/issues/267), that
+hostname is served by
+[smarks/tarmar-studio](https://github.com/smarks/tarmar-studio) — the engine,
+rules, and seated-player flow this repo used to run in production now live
+there. This repo's own deploy still runs on every merge, but nothing public
+routes to it (see
+[tarmar-studio#307](https://github.com/smarks/tarmar-studio/issues/307)).
+
 ## Architecture
 
 Engine-first, like orge: the rules live in a pure-Python `engine/` package with
