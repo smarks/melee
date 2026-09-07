@@ -14,9 +14,10 @@ and [DNS cutover](https://github.com/smarks/tarmar-studio/issues/267), that
 hostname is served by
 [smarks/tarmar-studio](https://github.com/smarks/tarmar-studio) — the engine,
 rules, and seated-player flow this repo used to run in production now live
-there. This repo's own deploy still runs on every merge, but nothing public
-routes to it (see
-[tarmar-studio#307](https://github.com/smarks/tarmar-studio/issues/307)).
+there. This repo no longer deploys anywhere: its deploy workflow was removed
+and its blue-green services on the host were stopped when the repo was retired
+(see [tarmar-studio#307](https://github.com/smarks/tarmar-studio/issues/307)).
+It is kept as history; new work on the arena goes to tarmar-studio.
 
 ## Architecture
 
